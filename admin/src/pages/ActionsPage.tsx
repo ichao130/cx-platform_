@@ -210,25 +210,6 @@ export default function ActionsPage() {
               </div>
             )}
 
-            <div style={{ height: 10 }} />
-            <div className="h2">画像アップロード</div>
-            <input
-              className="input"
-              type="file"
-              accept="image/*"
-              onChange={async (e) => {
-                const file = (e.target as HTMLInputElement).files?.[0];
-                if (!file) return;
-                const result = await uploadImageToWorkspace({
-                  workspaceId,
-                  siteId: undefined,
-                  file,
-                });
-                setImageUrl(result.downloadURL);
-              }}
-            />
-            <div className="small">いったん workspace 配下に保存（site別に分けたい場合は後で siteId を渡す形にする）。</div>
-
             <div style={{ height: 14 }} />
             <button className="btn btn--primary" onClick={createOrUpdate}>保存</button>
           </div>

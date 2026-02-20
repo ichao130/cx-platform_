@@ -4,6 +4,7 @@ import { adminDb } from "../services/admin";
 import { z } from "zod";
 import { pickSiteById, pickWorkspaceById, assertAllowedOrigin } from "../services/site";
 import { generateCopy3 } from "../services/openaiCopy";
+import { pickVariant } from "../services/experiment";
 
 function yyyyMmDdUTC(d: Date): string {
   // log aggregation key. (UTC is fine for now; can switch to JST later if needed)
@@ -120,6 +121,8 @@ async function expandScenarioActions(params: { workspaceId: string; scenarioId: 
 export function registerV1Routes(app: Express) {
   app.get("/v1/serve", async (req, res) => {
     try {
+      const vid = String(req.query.vid || "");
+      const sid = String(req.query.sid || "");
       const siteId = String(req.query.site_id || req.header("X-Site-Id") || "");
       if (!siteId) return res.status(400).json({ error: "site_id required" });
 
@@ -159,6 +162,33 @@ export function registerV1Routes(app: Express) {
         rows.map((r) => expandScenarioActions({ workspaceId: site.workspaceId, scenarioId: r.scenario_id, raw: r }))
       );
 
+
+      const scenariosWithVariant = scenarios.map((s: any) => {
+        const exp = s.experiment;
+        const sticky = exp?.sticky === "vid" ? (vid || sid || siteId) : (sid || vid || siteId);
+        const v = pickVariant(exp, `${siteId}__${s.scenario_id}__${sticky}`);
+
+        if (!v) return { ...s, variant_id: null };
+
+        const picked: any = { ...s, variant_id: v.id, variant_name: v.name || v.id };
+
+        // ✅ variant.actions を優先（Phase1推奨）
+        if (Array.isArray(v.actions) && v.actions.length) {
+          picked.actions = normalizeActions(v.actions); // ★normalize
+          picked._debug = { ...(picked._debug || {}), picked_variant_actions: true };
+          return picked;
+        }
+
+        // actionRefs 運用（今回は “返すだけ”）
+        if (Array.isArray(v.actionRefs) && v.actionRefs.length) {
+          picked.actionRefs = v.actionRefs;
+          picked._debug = { ...(picked._debug || {}), picked_variant_actionRefs: true };
+          return picked;
+        }
+
+        return picked;
+      });
+
       // CORS response header (exact origin)
       if (origin) {
         res.setHeader("Access-Control-Allow-Origin", origin);
@@ -169,8 +199,10 @@ export function registerV1Routes(app: Express) {
         site_id: siteId,
         server_time: new Date().toISOString(),
         cache_ttl_sec: 300,
-        defaults: site.defaults || ws.defaults || { ai: { decision: false, copy: "approve", discovery: "suggest" }, log_sample_rate: 1.0 },
-        scenarios
+        defaults:
+          site.defaults ||
+          ws.defaults || { ai: { decision: false, copy: "approve", discovery: "suggest" }, log_sample_rate: 1.0 },
+        scenarios: scenariosWithVariant // ★ここ！
       });
     } catch (e: any) {
       console.error(e);
@@ -219,8 +251,8 @@ export function registerV1Routes(app: Express) {
   app.post("/v1/log", async (req, res) => {
     try {
       const body = LogReqSchema.parse(req.body);
-
       const site = await pickSiteById(body.site_id);
+
       if (!site) return res.status(404).json({ error: "site not found" });
 
       const ws = await pickWorkspaceById(site.workspaceId);
@@ -249,6 +281,7 @@ export function registerV1Routes(app: Express) {
           scenarioId: body.scenario_id || null,
           actionId: body.action_id || null,
           templateId: body.template_id || null,
+          variantId: body.variant_id || null, // ★追加
           event: body.event,
           url: body.url || null,
           path: body.path || null,
@@ -260,7 +293,9 @@ export function registerV1Routes(app: Express) {
       }
 
       // Aggregate counters (always)
-      const statId = `${body.site_id}__${day}__${body.scenario_id || "na"}__${body.action_id || "na"}__${body.event}`;
+      const variantKey = body.variant_id || "na";
+      const statId = `${body.site_id}__${day}__${body.scenario_id || "na"}__${body.action_id || "na"}__${variantKey}__${body.event}`;
+
       await db
         .collection("stats_daily")
         .doc(statId)
@@ -270,6 +305,7 @@ export function registerV1Routes(app: Express) {
             day,
             scenarioId: body.scenario_id || null,
             actionId: body.action_id || null,
+            variantId: body.variant_id || null, // ★追加
             event: body.event,
             count: FieldValue.increment(1),
             updatedAt: FieldValue.serverTimestamp()
@@ -324,6 +360,7 @@ const LogReqSchema = z.object({
   scenario_id: z.string().optional(),
   action_id: z.string().optional(),
   template_id: z.string().optional(),
+  variant_id: z.string().optional(), // ★追加
   event: z.enum(["impression", "click", "click_link", "close"]),
   url: z.string().optional(),
   path: z.string().optional(),
@@ -331,3 +368,4 @@ const LogReqSchema = z.object({
   vid: z.string().optional(),
   sid: z.string().optional()
 });
+
