@@ -1,0 +1,300 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.registerV1Routes = registerV1Routes;
+const firestore_1 = require("firebase-admin/firestore");
+const admin_1 = require("../services/admin");
+const zod_1 = require("zod");
+const site_1 = require("../services/site");
+const openaiCopy_1 = require("../services/openaiCopy");
+function yyyyMmDdUTC(d) {
+    // log aggregation key. (UTC is fine for now; can switch to JST later if needed)
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(d.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${dd}`;
+}
+function normalizeCreative(creative) {
+    const cta_text = creative.cta_text ?? creative.buttonText ?? creative.button_text ?? creative.cta ?? "OK";
+    const cta_url = creative.cta_url ?? creative.url ?? creative.href ?? "";
+    const cta_url_text = creative.cta_url_text ?? creative.link_text ?? creative.linkText ?? "詳細を見る";
+    return {
+        title: creative.title ?? "",
+        body: creative.body ?? "",
+        cta_text,
+        cta_url,
+        cta_url_text,
+        image_url: creative.image_url ?? creative.imageUrl ?? ""
+    };
+}
+function normalizeActions(actions) {
+    if (!Array.isArray(actions))
+        return [];
+    return actions
+        .filter(Boolean)
+        .map((a) => {
+        const type = a.type ?? "modal";
+        const selector = a.selector ?? "body";
+        const creative = normalizeCreative(a.creative ?? a.content ?? {});
+        const templateId = a.templateId ?? a.template_id ?? undefined;
+        return { type, selector, creative, templateId };
+    });
+}
+async function expandScenarioActions(params) {
+    const db = (0, admin_1.adminDb)();
+    const s = { ...params.raw };
+    // Preferred: scenario.actions (already expanded)
+    const rootActions = Array.isArray(s.actions) ? s.actions : [];
+    if (rootActions.length) {
+        s.actions = normalizeActions(rootActions);
+        s._debug = { picked_actions_from: "scenario.actions", root_actions_len: rootActions.length };
+        return s;
+    }
+    // Next: scenario.actionRefs -> join actions collection
+    const refs = Array.isArray(s.actionRefs) ? s.actionRefs : [];
+    if (refs.length) {
+        const ids = refs.map((r) => r.actionId).filter(Boolean);
+        const snaps = await Promise.all(ids.map((id) => db.collection("actions").doc(id).get()));
+        const map = {};
+        snaps.forEach((snap) => {
+            if (snap.exists)
+                map[snap.id] = snap.data();
+        });
+        const expanded = refs
+            .filter((r) => r && r.actionId && (r.enabled ?? true))
+            .sort((a, b) => Number(a.order ?? 0) - Number(b.order ?? 0))
+            .map((r) => {
+            const base = map[r.actionId] || {};
+            const creative = normalizeCreative({ ...(base.creative || {}), ...(r.overrideCreative || {}) });
+            return {
+                type: r.type || base.type || "modal",
+                selector: r.selector || base.selector || "body",
+                templateId: r.templateId || base.templateId || undefined,
+                creative
+            };
+        });
+        // Attach templates (optional)
+        const tplIds = Array.from(new Set(expanded
+            .map((a) => a.templateId)
+            .filter((x) => typeof x === "string" && !!x)));
+        if (tplIds.length) {
+            const tplSnaps = await Promise.all(tplIds.map((id) => db.collection('templates').doc(id).get()));
+            const tplMap = {};
+            tplSnaps.forEach((t) => {
+                if (t.exists)
+                    tplMap[t.id] = { template_id: t.id, ...(t.data() || {}) };
+            });
+            expanded.forEach((a) => {
+                if (a.templateId && tplMap[a.templateId])
+                    a.template = tplMap[a.templateId];
+            });
+        }
+        s.actions = expanded;
+        s._debug = {
+            picked_actions_from: "scenario.actionRefs",
+            actionRefs_len: refs.length,
+            expanded_len: expanded.length
+        };
+        return s;
+    }
+    // Legacy: nested entry_rules.actions
+    const nestedActions = Array.isArray(s.entry_rules?.actions) ? s.entry_rules.actions : [];
+    if (nestedActions.length) {
+        s.actions = normalizeActions(nestedActions);
+        s._debug = { picked_actions_from: "scenario.entry_rules.actions", nested_actions_len: nestedActions.length };
+        return s;
+    }
+    s.actions = [];
+    s._debug = { picked_actions_from: "none", root_actions_len: 0, nested_actions_len: 0, actionRefs_len: 0 };
+    return s;
+}
+function registerV1Routes(app) {
+    app.get("/v1/serve", async (req, res) => {
+        try {
+            const siteId = String(req.query.site_id || req.header("X-Site-Id") || "");
+            if (!siteId)
+                return res.status(400).json({ error: "site_id required" });
+            const url = String(req.query.url || "");
+            const origin = req.header("Origin") || "";
+            const site = await (0, site_1.pickSiteById)(siteId);
+            if (!site)
+                return res.status(404).json({ error: "site not found" });
+            const ws = await (0, site_1.pickWorkspaceById)(site.workspaceId);
+            if (!ws)
+                return res.status(404).json({ error: "workspace not found" });
+            // Allowlist uses site.domains (fallback workspace.domains)
+            const allowed = (site.domains && site.domains.length ? site.domains : ws.domains) || [];
+            (0, site_1.assertAllowedOrigin)({ allowed, origin, url });
+            // Optional public key check
+            if (site.publicKey) {
+                const key = req.header("X-Site-Key");
+                if (!key || key !== site.publicKey)
+                    return res.status(403).json({ error: "invalid site key" });
+            }
+            const db = (0, admin_1.adminDb)();
+            const snap = await db
+                .collection("scenarios")
+                .where("siteId", "==", siteId)
+                .where("status", "==", "active")
+                .limit(50)
+                .get();
+            const rows = snap.docs.map((d) => ({ scenario_id: d.id, ...d.data() }));
+            // Avoid Firestore composite indexes: sort in-memory
+            rows.sort((a, b) => Number(b.priority ?? 0) - Number(a.priority ?? 0));
+            const scenarios = await Promise.all(rows.map((r) => expandScenarioActions({ workspaceId: site.workspaceId, scenarioId: r.scenario_id, raw: r })));
+            // CORS response header (exact origin)
+            if (origin) {
+                res.setHeader("Access-Control-Allow-Origin", origin);
+                res.setHeader("Vary", "Origin");
+            }
+            return res.json({
+                site_id: siteId,
+                server_time: new Date().toISOString(),
+                cache_ttl_sec: 300,
+                defaults: site.defaults || ws.defaults || { ai: { decision: false, copy: "approve", discovery: "suggest" }, log_sample_rate: 1.0 },
+                scenarios
+            });
+        }
+        catch (e) {
+            console.error(e);
+            return res.status(500).json({ error: "serve_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/serve", (req, res) => {
+        const origin = req.header("Origin") || "*";
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type,X-Site-Id,X-Site-Key");
+        res.setHeader("Vary", "Origin");
+        res.status(204).send("");
+    });
+    app.post("/v1/ai/copy", async (req, res) => {
+        try {
+            const body = CopyReqSchema.parse(req.body);
+            const site = await (0, site_1.pickSiteById)(body.site_id);
+            if (!site)
+                return res.status(404).json({ error: "site not found" });
+            const apiKey = process.env.OPENAI_API_KEY || "";
+            if (!apiKey)
+                return res.status(500).json({ error: "missing_openai_api_key" });
+            const out = await (0, openaiCopy_1.generateCopy3)({
+                apiKey,
+                goal: body.goal,
+                base_creative: body.base_creative,
+                brand_tone: body.brand_tone
+            });
+            return res.json(out);
+        }
+        catch (e) {
+            console.error(e);
+            const msg = e?.issues ? e.issues : e?.message || String(e);
+            return res.status(400).json({ error: "copy_failed", message: msg });
+        }
+    });
+    // -------------------- Logging (beta) --------------------
+    // SDK -> POST /v1/log
+    // - stores raw event in `events` (sampling optional)
+    // - increments counters in `stats_daily` for dashboard
+    app.post("/v1/log", async (req, res) => {
+        try {
+            const body = LogReqSchema.parse(req.body);
+            const site = await (0, site_1.pickSiteById)(body.site_id);
+            if (!site)
+                return res.status(404).json({ error: "site not found" });
+            const ws = await (0, site_1.pickWorkspaceById)(site.workspaceId);
+            if (!ws)
+                return res.status(404).json({ error: "workspace not found" });
+            const origin = req.header("Origin") || "";
+            // Allowlist uses site.domains (fallback workspace.domains)
+            const allowed = (site.domains && site.domains.length ? site.domains : ws.domains) || [];
+            (0, site_1.assertAllowedOrigin)({ allowed, origin, url: body.url || "" });
+            if (origin) {
+                res.setHeader("Access-Control-Allow-Origin", origin);
+                res.setHeader("Vary", "Origin");
+            }
+            const db = (0, admin_1.adminDb)();
+            const now = new Date();
+            const day = yyyyMmDdUTC(now);
+            const sampleRate = Number(site.defaults?.log_sample_rate ?? 1);
+            const shouldStoreRaw = !(sampleRate >= 0 && sampleRate < 1) || Math.random() < sampleRate;
+            if (shouldStoreRaw) {
+                await db.collection("events").add({
+                    siteId: body.site_id,
+                    workspaceId: site.workspaceId,
+                    scenarioId: body.scenario_id || null,
+                    actionId: body.action_id || null,
+                    templateId: body.template_id || null,
+                    event: body.event,
+                    url: body.url || null,
+                    path: body.path || null,
+                    ref: body.ref || null,
+                    vid: body.vid || null,
+                    sid: body.sid || null,
+                    createdAt: firestore_1.FieldValue.serverTimestamp()
+                });
+            }
+            // Aggregate counters (always)
+            const statId = `${body.site_id}__${day}__${body.scenario_id || "na"}__${body.action_id || "na"}__${body.event}`;
+            await db
+                .collection("stats_daily")
+                .doc(statId)
+                .set({
+                siteId: body.site_id,
+                day,
+                scenarioId: body.scenario_id || null,
+                actionId: body.action_id || null,
+                event: body.event,
+                count: firestore_1.FieldValue.increment(1),
+                updatedAt: firestore_1.FieldValue.serverTimestamp()
+            }, { merge: true });
+            return res.json({ ok: true });
+        }
+        catch (e) {
+            console.error(e);
+            const msg = e?.issues ? e.issues : e?.message || String(e);
+            return res.status(400).json({ error: "log_failed", message: msg });
+        }
+    });
+    app.options("/v1/log", (req, res) => {
+        const origin = req.header("Origin") || "*";
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+        res.setHeader("Vary", "Origin");
+        res.status(204).send("");
+    });
+}
+const CopyReqSchema = zod_1.z.object({
+    site_id: zod_1.z.string().min(1),
+    goal: zod_1.z.string().optional(),
+    base_creative: zod_1.z.object({
+        title: zod_1.z.string(),
+        body: zod_1.z.string(),
+        cta: zod_1.z.string(),
+        url: zod_1.z.string().optional()
+    }),
+    brand_tone: zod_1.z
+        .object({
+        style: zod_1.z.string().optional(),
+        ng_words: zod_1.z.array(zod_1.z.string()).optional(),
+        max_chars: zod_1.z
+            .object({
+            title: zod_1.z.number().optional(),
+            body: zod_1.z.number().optional(),
+            cta: zod_1.z.number().optional()
+        })
+            .optional()
+    })
+        .optional()
+});
+const LogReqSchema = zod_1.z.object({
+    site_id: zod_1.z.string().min(1),
+    scenario_id: zod_1.z.string().optional(),
+    action_id: zod_1.z.string().optional(),
+    template_id: zod_1.z.string().optional(),
+    event: zod_1.z.enum(["impression", "click", "click_link", "close"]),
+    url: zod_1.z.string().optional(),
+    path: zod_1.z.string().optional(),
+    ref: zod_1.z.string().optional(),
+    vid: zod_1.z.string().optional(),
+    sid: zod_1.z.string().optional()
+});

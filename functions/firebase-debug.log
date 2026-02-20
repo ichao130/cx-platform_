@@ -1,0 +1,16 @@
+[debug] [2026-02-19T15:38:20.534Z] ----------------------------------------------------------------------
+[debug] [2026-02-19T15:38:20.536Z] Command:       /Users/isao/.nvm/versions/node/v24.13.0/bin/node /Users/isao/.nvm/versions/node/v24.13.0/bin/firebase deploy --only hosting
+[debug] [2026-02-19T15:38:20.537Z] CLI Version:   15.6.0
+[debug] [2026-02-19T15:38:20.537Z] Platform:      darwin
+[debug] [2026-02-19T15:38:20.537Z] Node Version:  v24.13.0
+[debug] [2026-02-19T15:38:20.537Z] Time:          Fri Feb 20 2026 00:38:20 GMT+0900 (Japan Standard Time)
+[debug] [2026-02-19T15:38:20.537Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-02-19T15:38:21.747Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-02-19T15:38:21.748Z] > authorizing via signed-in user (iwatanabe@branberyheag.com)
+[debug] [2026-02-19T15:38:21.748Z] [iam] checking project cx-platform-v1 for permissions ["firebase.projects.get","firebasehosting.sites.update"]
+[debug] [2026-02-19T15:38:21.749Z] Checked if tokens are valid: true, expires at: 1771517333825
+[debug] [2026-02-19T15:38:21.749Z] Checked if tokens are valid: true, expires at: 1771517333825
+[debug] [2026-02-19T15:38:21.750Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/cx-platform-v1:testIamPermissions [none]
+[debug] [2026-02-19T15:38:21.750Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/cx-platform-v1:testIamPermissions  x-goog-user-project=cx-platform-v1
+[debug] [2026-02-19T15:38:21.750Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/cx-platform-v1:testIamPermissions {"permissions":["firebase.projects.get","firebasehosting.sites.update"]}

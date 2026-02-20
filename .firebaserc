@@ -1,0 +1,8 @@
+{
+  "projects": {
+    "cx-platform-v1": "cx-platform-v1",
+    "default": "cx-platform-v1"
+  },
+  "targets": {},
+  "etags": {}
+}
