@@ -1,19 +1,8 @@
-/* cx-platform SDK v4 (modal/banner/toast + image + secondary link + action chain + templates) */
+/* cx-platform SDK v5 (DOM mount + shadow/theme/inherit + placement) */
 (function () {
   "use strict";
 
   var SCRIPT_ATTR = "data-site-id";
-
-  function preloadImage(src, cb) {
-    try {
-      var img = new Image();
-      img.onload = function(){ cb(true, src); };
-      img.onerror = function(){ cb(false, src); };
-      img.src = src;
-    } catch(e) {
-      cb(false, src);
-    }
-  }
 
   function log() {
     try { console.log.apply(console, arguments); } catch (e) {}
@@ -57,13 +46,17 @@
     return String(apiBase).replace(/\/serve(\?.*)?$/, "/log");
   }
 
-  function postLog(apiBase, payload) {
+  function postLog(apiBase, payload, siteId, siteKey) {
     var url = logEndpointFromServe(apiBase);
     if (!url) return;
     try {
       fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Site-Id": siteId,
+          "X-Site-Key": siteKey
+        },
         body: JSON.stringify(payload),
         credentials: "omit",
         keepalive: true
@@ -91,14 +84,19 @@
     document.head.appendChild(style);
   }
 
-  function ensureTemplateStyle(templateId, cssText) {
+  function ensureTemplateStyle(templateId, cssText, root) {
     if (!templateId || !cssText) return;
+    // root: document or shadowRoot
     var id = "cx-tpl-" + templateId;
-    if (document.getElementById(id)) return;
+    var exists = root && root.getElementById ? root.getElementById(id) : document.getElementById(id);
+    if (exists) return;
+
     var style = document.createElement("style");
     style.id = id;
     style.textContent = String(cssText);
-    document.head.appendChild(style);
+
+    if (root && root.host && root.appendChild) root.appendChild(style);
+    else document.head.appendChild(style);
   }
 
   function escapeHtml(s) {
@@ -132,25 +130,136 @@
       image_url: creative.image_url || creative.imageUrl || "",
       cta_text: creative.cta_text || creative.buttonText || creative.button_text || "OK",
       cta_url: creative.cta_url || creative.url || creative.href || "",
-      cta_url_text: creative.cta_url_text || creative.link_text || creative.linkText || "詳細を見る",
+      cta_url_text: creative.cta_url_text || creative.link_text || creative.linkText || "詳細を見る"
+    };
+  }
+
+  // ------------------ DOM MOUNT ------------------
+  function pickMount(action) {
+    var m = action && action.mount ? action.mount : null;
+    if (!m) return null;
+    if (!m.selector) return null;
+    return {
+      selector: String(m.selector),
+      placement: String(m.placement || "append"),
+      mode: String(m.mode || "shadow") // shadow|theme|inherit
+    };
+  }
+
+  function applyPlacement(target, el, placement) {
+    if (!target || !el) return false;
+    var p = placement || "append";
+    if (p === "prepend") {
+      target.insertBefore(el, target.firstChild);
+      return true;
+    }
+    if (p === "before") {
+      if (!target.parentNode) return false;
+      target.parentNode.insertBefore(el, target);
+      return true;
+    }
+    if (p === "after") {
+      if (!target.parentNode) return false;
+      target.parentNode.insertBefore(el, target.nextSibling);
+      return true;
+    }
+    // append
+    target.appendChild(el);
+    return true;
+  }
+
+  function computeThemeVarsFrom(targetEl) {
+    try {
+      var cs = window.getComputedStyle(targetEl || document.documentElement);
+      return {
+        "--cx-font": cs.fontFamily || "system-ui",
+        "--cx-text": cs.color || "#111",
+        "--cx-bg": cs.backgroundColor || "#fff",
+        "--cx-radius": "14px",
+        "--cx-primary": (getComputedStyle(document.documentElement).getPropertyValue("--primary") || "").trim() || "#111"
+      };
+    } catch (e) {
+      return {
+        "--cx-font": "system-ui",
+        "--cx-text": "#111",
+        "--cx-bg": "#fff",
+        "--cx-radius": "14px",
+        "--cx-primary": "#111"
+      };
+    }
+  }
+
+  function createMountHost(targetEl, mount, templateId) {
+    var host = document.createElement("div");
+    host.className = "cx-host";
+    host.setAttribute("data-cx-host", "1");
+    if (templateId) host.setAttribute("data-cx-template-id", String(templateId));
+    if (mount && mount.mode) host.setAttribute("data-cx-mode", String(mount.mode));
+    host.style.all = "initial"; // reset most properties (for safety); theme/inherit can override
+
+    // theme vars
+    if (mount && mount.mode === "theme") {
+      var vars = computeThemeVarsFrom(targetEl);
+      for (var k in vars) host.style.setProperty(k, vars[k]);
+    }
+
+    // place it
+    applyPlacement(targetEl, host, mount.placement);
+
+    return host;
+  }
+
+  function mountRootFor(host, mount) {
+    if (!host) return { root: null, remove: function () {} };
+
+    // inherit: light DOM
+    if (mount && mount.mode === "inherit") {
+      host.style.all = ""; // allow styles to flow
+      host.className = "cx-root"; // for scoping
+      return { root: host, remove: function () { try { host.remove(); } catch (e) {} } };
+    }
+
+    // shadow/theme/shadow
+    var shadow = host.attachShadow ? host.attachShadow({ mode: "open" }) : null;
+    if (!shadow) {
+      // fallback to inherit if shadow not available
+      host.style.all = "";
+      host.className = "cx-root";
+      return { root: host, remove: function () { try { host.remove(); } catch (e) {} } };
+    }
+
+    // base inside shadow: allow tokens
+    var base = document.createElement("style");
+    base.textContent =
+      ":host{display:contents;font-family:var(--cx-font, system-ui);color:var(--cx-text,#111);}"+
+      ".cx-scope{all:initial;font-family:var(--cx-font, system-ui);color:var(--cx-text,#111);}"+
+      ".cx-scope *{box-sizing:border-box;}";
+
+    shadow.appendChild(base);
+
+    var scope = document.createElement("div");
+    scope.className = "cx-scope";
+    shadow.appendChild(scope);
+
+    return {
+      root: scope,
+      shadowRoot: shadow,
+      remove: function () { try { host.remove(); } catch (e) {} }
     };
   }
 
   /* ------------------ RENDERERS ------------------ */
 
-  function mountAndWireClose(rootEl, onClose) {
+  function mountAndWireClose(rootEl, onClose, removeHost) {
     function close() {
-      try { rootEl.remove(); } catch (e) {}
+      try { if (removeHost) removeHost(); else rootEl.remove(); } catch (e) {}
       if (typeof onClose === "function") onClose();
     }
 
     // any element with data-cx-close closes
     var closers = rootEl.querySelectorAll("[data-cx-close]");
     for (var i = 0; i < closers.length; i++) {
-      closers[i].addEventListener("click", function (e) {
-        // If it's a link, let it navigate; still close.
-        close();
-      });
+      closers[i].addEventListener("click", function () { close(); });
     }
 
     // overlay click close (if overlay exists)
@@ -161,52 +270,78 @@
     return { close: close };
   }
 
-  function renderWithTemplate(action, next, apiBase, ctx) {
+  function renderWithTemplate(action, next, apiBase, ctx, mount) {
     var tpl = action.template;
     if (!tpl || (!tpl.html && !tpl.css)) return false;
 
-    ensureTemplateStyle(action.templateId || (tpl && tpl.template_id), tpl.css);
+    var templateId = action.templateId || action.template_id || (tpl && tpl.template_id) || "";
+
+    // mount
+    var hostHandle = null;
+    var rootForInsert = document.body;
+
+    if (mount && mount.selector && (action.type || "modal") !== "modal") {
+      var target = null;
+      try { target = document.querySelector(mount.selector); } catch (e) { target = null; }
+      if (!target) {
+        log("[cx] mount target not found:", mount.selector);
+        return false; // do not show
+      }
+
+      var host = createMountHost(target, mount, templateId);
+      hostHandle = mountRootFor(host, mount);
+      rootForInsert = hostHandle.root || host;
+      ensureTemplateStyle(templateId, tpl.css, hostHandle.shadowRoot || null);
+    } else {
+      // modal/banner/toast -> global
+      ensureTemplateStyle(templateId, tpl.css, null);
+    }
+
     var creative = normalizeCreative(action.creative);
     var html = renderTemplate(tpl.html, creative);
 
-    // For modal we usually want overlay root; template should include it.
     var wrapper = document.createElement("div");
     wrapper.innerHTML = html;
     var root = wrapper.firstElementChild;
     if (!root) return false;
 
-    document.body.appendChild(root);
+    // insert
+    if (rootForInsert && rootForInsert.appendChild) rootForInsert.appendChild(root);
+    else document.body.appendChild(root);
+
     // impression
     postLog(apiBase, {
       site_id: ctx.site_id,
       scenario_id: ctx.scenario_id,
       action_id: action.action_id || action.id,
-      template_id: action.template_id || action.templateId || (tpl && tpl.template_id),
+      template_id: templateId || null,
+      variant_id: ctx.variant_id || null,
       event: "impression",
       url: ctx.url,
       path: ctx.path,
       ref: ctx.ref,
       vid: ctx.vid,
       sid: ctx.sid
-    });
+    }, ctx.site_id, ctx.site_key);
 
-    // log clicks to creative.cta_url if present (phase-1)
+    // log clicks to creative.cta_url if present
     if (creative && creative.cta_url) {
       var links = root.querySelectorAll('a[href="' + creative.cta_url + '"]');
       for (var i = 0; i < links.length; i++) {
-        links[i].addEventListener('click', function () {
+        links[i].addEventListener("click", function () {
           postLog(apiBase, {
             site_id: ctx.site_id,
             scenario_id: ctx.scenario_id,
             action_id: action.action_id || action.id,
-            template_id: action.template_id || action.templateId || (tpl && tpl.template_id),
+            template_id: templateId || null,
+            variant_id: ctx.variant_id || null,
             event: "click_link",
             url: ctx.url,
             path: ctx.path,
             ref: ctx.ref,
             vid: ctx.vid,
             sid: ctx.sid
-          });
+          }, ctx.site_id, ctx.site_key);
         });
       }
     }
@@ -216,22 +351,28 @@
         site_id: ctx.site_id,
         scenario_id: ctx.scenario_id,
         action_id: action.action_id || action.id,
-        template_id: action.template_id || action.templateId || (tpl && tpl.template_id),
+        template_id: templateId || null,
+        variant_id: ctx.variant_id || null,
         event: "close",
         url: ctx.url,
         path: ctx.path,
         ref: ctx.ref,
         vid: ctx.vid,
         sid: ctx.sid
-      });
-      if (typeof next === 'function') next();
-    });
+      }, ctx.site_id, ctx.site_key);
+
+      if (typeof next === "function") next();
+    }, hostHandle ? hostHandle.remove : null);
+
     return true;
   }
 
   function renderModal(action, next, apiBase, ctx) {
+    // modalは常にoverlay（DOM差し込み対象外）
     ensureBaseStyle();
-    if (renderWithTemplate(action, next, apiBase, ctx)) return;
+
+    // template優先（global）
+    if (renderWithTemplate(action, next, apiBase, ctx, null)) return;
 
     var creative = normalizeCreative(action.creative);
 
@@ -241,16 +382,11 @@
     modal.className = "cx-modal";
 
     if (creative.image_url) {
-      // 先に画像だけ読み込み→OKなら表示
-      preloadImage(creative.image_url, function(ok) {
-        if (!ok) return; // 失敗なら画像なしでOK
-        var img = document.createElement("img");
-        img.className = "cx-image";
-        img.src = creative.image_url;
-        img.alt = creative.title || "creative";
-        // modalの先頭に入れる（headerより上）
-        modal.insertBefore(img, modal.firstChild);
-      });
+      var img = document.createElement("img");
+      img.className = "cx-image";
+      img.src = creative.image_url;
+      img.alt = creative.title || "creative";
+      modal.appendChild(img);
     }
 
     if (creative.title) {
@@ -282,14 +418,15 @@
           site_id: ctx.site_id,
           scenario_id: ctx.scenario_id,
           action_id: action.action_id || action.id,
-          template_id: action.template_id,
+          template_id: action.template_id || null,
+          variant_id: ctx.variant_id || null,
           event: "click_link",
           url: ctx.url,
           path: ctx.path,
           ref: ctx.ref,
           vid: ctx.vid,
           sid: ctx.sid
-        });
+        }, ctx.site_id, ctx.site_key);
       });
       footer.appendChild(linkBtn);
     }
@@ -309,14 +446,15 @@
       site_id: ctx.site_id,
       scenario_id: ctx.scenario_id,
       action_id: action.action_id || action.id,
-      template_id: action.template_id,
+      template_id: action.template_id || null,
+      variant_id: ctx.variant_id || null,
       event: "impression",
       url: ctx.url,
       path: ctx.path,
       ref: ctx.ref,
       vid: ctx.vid,
       sid: ctx.sid
-    });
+    }, ctx.site_id, ctx.site_key);
 
     function close() {
       try { overlay.remove(); } catch (e) {}
@@ -324,47 +462,133 @@
         site_id: ctx.site_id,
         scenario_id: ctx.scenario_id,
         action_id: action.action_id || action.id,
-        template_id: action.template_id,
+        template_id: action.template_id || null,
+        variant_id: ctx.variant_id || null,
         event: "close",
         url: ctx.url,
         path: ctx.path,
         ref: ctx.ref,
         vid: ctx.vid,
         sid: ctx.sid
-      });
+      }, ctx.site_id, ctx.site_key);
+
       if (typeof next === "function") next();
     }
+
     overlay.addEventListener("click", function (e) { if (e.target === overlay) close(); });
     okBtn.addEventListener("click", close);
   }
 
   function renderBanner(action, next, apiBase, ctx) {
     ensureBaseStyle();
-    if (renderWithTemplate(action, next, apiBase, ctx)) return;
+    var mount = pickMount(action);
+    if (renderWithTemplate(action, next, apiBase, ctx, mount)) return;
 
-    var creative = normalizeCreative(action.creative);
+    // mountがある場合は固定position bannerよりも “自然に差し込む” が優先
+    if (mount && mount.selector) {
+      // templateが無い場合のDOM banner
+      var target = null;
+      try { target = document.querySelector(mount.selector); } catch (e) { target = null; }
+      if (!target) return;
+
+      var host = createMountHost(target, mount, action.template_id || "");
+      var handle = mountRootFor(host, mount);
+      var root = handle.root || host;
+
+      var creative = normalizeCreative(action.creative);
+      var box = document.createElement("div");
+      box.className = "cx-inline-banner";
+      box.style.cssText = "padding:12px 14px;border-radius:14px;border:1px solid rgba(0,0,0,.12);background:var(--cx-bg,#fff);color:var(--cx-text,#111);font-family:var(--cx-font,system-ui);display:flex;gap:10px;align-items:center;justify-content:space-between;";
+
+      var text = document.createElement("div");
+      text.textContent = creative.title || creative.body || "";
+      box.appendChild(text);
+
+      var right = document.createElement("div");
+      right.style.cssText = "display:flex;gap:10px;align-items:center;";
+
+      if (creative.cta_url) {
+        var a = document.createElement("a");
+        a.href = creative.cta_url;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.textContent = creative.cta_url_text || "詳細を見る";
+        a.style.cssText = "text-decoration:underline;cursor:pointer;";
+        a.addEventListener("click", function () {
+          postLog(apiBase, {
+            site_id: ctx.site_id,
+            scenario_id: ctx.scenario_id,
+            action_id: action.action_id || action.id,
+            template_id: action.template_id || null,
+            variant_id: ctx.variant_id || null,
+            event: "click_link",
+            url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid
+          }, ctx.site_id, ctx.site_key);
+        });
+        right.appendChild(a);
+      }
+
+      var closeBtn = document.createElement("button");
+      closeBtn.type = "button";
+      closeBtn.textContent = creative.cta_text || "OK";
+      closeBtn.style.cssText = "border:0;border-radius:10px;padding:8px 12px;cursor:pointer;background:var(--cx-primary,#111);color:#fff;font-weight:700;";
+      right.appendChild(closeBtn);
+
+      box.appendChild(right);
+      root.appendChild(box);
+
+      postLog(apiBase, {
+        site_id: ctx.site_id,
+        scenario_id: ctx.scenario_id,
+        action_id: action.action_id || action.id,
+        template_id: action.template_id || null,
+        variant_id: ctx.variant_id || null,
+        event: "impression",
+        url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid
+      }, ctx.site_id, ctx.site_key);
+
+      closeBtn.addEventListener("click", function () {
+        try { handle.remove(); } catch (e) {}
+        postLog(apiBase, {
+          site_id: ctx.site_id,
+          scenario_id: ctx.scenario_id,
+          action_id: action.action_id || action.id,
+          template_id: action.template_id || null,
+          variant_id: ctx.variant_id || null,
+          event: "close",
+          url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid
+        }, ctx.site_id, ctx.site_key);
+
+        if (typeof next === "function") next();
+      });
+
+      return;
+    }
+
+    // 従来のfixed banner
+    var creative2 = normalizeCreative(action.creative);
     var banner = document.createElement("div");
     banner.className = "cx-banner";
     var inner = document.createElement("div");
     inner.className = "cx-banner__inner";
-    var text = document.createElement("div");
-    text.textContent = creative.title || "";
+    var text2 = document.createElement("div");
+    text2.textContent = creative2.title || "";
 
-    inner.appendChild(text);
-    if (creative.cta_url) {
-      var linkBtn = document.createElement("a");
-      linkBtn.className = "cx-btn cx-btn--ghost";
-      linkBtn.href = creative.cta_url;
-      linkBtn.target = "_blank";
-      linkBtn.rel = "noopener noreferrer";
-      linkBtn.textContent = creative.cta_url_text || "詳細を見る";
-      inner.appendChild(linkBtn);
+    inner.appendChild(text2);
+    if (creative2.cta_url) {
+      var linkBtn2 = document.createElement("a");
+      linkBtn2.className = "cx-btn cx-btn--ghost";
+      linkBtn2.href = creative2.cta_url;
+      linkBtn2.target = "_blank";
+      linkBtn2.rel = "noopener noreferrer";
+      linkBtn2.textContent = creative2.cta_url_text || "詳細を見る";
+      inner.appendChild(linkBtn2);
     }
-    var closeBtn = document.createElement("button");
-    closeBtn.className = "cx-btn cx-btn--primary";
-    closeBtn.type = "button";
-    closeBtn.textContent = creative.cta_text || "OK";
-    inner.appendChild(closeBtn);
+    var closeBtn2 = document.createElement("button");
+    closeBtn2.className = "cx-btn cx-btn--primary";
+    closeBtn2.type = "button";
+    closeBtn2.textContent = creative2.cta_text || "OK";
+    inner.appendChild(closeBtn2);
 
     banner.appendChild(inner);
     document.body.appendChild(banner);
@@ -373,49 +597,41 @@
       site_id: ctx.site_id,
       scenario_id: ctx.scenario_id,
       action_id: action.action_id || action.id,
-      template_id: action.template_id,
+      template_id: action.template_id || null,
+      variant_id: ctx.variant_id || null,
       event: "impression",
-      url: ctx.url,
-      path: ctx.path,
-      ref: ctx.ref,
-      vid: ctx.vid,
-      sid: ctx.sid
-    });
+      url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid
+    }, ctx.site_id, ctx.site_key);
 
-    function close() {
+    function close2() {
       try { banner.remove(); } catch (e) {}
       postLog(apiBase, {
         site_id: ctx.site_id,
         scenario_id: ctx.scenario_id,
         action_id: action.action_id || action.id,
-        template_id: action.template_id,
+        template_id: action.template_id || null,
+        variant_id: ctx.variant_id || null,
         event: "close",
-        url: ctx.url,
-        path: ctx.path,
-        ref: ctx.ref,
-        vid: ctx.vid,
-        sid: ctx.sid
-      });
+        url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid
+      }, ctx.site_id, ctx.site_key);
+
       if (typeof next === "function") next();
     }
-    closeBtn.addEventListener("click", close);
+    closeBtn2.addEventListener("click", close2);
 
-    if (creative.cta_url) {
-      var links = banner.querySelectorAll('a[href="' + creative.cta_url + '"]');
-      for (var i = 0; i < links.length; i++) {
-        links[i].addEventListener('click', function () {
+    if (creative2.cta_url) {
+      var links2 = banner.querySelectorAll('a[href="' + creative2.cta_url + '"]');
+      for (var j = 0; j < links2.length; j++) {
+        links2[j].addEventListener("click", function () {
           postLog(apiBase, {
             site_id: ctx.site_id,
             scenario_id: ctx.scenario_id,
             action_id: action.action_id || action.id,
-            template_id: action.template_id,
+            template_id: action.template_id || null,
+            variant_id: ctx.variant_id || null,
             event: "click_link",
-            url: ctx.url,
-            path: ctx.path,
-            ref: ctx.ref,
-            vid: ctx.vid,
-            sid: ctx.sid
-          });
+            url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid
+          }, ctx.site_id, ctx.site_key);
         });
       }
     }
@@ -423,60 +639,118 @@
 
   function renderToast(action, next, apiBase, ctx) {
     ensureBaseStyle();
-    if (renderWithTemplate(action, next, apiBase, ctx)) return;
+    var mount = pickMount(action);
+    if (renderWithTemplate(action, next, apiBase, ctx, mount)) return;
 
-    var creative = normalizeCreative(action.creative);
-    var toast = document.createElement("div");
-    toast.className = "cx-toast";
-    toast.textContent = creative.title || creative.body || "";
-    document.body.appendChild(toast);
+    if (mount && mount.selector) {
+      var target = null;
+      try { target = document.querySelector(mount.selector); } catch (e) { target = null; }
+      if (!target) return;
+
+      var host = createMountHost(target, mount, action.template_id || "");
+      var handle = mountRootFor(host, mount);
+      var root = handle.root || host;
+
+      var creative = normalizeCreative(action.creative);
+      var toast = document.createElement("div");
+      toast.textContent = creative.title || creative.body || "";
+      toast.style.cssText = "padding:10px 12px;border-radius:12px;border:1px solid rgba(0,0,0,.12);background:var(--cx-bg,#fff);color:var(--cx-text,#111);font-family:var(--cx-font,system-ui);cursor:pointer;";
+      root.appendChild(toast);
+
+      postLog(apiBase, {
+        site_id: ctx.site_id,
+        scenario_id: ctx.scenario_id,
+        action_id: action.action_id || action.id,
+        template_id: action.template_id || null,
+        variant_id: ctx.variant_id || null,
+        event: "impression",
+        url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid
+      }, ctx.site_id, ctx.site_key);
+
+      var timer = setTimeout(function () {
+        try { handle.remove(); } catch (e) {}
+        postLog(apiBase, {
+          site_id: ctx.site_id,
+          scenario_id: ctx.scenario_id,
+          action_id: action.action_id || action.id,
+          template_id: action.template_id || null,
+          variant_id: ctx.variant_id || null,
+          event: "close",
+          url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid
+        }, ctx.site_id, ctx.site_key);
+
+        if (typeof next === "function") next();
+      }, 5000);
+
+      toast.addEventListener("click", function () {
+        clearTimeout(timer);
+        postLog(apiBase, {
+          site_id: ctx.site_id,
+          scenario_id: ctx.scenario_id,
+          action_id: action.action_id || action.id,
+          template_id: action.template_id || null,
+          variant_id: ctx.variant_id || null,
+          event: "click",
+          url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid
+        }, ctx.site_id, ctx.site_key);
+
+        if (creative.cta_url) {
+          try { window.open(creative.cta_url, "_blank"); } catch (e) {}
+        }
+        try { handle.remove(); } catch (e) {}
+
+        if (typeof next === "function") next();
+      });
+      return;
+    }
+
+    // 従来のfixed toast
+    var creative2 = normalizeCreative(action.creative);
+    var toast2 = document.createElement("div");
+    toast2.className = "cx-toast";
+    toast2.textContent = creative2.title || creative2.body || "";
+    document.body.appendChild(toast2);
 
     postLog(apiBase, {
       site_id: ctx.site_id,
       scenario_id: ctx.scenario_id,
       action_id: action.action_id || action.id,
-      template_id: action.template_id,
+      template_id: action.template_id || null,
+      variant_id: ctx.variant_id || null,
       event: "impression",
-      url: ctx.url,
-      path: ctx.path,
-      ref: ctx.ref,
-      vid: ctx.vid,
-      sid: ctx.sid
-    });
+      url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid
+    }, ctx.site_id, ctx.site_key);
 
-    var timer = setTimeout(function () {
-      try { toast.remove(); } catch (e) {}
+    var timer2 = setTimeout(function () {
+      try { toast2.remove(); } catch (e) {}
       postLog(apiBase, {
         site_id: ctx.site_id,
         scenario_id: ctx.scenario_id,
         action_id: action.action_id || action.id,
-        template_id: action.template_id,
+        template_id: action.template_id || null,
+        variant_id: ctx.variant_id || null,
         event: "close",
-        url: ctx.url,
-        path: ctx.path,
-        ref: ctx.ref,
-        vid: ctx.vid,
-        sid: ctx.sid
-      });
+        url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid
+      }, ctx.site_id, ctx.site_key);
+
       if (typeof next === "function") next();
     }, 5000);
-    toast.addEventListener("click", function () {
-      clearTimeout(timer);
-      try { toast.remove(); } catch (e) {}
+
+    toast2.addEventListener("click", function () {
+      clearTimeout(timer2);
+      try { toast2.remove(); } catch (e) {}
       postLog(apiBase, {
         site_id: ctx.site_id,
         scenario_id: ctx.scenario_id,
         action_id: action.action_id || action.id,
-        template_id: action.template_id,
+        template_id: action.template_id || null,
+        variant_id: ctx.variant_id || null,
         event: "click",
-        url: ctx.url,
-        path: ctx.path,
-        ref: ctx.ref,
-        vid: ctx.vid,
-        sid: ctx.sid
-      });
-      if (creative.cta_url) {
-        try { window.open(creative.cta_url, "_blank"); } catch (e) {}
+        url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid
+      }, ctx.site_id, ctx.site_key);
+
+      if (creative2.cta_url) {
+        try { window.open(creative2.cta_url, "_blank"); } catch (e) {}
       }
       if (typeof next === "function") next();
     });
@@ -507,13 +781,66 @@
     return "other";
   }
 
+  function normalizeUrlForMatch(s) {
+    s = String(s || "");
+    // query/hash を無視して判定したいならここで落とす
+    // ただし target=url のとき query まで含めたい場合もあるので、必要ならコメントアウト
+    // s = s.split("#")[0].split("?")[0];
+
+    // 末尾スラッシュを揃える（about と about/ の差を吸収）
+    if (s.length > 1) s = s.replace(/\/+$/, "");
+    return s;
+  }
+
+  function matchStringRule(actual, mode, expected) {
+    actual = String(actual || "");
+    expected = String(expected || "");
+    if (!expected) return true; // value空なら条件なし扱い
+
+    var a = normalizeUrlForMatch(actual);
+    var e = normalizeUrlForMatch(expected);
+
+    mode = String(mode || "contains");
+    if (mode === "equals") return a === e;
+    if (mode === "contains") return a.indexOf(e) !== -1;
+    if (mode === "starts_with") return a.indexOf(e) === 0;
+    if (mode === "regex") {
+      try { return new RegExp(expected).test(actual); } catch (e2) { return false; }
+    }
+    // unknown mode -> contains
+    return a.indexOf(e) !== -1;
+  }
+
+  function shouldRunUrlRule(er, ctx) {
+    var rule = er && er.page && er.page.url ? er.page.url : null;
+    if (!rule) return true;
+
+    var target = String(rule.target || "url"); // url|path|ref
+    var mode = rule.mode || "contains";
+    var value = rule.value || "";
+
+    var actual = "";
+    if (target === "path") actual = ctx.path || "";
+    else if (target === "ref") actual = ctx.ref || "";
+    else actual = ctx.url || "";
+
+    return matchStringRule(actual, mode, value);
+  }
+
+
   function shouldRunScenario(s, ctx) {
     if (!s || s.status !== "active") return false;
     var er = s.entry_rules || {};
+
+    // page_type_in
     var allowed = er.page && Array.isArray(er.page.page_type_in) ? er.page.page_type_in : null;
     if (allowed && allowed.length) {
       if (allowed.indexOf(ctx.page_type) === -1) return false;
     }
+
+    // url rule（追加）
+    if (!shouldRunUrlRule(er, ctx)) return false;
+
     return true;
   }
 
@@ -531,6 +858,7 @@
         return;
       }
       ctx.scenario_id = s.scenario_id || s.id;
+      ctx.variant_id = s.variant_id || null; // serverが付与
       runActions(actions, apiBase, ctx);
     }, waitMs);
   }
@@ -540,6 +868,7 @@
     if (!script) return;
 
     var siteId = script.getAttribute("data-site-id") || "";
+    var siteKey = script.getAttribute("data-site-key") || "";
     var apiBase = script.getAttribute("data-api-base") || "";
     if (!siteId || !apiBase) {
       log("[cx] missing data-site-id or data-api-base");
@@ -548,21 +877,22 @@
 
     var ctx = {
       site_id: siteId,
+      site_key: siteKey,
       url: window.location.href,
       path: window.location.pathname,
       ref: document.referrer || "",
       page_type: script.getAttribute("data-page-type") || pageTypeFromPath(window.location.pathname),
-      vid: getOrCreateId('cx_vid'),
-      sid: getOrCreateId('cx_sid_' + siteId)
+      vid: getOrCreateId("cx_vid"),
+      sid: getOrCreateId("cx_sid_" + siteId),
+      variant_id: null
     };
 
-    var siteKey = script.getAttribute("data-site-key") || "";
-
     fetch(apiBase + (apiBase.indexOf("?") >= 0 ? "&" : "?") + qs(ctx), {
-        method: "GET",
-        headers: siteKey ? { "X-Site-Key": siteKey } : {},
-        credentials: "omit"
-      })
+      headers: {
+        "X-Site-Id": siteId,
+        "X-Site-Key": siteKey
+      }
+    })
       .then(function (r) { return r.json(); })
       .then(function (data) {
         var scenarios = (data && data.scenarios) || [];

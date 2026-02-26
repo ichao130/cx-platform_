@@ -2,13 +2,12 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerV1Routes = registerV1Routes;
 const firestore_1 = require("firebase-admin/firestore");
-const admin_1 = require("../services/admin");
 const zod_1 = require("zod");
+const admin_1 = require("../services/admin");
 const site_1 = require("../services/site");
 const openaiCopy_1 = require("../services/openaiCopy");
 const experiment_1 = require("../services/experiment");
 function yyyyMmDdUTC(d) {
-    // log aggregation key. (UTC is fine for now; can switch to JST later if needed)
     const y = d.getUTCFullYear();
     const m = String(d.getUTCMonth() + 1).padStart(2, "0");
     const dd = String(d.getUTCDate()).padStart(2, "0");
@@ -34,10 +33,17 @@ function normalizeActions(actions) {
         .filter(Boolean)
         .map((a) => {
         const type = a.type ?? "modal";
-        const selector = a.selector ?? "body";
         const creative = normalizeCreative(a.creative ?? a.content ?? {});
         const templateId = a.templateId ?? a.template_id ?? undefined;
-        return { type, selector, creative, templateId };
+        const template = a.template ?? undefined;
+        // ★mountを維持（mountが無い古いデータは selector→mount に変換）
+        const mount = a.mount ??
+            (a.selector
+                ? { selector: String(a.selector), placement: "append", mode: "shadow" }
+                : undefined);
+        // ★action_idも将来の集計のため残すの推奨
+        const action_id = a.action_id ?? a.actionId ?? a.id ?? undefined;
+        return { type, action_id, creative, templateId, template, mount };
     });
 }
 async function expandScenarioActions(params) {
@@ -66,11 +72,18 @@ async function expandScenarioActions(params) {
             .map((r) => {
             const base = map[r.actionId] || {};
             const creative = normalizeCreative({ ...(base.creative || {}), ...(r.overrideCreative || {}) });
+            // ★ mount を最優先（actionRef.mount → base.mount → selector変換）
+            const mount = r.mount ??
+                base.mount ??
+                (r.selector || base.selector
+                    ? { selector: String(r.selector || base.selector), placement: "append", mode: "shadow" }
+                    : undefined);
             return {
                 type: r.type || base.type || "modal",
-                selector: r.selector || base.selector || "body",
+                action_id: base.action_id || r.actionId, // ★ログ/集計用
                 templateId: r.templateId || base.templateId || undefined,
-                creative
+                creative,
+                mount
             };
         });
         // Attach templates (optional)
@@ -78,7 +91,7 @@ async function expandScenarioActions(params) {
             .map((a) => a.templateId)
             .filter((x) => typeof x === "string" && !!x)));
         if (tplIds.length) {
-            const tplSnaps = await Promise.all(tplIds.map((id) => db.collection('templates').doc(id).get()));
+            const tplSnaps = await Promise.all(tplIds.map((id) => db.collection("templates").doc(id).get()));
             const tplMap = {};
             tplSnaps.forEach((t) => {
                 if (t.exists)
@@ -141,31 +154,47 @@ function registerV1Routes(app) {
                 .limit(50)
                 .get();
             const rows = snap.docs.map((d) => ({ scenario_id: d.id, ...d.data() }));
-            // Avoid Firestore composite indexes: sort in-memory
             rows.sort((a, b) => Number(b.priority ?? 0) - Number(a.priority ?? 0));
-            const scenarios = await Promise.all(rows.map((r) => expandScenarioActions({ workspaceId: site.workspaceId, scenarioId: r.scenario_id, raw: r })));
-            const scenariosWithVariant = scenarios.map((s) => {
+            // まず通常の actions 展開
+            const expanded = await Promise.all(rows.map((r) => expandScenarioActions({ workspaceId: site.workspaceId, scenarioId: r.scenario_id, raw: r })));
+            // A/B: scenario単位
+            const expandedWithVariant = await Promise.all(expanded.map(async (s) => {
                 const exp = s.experiment;
-                const sticky = exp?.sticky === "vid" ? (vid || sid || siteId) : (sid || vid || siteId);
+                if (!exp)
+                    return { ...s, variant_id: null };
+                const sticky = exp?.sticky === "vid"
+                    ? (vid || sid || siteId)
+                    : (sid || vid || siteId);
                 const v = (0, experiment_1.pickVariant)(exp, `${siteId}__${s.scenario_id}__${sticky}`);
                 if (!v)
                     return { ...s, variant_id: null };
-                const picked = { ...s, variant_id: v.id, variant_name: v.name || v.id };
-                // ✅ variant.actions を優先（Phase1推奨）
-                if (Array.isArray(v.actions) && v.actions.length) {
-                    picked.actions = normalizeActions(v.actions); // ★normalize
-                    picked._debug = { ...(picked._debug || {}), picked_variant_actions: true };
-                    return picked;
-                }
-                // actionRefs 運用（今回は “返すだけ”）
+                // variant 側に actionRefs があるならそっちを優先して actions を作る
                 if (Array.isArray(v.actionRefs) && v.actionRefs.length) {
-                    picked.actionRefs = v.actionRefs;
-                    picked._debug = { ...(picked._debug || {}), picked_variant_actionRefs: true };
-                    return picked;
+                    const tmp = { ...s, actionRefs: v.actionRefs, actions: [] };
+                    const reExpanded = await expandScenarioActions({
+                        workspaceId: site.workspaceId,
+                        scenarioId: s.scenario_id,
+                        raw: tmp
+                    });
+                    return {
+                        ...reExpanded,
+                        variant_id: v.id,
+                        variant_name: v.name || v.id,
+                        _debug: { ...(reExpanded._debug || {}), picked_variant_actionRefs: true }
+                    };
                 }
-                return picked;
-            });
-            // CORS response header (exact origin)
+                // variant.actions（展開済み運用）
+                if (Array.isArray(v.actions) && v.actions.length) {
+                    return {
+                        ...s,
+                        variant_id: v.id,
+                        variant_name: v.name || v.id,
+                        actions: normalizeActions(v.actions),
+                        _debug: { ...(s._debug || {}), picked_variant_actions: true }
+                    };
+                }
+                return { ...s, variant_id: v.id, variant_name: v.name || v.id };
+            }));
             if (origin) {
                 res.setHeader("Access-Control-Allow-Origin", origin);
                 res.setHeader("Vary", "Origin");
@@ -175,8 +204,11 @@ function registerV1Routes(app) {
                 server_time: new Date().toISOString(),
                 cache_ttl_sec: 300,
                 defaults: site.defaults ||
-                    ws.defaults || { ai: { decision: false, copy: "approve", discovery: "suggest" }, log_sample_rate: 1.0 },
-                scenarios: scenariosWithVariant // ★ここ！
+                    ws.defaults || {
+                    ai: { decision: false, copy: "approve", discovery: "suggest" },
+                    log_sample_rate: 1.0
+                },
+                scenarios: expandedWithVariant
             });
         }
         catch (e) {
@@ -216,9 +248,6 @@ function registerV1Routes(app) {
         }
     });
     // -------------------- Logging (beta) --------------------
-    // SDK -> POST /v1/log
-    // - stores raw event in `events` (sampling optional)
-    // - increments counters in `stats_daily` for dashboard
     app.post("/v1/log", async (req, res) => {
         try {
             const body = LogReqSchema.parse(req.body);
@@ -229,7 +258,6 @@ function registerV1Routes(app) {
             if (!ws)
                 return res.status(404).json({ error: "workspace not found" });
             const origin = req.header("Origin") || "";
-            // Allowlist uses site.domains (fallback workspace.domains)
             const allowed = (site.domains && site.domains.length ? site.domains : ws.domains) || [];
             (0, site_1.assertAllowedOrigin)({ allowed, origin, url: body.url || "" });
             if (origin) {
@@ -248,7 +276,7 @@ function registerV1Routes(app) {
                     scenarioId: body.scenario_id || null,
                     actionId: body.action_id || null,
                     templateId: body.template_id || null,
-                    variantId: body.variant_id || null, // ★追加
+                    variantId: body.variant_id || null,
                     event: body.event,
                     url: body.url || null,
                     path: body.path || null,
@@ -259,8 +287,7 @@ function registerV1Routes(app) {
                 });
             }
             // Aggregate counters (always)
-            const variantKey = body.variant_id || "na";
-            const statId = `${body.site_id}__${day}__${body.scenario_id || "na"}__${body.action_id || "na"}__${variantKey}__${body.event}`;
+            const statId = `${body.site_id}__${day}__${body.scenario_id || "na"}__${body.action_id || "na"}__${body.event}__${body.variant_id || "na"}`;
             await db
                 .collection("stats_daily")
                 .doc(statId)
@@ -269,7 +296,7 @@ function registerV1Routes(app) {
                 day,
                 scenarioId: body.scenario_id || null,
                 actionId: body.action_id || null,
-                variantId: body.variant_id || null, // ★追加
+                variantId: body.variant_id || null,
                 event: body.event,
                 count: firestore_1.FieldValue.increment(1),
                 updatedAt: firestore_1.FieldValue.serverTimestamp()
@@ -286,7 +313,7 @@ function registerV1Routes(app) {
         const origin = req.header("Origin") || "*";
         res.setHeader("Access-Control-Allow-Origin", origin);
         res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type,X-Site-Id,X-Site-Key");
         res.setHeader("Vary", "Origin");
         res.status(204).send("");
     });
@@ -316,14 +343,14 @@ const CopyReqSchema = zod_1.z.object({
 });
 const LogReqSchema = zod_1.z.object({
     site_id: zod_1.z.string().min(1),
-    scenario_id: zod_1.z.string().optional(),
-    action_id: zod_1.z.string().optional(),
-    template_id: zod_1.z.string().optional(),
-    variant_id: zod_1.z.string().optional(), // ★追加
-    event: zod_1.z.enum(["impression", "click", "click_link", "close"]),
-    url: zod_1.z.string().optional(),
-    path: zod_1.z.string().optional(),
-    ref: zod_1.z.string().optional(),
-    vid: zod_1.z.string().optional(),
-    sid: zod_1.z.string().optional()
+    scenario_id: zod_1.z.string().nullable().optional(),
+    action_id: zod_1.z.string().nullable().optional(),
+    template_id: zod_1.z.string().nullable().optional(),
+    variant_id: zod_1.z.string().nullable().optional(),
+    event: zod_1.z.enum(["impression", "click", "click_link", "close", "conversion"]),
+    url: zod_1.z.string().nullable().optional(),
+    path: zod_1.z.string().nullable().optional(),
+    ref: zod_1.z.string().nullable().optional(),
+    vid: zod_1.z.string().nullable().optional(),
+    sid: zod_1.z.string().nullable().optional(),
 });
