@@ -1,6 +1,7 @@
 // functions/src/index.ts
 import { setGlobalOptions } from "firebase-functions/v2";
 import { onCall, HttpsError, onRequest } from "firebase-functions/v2/https";
+import { defineSecret } from "firebase-functions/params";
 
 import express from "express";
 import cors from "cors";
@@ -8,8 +9,12 @@ import cors from "cors";
 import { getStorage } from "firebase-admin/storage";
 import { adminDb } from "./services/admin";
 
+
 // ★ ここ超重要：君のURLは asia-northeast1 なので揃える
 setGlobalOptions({ region: "asia-northeast1" });
+
+const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
+
 
 /**
  * ==========================
@@ -25,8 +30,14 @@ app.use(express.json({ limit: "1mb" }));
 
 app.get("/", (_req, res) => res.status(200).send("ok"));
 registerV1Routes(app);
+export const api = onRequest(
+{
+  region: "asia-northeast1",
+  secrets: [OPENAI_API_KEY],
+},
+app
+);
 
-export const api = onRequest(app);
 
 /**
  * ==========================

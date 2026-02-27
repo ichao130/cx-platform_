@@ -25,6 +25,21 @@ type ActionType = "modal" | "banner" | "toast";
 type MountPlacement = "append" | "prepend" | "before" | "after";
 type MountMode = "shadow" | "theme" | "inherit";
 
+
+type ScenarioDoc = {
+  workspaceId: string;
+  siteId?: string;
+  name?: string;
+  actionRefs?: Array<{ actionId: string; enabled?: boolean; order?: number }>;
+  experiment?: {
+    enabled?: boolean;
+    variants?: Array<{
+      variantId?: string;
+      actionRefs?: Array<{ actionId: string; enabled?: boolean; order?: number }>;
+    }>;
+  };
+};
+
 type ActionDoc = {
   workspaceId: string;
   action_id?: string;
@@ -74,9 +89,22 @@ type MediaDoc = {
   createdBy?: string;
 };
 
+
 /* =========================
  * Utils
  * ========================= */
+function collectScenarioActionIds(s: ScenarioDoc): string[] {
+  const ids = new Set<string>();
+  (s.actionRefs || []).forEach((r) => r?.actionId && ids.add(String(r.actionId)));
+
+  const variants = s.experiment?.variants || [];
+  variants.forEach((v) => {
+    (v.actionRefs || []).forEach((r) => r?.actionId && ids.add(String(r.actionId)));
+  });
+
+  return Array.from(ids);
+}
+
 function stripUndefined<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj));
 }
@@ -371,6 +399,19 @@ export default function ActionsPage() {
 
   const [imageUrl, setImageUrl] = useState("");
   const [imageMediaId, setImageMediaId] = useState<string>("");
+  const [scenarios, setScenarios] = useState<Array<{ id: string; data: ScenarioDoc }>>([]);
+
+  const actionUsageMap = useMemo(() => {
+    const map: Record<string, Array<{ scenarioId: string; name?: string }>> = {};
+    scenarios.forEach((s) => {
+      const ids = collectScenarioActionIds(s.data);
+      ids.forEach((aid) => {
+        if (!map[aid]) map[aid] = [];
+        map[aid].push({ scenarioId: s.id, name: s.data.name });
+      });
+    });
+    return map;
+  }, [scenarios]);
 
   // multi media
   const [mediaIds, setMediaIds] = useState<string[]>([]);
@@ -380,6 +421,22 @@ export default function ActionsPage() {
 
   const [pickerOpen, setPickerOpen] = useState(false);
 
+
+  useEffect(() => {
+    if (!workspaceId) return;
+
+    const q = query(
+      collection(db, "scenarios"),
+      where("workspaceId", "==", workspaceId),
+      orderBy("__name__")
+    );
+
+    return onSnapshot(q, (snap) => {
+      setScenarios(snap.docs.map((d) => ({ id: d.id, data: d.data() as any })));
+    });
+  }, [workspaceId]);  
+
+  
   useEffect(() => {
     const q = query(collection(db, "workspaces"), orderBy("__name__"));
     return onSnapshot(q, (snap) => setWorkspaces(snap.docs.map((d) => ({ id: d.id }))));
@@ -402,9 +459,14 @@ export default function ActionsPage() {
   }, [workspaces, workspaceId]);
 
   // build media cache for thumbnails (fetch only missing ids)
+
   useEffect(() => {
     const needed = uniq(
-      rows.flatMap((r) => (Array.isArray(r.data.mediaIds) ? r.data.mediaIds : []))
+      rows.flatMap((r) => {
+        const ids = Array.isArray(r.data.mediaIds) ? r.data.mediaIds : [];
+        const primary = r.data.creative?.image_media_id ? [String(r.data.creative.image_media_id)] : [];
+        return [...primary, ...ids];
+      })
     ).filter((mid) => !mediaById[mid]);
 
     if (!needed.length) return;
@@ -430,7 +492,11 @@ export default function ActionsPage() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows]);
+  }, [rows, mediaById]);
+
+
+
+
 
   // usage check (ActionsPage側で見える化)
   const usageMap = useMemo(() => {
@@ -886,6 +952,7 @@ export default function ActionsPage() {
             {rows.map((r) => {
               const ids = Array.isArray(r.data.mediaIds) ? r.data.mediaIds : [];
               const thumbIds = ids.slice(0, 4);
+              const primary = r.data.creative?.image_media_id ? [String(r.data.creative.image_media_id)] : [];
               return (
                 <tr key={r.id}>
                   <td><code>{r.id}</code></td>
@@ -975,9 +1042,27 @@ export default function ActionsPage() {
 
                     <span style={{ width: 8, display: "inline-block" }} />
 
-                    <button className="btn btn--danger" onClick={() => deleteDoc(doc(db, "actions", r.id))}>
-                      削除
-                    </button>
+                      <button
+                        className="btn btn--danger"
+                        onClick={async () => {
+                          const used = actionUsageMap[r.id] || [];
+                          if (used.length) {
+                            const lines = used
+                              .slice(0, 30)
+                              .map((x) => `- ${x.scenarioId}${x.name ? `（${x.name}）` : ""}`)
+                              .join("\n");
+                            alert(`このActionはScenarioで使用中なので削除できません。\n\n${lines}${used.length > 30 ? "\n...(more)" : ""}`);
+                            return;
+                          }
+                          const ok = confirm(`Actionを削除します。\n\n${r.id}\n\n本当に削除する？`);
+                          if (!ok) return;
+                          await deleteDoc(doc(db, "actions", r.id));
+                        }}
+                      >
+                        削除
+                      </button>
+
+
                   </td>
                 </tr>
               );

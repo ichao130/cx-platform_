@@ -27,31 +27,21 @@ export async function pickWorkspaceById(workspaceId: string) {
   return snap.exists ? ({ id: snap.id, ...(snap.data() as any) }) : null;
 }
 
-export function assertAllowedOrigin(params: { allowed: string[]; origin?: string; url?: string }) {
-  const allowed = (params.allowed || []).map(normalizeOrigin).filter(Boolean);
-  const origin = params.origin ? normalizeOrigin(params.origin) : "";
+export function assertAllowedOrigin({ allowed, origin, url }: { allowed: string[]; origin: string; url?: string }) {
+  const allowedHosts = allowed
+    .map((s) => {
+      try { return new URL(s).host; } catch { return String(s).replace(/^https?:\/\//, "").split("/")[0]; }
+    })
+    .filter(Boolean);
 
-  let urlOrigin = "";
-  if (params.url) {
-    try {
-      urlOrigin = normalizeOrigin(params.url);
-    } catch {
-      urlOrigin = "";
-    }
-  }
+  const originHost = origin ? new URL(origin).host : "";
+  const urlHost = url ? (() => { try { return new URL(url).host; } catch { return ""; } })() : "";
 
-  // If we have an Origin header, prefer that; otherwise fall back to url.
-  const check = origin || urlOrigin;
+  // ★url が無いときは origin だけで判定
+  if (originHost && allowedHosts.includes(originHost)) return;
 
-  if (!check) {
-    // No origin info: allow (some server-to-server calls). You can tighten later.
-    return;
-  }
+  // ★url があるときは urlHost でもOK
+  if (urlHost && allowedHosts.includes(urlHost)) return;
 
-  const ok = allowed.some((a) => a === check);
-  if (!ok) {
-    const originHost = origin ? new URL(origin).host : "";
-    const urlHost = urlOrigin ? new URL(urlOrigin).host : "";
-    throw new Error(`origin not allowed (originHost=${originHost} urlHost=${urlHost})`);
-  }
+  throw new Error(`origin not allowed (originHost=${originHost} urlHost=${urlHost})`);
 }

@@ -3,6 +3,12 @@ import { collection, onSnapshot, orderBy, query, where } from "firebase/firestor
 import { db } from "../firebase";
 import { LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from "recharts";
 
+
+const API_BASE =
+  import.meta.env.VITE_API_BASE ||
+  "https://asia-northeast1-cx-platform-v1.cloudfunctions.net/api"; 
+// ↑自分のFunctionsのベースURLに合わせて
+
 type StatRow = {
   siteId: string;
   day: string; // YYYY-MM-DD
@@ -13,6 +19,16 @@ type StatRow = {
   count: number;
   updatedAt?: any;
 };
+
+
+
+function badgeColor(grade: string) {
+  if (grade === "good") return "#16a34a";
+  if (grade === "ok") return "#2563eb";
+  if (grade === "bad") return "#dc2626";
+  return "#6b7280";
+}
+
 
 function isoDay(d: Date) {
   const y = d.getFullYear();
@@ -35,6 +51,48 @@ export default function DashboardPage() {
 
   // date range (last 30 days)
   const [days, setDays] = useState<number>(30);
+  const [aiMap, setAiMap] = useState<Record<string, any>>({});
+  const [loadingAi, setLoadingAi] = useState<string | null>(null);
+
+
+
+  async function generateAiInsight(payload: any) {
+    try {
+      setLoadingAi(String(payload.variant_id ?? "na"));
+
+      const base = API_BASE.replace(/\/$/, "");
+      const res = await fetch(`${base}/v1/ai/insight`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Site-Id": payload.site_id,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const text = await res.text();
+      let data: any = null;
+      try { data = JSON.parse(text); } catch { data = { ok: false, raw: text }; }
+
+      if (!res.ok || !data?.ok) {
+        console.error("[ai/insight] failed:", res.status, data);
+        alert(`AI生成失敗: ${res.status}\n${data?.message || data?.error || text}`);
+        return;
+      }
+
+      setAiMap((prev) => ({
+        ...prev,
+        [`${payload.day}__${payload.variant_id ?? "na"}`]: data,
+      }));
+    } catch (e: any) {
+      console.error(e);
+      alert(`AI生成で例外: ${e?.message || String(e)}`);
+    } finally {
+      setLoadingAi(null);
+    }
+  }
+
+
 
   // load sites
   useEffect(() => {
@@ -108,6 +166,38 @@ export default function DashboardPage() {
     return out;
   }, [rows]);
 
+  const latestDay = useMemo(() => {
+    return chartData.length ? chartData[chartData.length - 1].day : "";
+  }, [chartData]);  
+
+
+  const summaryTable = useMemo(() => {
+    const map = new Map<string, { v: string; imp: number; clk: number; ctr: number }>();
+
+    for (const r of rows) {
+      const v = String(r.variantId ?? "na");
+      if (!map.has(v)) map.set(v, { v, imp: 0, clk: 0, ctr: 0 });
+
+      const obj = map.get(v)!;
+      const c = safeNum(r.count);
+
+      if (r.event === "impression") obj.imp += c;
+      if (r.event === "click_link") obj.clk += c;
+    }
+
+    const out = Array.from(map.values());
+    out.forEach((x) => {
+      x.ctr = x.imp > 0 ? Math.round((x.clk / x.imp) * 1000) / 10 : 0;
+    });
+
+    // 表示回数多い順などにしたいならここでsort
+    out.sort((a, b) => b.imp - a.imp);
+
+    return out;
+  }, [rows]);
+
+
+
   const summary = useMemo(() => {
     let imp = 0, clkLink = 0, clk = 0, close = 0;
     for (const r of rows) {
@@ -168,6 +258,8 @@ export default function DashboardPage() {
       <div className="card" style={{ minWidth: 0 }}>
         <div className="h2">Impression / Click_link</div>
         <div style={{ height: 320, minHeight: 320, width: "100%", minWidth: 0 }}>
+          {chartData.length ? (
+
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData}>
               <XAxis dataKey="day" />
@@ -178,6 +270,9 @@ export default function DashboardPage() {
               <Line type="monotone" dataKey="click_link" name="click_link" dot={false} />
             </LineChart>
           </ResponsiveContainer>
+          ) : (
+            <div className="small">データがありません</div>
+          )}
         </div>
       </div>
 
@@ -185,7 +280,8 @@ export default function DashboardPage() {
 
       <div className="card" style={{ minWidth: 0 }}>
         <div className="h2">CTR（click_link / impression）%</div>
-        <div style={{ height: 320, minHeight: 320, width: "100%", minWidth: 0 }}>
+          <div style={{ height: 320, minHeight: 320, width: "100%", minWidth: 0 }}>
+          {chartData.length ? (
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData}>
               <XAxis dataKey="day" />
@@ -195,6 +291,9 @@ export default function DashboardPage() {
               <Line type="monotone" dataKey="ctr" name="CTR%" dot={false} />
             </LineChart>
           </ResponsiveContainer>
+          ) : (
+            <div className="small">データがありません</div>
+          )}
         </div>
       </div>
 
@@ -222,6 +321,79 @@ export default function DashboardPage() {
             </tr>
           </tbody>
         </table>
+
+
+        {summaryTable.map((r) => {
+          const day = latestDay; // 最新日
+          const key = `${day}__${r.v ?? "na"}`;
+          const ai = aiMap[key];
+
+          return (
+            <div key={r.v} className="card" style={{ marginTop: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <b>Variant {r.v}</b>
+
+                {ai?.rule && (
+                  <span
+                    style={{
+                      background: badgeColor(ai.rule.grade),
+                      color: "#fff",
+                      padding: "2px 8px",
+                      borderRadius: 6,
+                      fontSize: 12,
+                    }}
+                  >
+                    {String(ai.rule.grade || "").toUpperCase()}
+                  </span>
+                )}
+              </div>
+
+              <div style={{ marginTop: 8 }}>
+                Impression: {r.imp} / Click: {r.clk} / CTR: {r.ctr}%
+              </div>
+
+              {!ai && (
+                <button
+                  onClick={() =>
+                    generateAiInsight({
+                      site_id: siteId,
+                      day,
+                      scope: "scenario",
+                      scope_id: "all",
+                      variant_id: r.v,
+                      metrics: {
+                        impressions: r.imp,
+                        clicks: r.clk,
+                        closes: 0,
+                        conversions: 0,
+                      },
+                    })
+                  }
+                  disabled={!day || loadingAi === String(r.v ?? "na")} // ★ dayが空なら押せない
+                >
+                  {loadingAi === String(r.v ?? "na") ? "生成中..." : "AI分析を生成"}
+                </button>
+              )}
+
+              {ai?.ai && (
+                <div style={{ marginTop: 12 }}>
+                  <b>🤖 AI分析</b>
+                  <div style={{ marginTop: 6 }}>{ai.ai.summary}</div>
+                  <ul>
+                    {Array.isArray(ai.ai.bullets) &&
+                      ai.ai.bullets.map((b: string, i: number) => <li key={i}>{b}</li>)}
+                  </ul>
+                  <div>
+                    <b>Next:</b> {ai.ai.next}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+
+
 
         {!rows.length && !err ? (
           <div className="small" style={{ marginTop: 10, opacity: 0.8 }}>

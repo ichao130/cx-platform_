@@ -7,12 +7,14 @@ exports.deleteMedia = exports.api = void 0;
 // functions/src/index.ts
 const v2_1 = require("firebase-functions/v2");
 const https_1 = require("firebase-functions/v2/https");
+const params_1 = require("firebase-functions/params");
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const storage_1 = require("firebase-admin/storage");
 const admin_1 = require("./services/admin");
 // ★ ここ超重要：君のURLは asia-northeast1 なので揃える
 (0, v2_1.setGlobalOptions)({ region: "asia-northeast1" });
+const OPENAI_API_KEY = (0, params_1.defineSecret)("OPENAI_API_KEY");
 /**
  * ==========================
  * HTTP API: /api/v1/...
@@ -25,7 +27,10 @@ app.use((0, cors_1.default)({ origin: true }));
 app.use(express_1.default.json({ limit: "1mb" }));
 app.get("/", (_req, res) => res.status(200).send("ok"));
 (0, v1_1.registerV1Routes)(app);
-exports.api = (0, https_1.onRequest)(app);
+exports.api = (0, https_1.onRequest)({
+    region: "asia-northeast1",
+    secrets: [OPENAI_API_KEY],
+}, app);
 /**
  * ==========================
  * Callable: deleteMedia
