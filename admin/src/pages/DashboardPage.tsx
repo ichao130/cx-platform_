@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { collection, onSnapshot, orderBy, query, where } from "firebase/firestore";
 import { db } from "../firebase";
 import { LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from "recharts";
-
+import AdminPreviewWithPins from "../components/AdminPreviewWithPins";
 
 const API_BASE =
   import.meta.env.VITE_API_BASE ||
@@ -92,8 +92,46 @@ export default function DashboardPage() {
     }
   }
 
+  async function generateAiReview(payload: any) {
+    try {
+      setLoadingReview(true);
+
+      const base = API_BASE.replace(/\/$/, "");
+      const res = await fetch(`${base}/v1/ai/review`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Site-Id": payload.site_id,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const text = await res.text();
+      let data: any = null;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { ok: false, raw: text };
+      }
+
+      if (!res.ok || !data?.ok) {
+        console.error("[ai/review] failed:", res.status, data);
+        alert(`AIレビュー失敗: ${res.status}\n${data?.message || data?.error || text}`);
+        return;
+      }
+
+      setReviewData(data);
+    } catch (e: any) {
+      console.error(e);
+      alert(`AIレビューで例外: ${e?.message || String(e)}`);
+    } finally {
+      setLoadingReview(false);
+    }
+  }
 
 
+  const [reviewData, setReviewData] = useState<any | null>(null);
+  const [loadingReview, setLoadingReview] = useState(false);
   // load sites
   useEffect(() => {
     const q = query(collection(db, "sites"), orderBy("__name__"));
@@ -168,7 +206,13 @@ export default function DashboardPage() {
 
   const latestDay = useMemo(() => {
     return chartData.length ? chartData[chartData.length - 1].day : "";
-  }, [chartData]);  
+  }, [chartData]);
+
+  // latest AI insight (fallback: variant "na")
+  const insight = useMemo(() => {
+    if (!latestDay) return null;
+    return aiMap[`${latestDay}__na`] || null;
+  }, [aiMap, latestDay]);
 
 
   const summaryTable = useMemo(() => {
@@ -215,6 +259,7 @@ export default function DashboardPage() {
     <div className="container">
       <div className="card" style={{ minWidth: 0 }}>
         <h1 className="h1">Dashboard</h1>
+
         <div className="small">stats_daily（直近N日 / 全variant合算）</div>
 
         <div style={{ height: 12 }} />
@@ -237,6 +282,51 @@ export default function DashboardPage() {
             max={365}
             onChange={(e) => setDays(Number(e.target.value || 30))}
           />
+        </div>
+
+        <div style={{ height: 12 }} />
+
+        <div
+          className="card"
+          style={{
+            marginTop: 8,
+            border: "1px solid rgba(255,255,255,0.10)",
+            background: "rgba(0,0,0,0.20)",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+            <div className="h2" style={{ margin: 0 }}>AIレビュー（画面プレビュー）</div>
+            <button
+              onClick={() =>
+                generateAiReview({
+                  site_id: siteId,
+                  day: latestDay,
+                  scenario_id: "scn_y3ab6lj2_1772003107750",
+                  variant_id: "na",
+                })
+              }
+              disabled={!latestDay || loadingReview}
+            >
+              {loadingReview ? "生成中..." : "AIレビューを生成"}
+            </button>
+          </div>
+
+          <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
+            ※ まずは固定の scenario_id / variant_id で叩いてOK（後でUI化する）
+          </div>
+
+          <div style={{ height: 12 }} />
+
+          {reviewData?.packs?.length ? (
+            <AdminPreviewWithPins
+              packs={reviewData.packs}
+              initialVariantId={reviewData.packs?.[0]?.variantId || "na"}
+            />
+          ) : (
+            <div className="small" style={{ opacity: 0.8 }}>
+              まだAIレビュー結果がありません（右上のボタンで生成）
+            </div>
+          )}
         </div>
 
         <div style={{ height: 8 }} />

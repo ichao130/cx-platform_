@@ -2,6 +2,7 @@
 import type { Express } from "express";
 import { z } from "zod";
 import { adminDb } from "../services/admin";
+import { FieldValue } from "firebase-admin/firestore";
 import { pickSiteById, pickWorkspaceById, assertAllowedOrigin } from "../services/site";
 import { generateCopy3 } from "../services/openaiCopy";
 import { pickVariant } from "../services/experiment";
@@ -10,6 +11,12 @@ import { defineString, defineSecret } from "firebase-functions/params";
 /* =========================================
    Schemas
 ========================================= */
+const AiReviewReqSchema = z.object({
+  site_id: z.string().min(1),
+  day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  scenario_id: z.string().min(1),
+  variant_id: z.string().optional().default("na"),
+});
 
 const CopyReqSchema = z.object({
   site_id: z.string().min(1),
@@ -70,6 +77,14 @@ const AiInsightReqSchema = z.object({
     .optional(),
 });
 
+const StatsSummaryReqSchema = z.object({
+  site_id: z.string().min(1),
+  day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), // "2026-02-27"
+  scope: z.enum(["site", "scenario", "action"]),
+  scope_id: z.string().min(1), // site の場合は "all"
+  variant_id: z.string().nullable().optional(), // null or "A"/"B"/"na"
+});
+
 /* =========================================
    Admin allowlist helpers (for dashboard)
 ========================================= */
@@ -105,6 +120,21 @@ function assertAllowedAdminOrigin(origin: string) {
    Small utils
 ========================================= */
 
+function yyyyMmDdJST(d: Date): string {
+  // stats_daily の day はJST基準で切る
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+
+  const y = parts.find((p) => p.type === "year")?.value || "1970";
+  const m = parts.find((p) => p.type === "month")?.value || "01";
+  const dd = parts.find((p) => p.type === "day")?.value || "01";
+  return `${y}-${m}-${dd}`;
+}
+
 
 function ruleMark(metrics: { impressions: number; clicks: number; conversions?: number }) {
   const imp = metrics.impressions || 0;
@@ -122,6 +152,35 @@ function ruleMark(metrics: { impressions: number; clicks: number; conversions?: 
     return { grade: "ok" as const, ctr, reasons: ["CTRは平均帯（1〜3%）", "改善余地あり"] };
   }
   return { grade: "good" as const, ctr, reasons: ["CTRが高い（>3%）", "勝ちパターンの可能性"] };
+}
+
+function buildMetricsFromCounts(counts: {
+  impressions: number;
+  clicks: number;
+  click_links: number;
+  closes: number;
+  conversions: number;
+}) {
+  const impressions = counts.impressions || 0;
+  const clicks = counts.clicks || 0;
+  const click_links = counts.click_links || 0;
+  const closes = counts.closes || 0;
+  const conversions = counts.conversions || 0;
+
+  const ctr = impressions > 0 ? clicks / impressions : 0;
+  const link_ctr = impressions > 0 ? click_links / impressions : 0;
+  const cvr = impressions > 0 ? conversions / impressions : 0;
+
+  return {
+    impressions,
+    clicks,
+    click_links,
+    closes,
+    conversions,
+    ctr,
+    link_ctr,
+    cvr,
+  };
 }
 
 /* =========================================
@@ -180,12 +239,75 @@ export function registerV1Routes(app: Express) {
       // CORS + allow
       await corsBySiteDomains(req, res, site_id);
 
+      // Disable caching for SDK config (avoid 304 Not Modified)
+      res.setHeader(
+        "Cache-Control",
+        "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, s-maxage=0"
+      );
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
+      res.setHeader("Surrogate-Control", "no-store");
+      res.setHeader("ETag", "");
+
       const site = await pickSiteById(site_id);
       if (!site) return res.status(404).json({ error: "site not found" });
 
-      // ここはプロジェクト既存の「配信データ組み立て」に合わせて調整
-      // とりあえず最低限 site を返す（既存があるなら差し替え）
-      return res.json({ ok: true, site });
+      const db = adminDb();
+
+      // 1. active scenarios for this site
+      const scenarioSnap = await db
+        .collection("scenarios")
+        .where("siteId", "==", site_id)
+        .where("status", "==", "active")
+        .get();
+
+      const scenarios: any[] = [];
+
+      for (const doc of scenarioSnap.docs) {
+        const s = doc.data() as any;
+
+        // 2. expand actionRefs -> actions
+        const actionRefs = Array.isArray(s.actionRefs) ? s.actionRefs : [];
+        const actions: any[] = [];
+
+        for (const ref of actionRefs) {
+          if (!ref?.enabled) continue;
+
+          const aSnap = await db.collection("actions").doc(ref.actionId).get();
+          if (!aSnap.exists) continue;
+
+          const a = aSnap.data() as any;
+
+          actions.push({
+            action_id: a.id || ref.actionId,
+            type: a.type,
+            creative: a.creative || {},
+            template: a.template || null,
+            mount: a.mount || null,
+          });
+        }
+
+        if (!actions.length) continue;
+
+        scenarios.push({
+          scenario_id: doc.id,
+          status: s.status,
+          priority: s.priority ?? 0,
+          entry_rules: s.entry_rules || {},
+          actions,
+          experiment: s.experiment || null,
+        });
+      }
+
+      return res.json({
+        ok: true,
+        site: {
+          id: site.id,
+          publicKey: site.publicKey,
+          workspaceId: site.workspaceId,
+        },
+        scenarios,
+      });
     } catch (e: any) {
       console.error("[/v1/serve] error:", e);
       return res.status(400).json({ error: "serve_failed", message: e?.message || String(e) });
@@ -214,25 +336,175 @@ export function registerV1Routes(app: Express) {
   app.post("/v1/log", async (req, res) => {
     try {
       const body = LogReqSchema.parse(req.body);
+      console.log("[/v1/log] event", {
+        site_id: body.site_id,
+        scenario_id: body.scenario_id ?? null,
+        action_id: body.action_id ?? null,
+        variant_id: body.variant_id ?? null,
+        event: body.event,
+        path: body.path ?? null,
+      });
 
-      // CORS + allow
+      // CORS + allow (public embed side)
       await corsBySiteDomains(req, res, body.site_id);
 
       const db = adminDb();
-      const now = new Date().toISOString();
+      const nowIso = new Date().toISOString();
+      const day = yyyyMmDdJST(new Date());
 
-      // 例：logs に保存（既存構造があるなら合わせる）
-      const payload = {
-        ...body,
-        createdAt: now,
-        updatedAt: now,
+      // Normalize ids (variantId は必ず入れる / nullはna)
+      const siteId = String(body.site_id);
+      const scenarioId = String(body.scenario_id ?? "all");
+      const actionId = String(body.action_id ?? "all");
+      const templateId = body.template_id ?? null;
+      const variantId = String(body.variant_id ?? "na") || "na";
+      const event = body.event;
+
+      // ---- raw logs (詳細分析・検証用) ----
+      const logPayload = {
+        site_id: siteId,
+        scenario_id: body.scenario_id ?? null,
+        action_id: body.action_id ?? null,
+        template_id: templateId,
+        variant_id: body.variant_id ?? null,
+        event,
+        url: body.url ?? null,
+        path: body.path ?? null,
+        ref: body.ref ?? null,
+        vid: body.vid ?? null,
+        sid: body.sid ?? null,
+        createdAt: nowIso,
+        updatedAt: nowIso,
       };
+      await db.collection("logs").add(logPayload);
 
-      await db.collection("logs").add(payload);
+      // ---- stats_daily (集計) ----
+      // 重要: docId に variantId を含めないと A/B が上書きされる
+      const statsDocId = `${siteId}__${day}__${scenarioId}__${actionId}__${variantId}__${event}`;
+      const statsRef = db.collection("stats_daily").doc(statsDocId);
+
+      await statsRef.set(
+        {
+          siteId,
+          day,
+          scenarioId: body.scenario_id ?? null,
+          actionId: body.action_id ?? null,
+          templateId,
+          variantId, // always a string like "A"/"B"/"na"
+          event,
+          count: FieldValue.increment(1),
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
       return res.json({ ok: true });
     } catch (e: any) {
       console.error("[/v1/log] error:", e);
       return res.status(400).json({ error: "log_failed", message: e?.message || String(e) });
+    }
+  });
+  /* -----------------------------
+     /v1/stats/summary  ★管理画面専用（ADMIN_ORIGINS）
+     - stats_daily を集計してダッシュボード用の数字を返す
+  ------------------------------ */
+  app.post("/v1/stats/summary", async (req, res) => {
+    try {
+      const body = StatsSummaryReqSchema.parse(req.body);
+
+      // admin CORS + allowlist
+      corsByAdminOrigins(req, res);
+      // ---- debug logs (temporary) ----
+      const origin = req.header("Origin") || "";
+      console.log("[/v1/stats/summary] origin", origin);
+      console.log("[/v1/stats/summary] req", {
+        site_id: body.site_id,
+        day: body.day,
+        scope: body.scope,
+        scope_id: body.scope_id,
+        variant_id: body.variant_id ?? null,
+      });
+
+      // site existence check (optional but nice)
+      const site = await pickSiteById(body.site_id);
+      if (!site) return res.status(404).json({ error: "site not found" });
+
+      const db = adminDb();
+
+      // Normalize filters
+      const variantId = String(body.variant_id ?? "na") || "na";
+
+      let q = db
+        .collection("stats_daily")
+        .where("siteId", "==", body.site_id)
+        .where("day", "==", body.day)
+        .where("variantId", "==", variantId);
+
+      if (body.scope === "scenario") {
+        q = q.where("scenarioId", "==", body.scope_id);
+      } else if (body.scope === "action") {
+        q = q.where("actionId", "==", body.scope_id);
+      } else {
+        // site scope: scope_id should be "all" (kept for consistency)
+      }
+
+      const snap = await q.get();
+      console.log("[/v1/stats/summary] matched docs", snap.size);
+      if (snap.size > 0) {
+        const first = snap.docs[0];
+        console.log("[/v1/stats/summary] first doc id", first.id);
+        console.log("[/v1/stats/summary] first doc data", first.data());
+      }
+
+      const counts = {
+        impressions: 0,
+        clicks: 0,
+        click_links: 0,
+        closes: 0,
+        conversions: 0,
+      };
+
+      for (const doc of snap.docs) {
+        const d = doc.data() as any;
+        const ev = String(d.event || "");
+        const c = Number(d.count || 0);
+        if (!c) continue;
+
+        if (ev === "impression") counts.impressions += c;
+        else if (ev === "click") counts.clicks += c;
+        else if (ev === "click_link") counts.click_links += c;
+        else if (ev === "close") counts.closes += c;
+        else if (ev === "conversion") counts.conversions += c;
+      }
+
+      const metrics = buildMetricsFromCounts(counts);
+      const rule = ruleMark({ impressions: metrics.impressions, clicks: metrics.clicks, conversions: metrics.conversions });
+
+      return res.json({
+        ok: true,
+        site_id: body.site_id,
+        day: body.day,
+        scope: body.scope,
+        scope_id: body.scope_id,
+        variant_id: variantId,
+        counts,
+        metrics,
+        rule,
+      });
+    } catch (e: any) {
+      console.error("[/v1/stats/summary] error:", e);
+      return res.status(400).json({ error: "stats_summary_failed", message: e?.message || String(e) });
+    }
+  });
+
+  app.options("/v1/stats/summary", (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,X-Site-Id,X-Site-Key");
+      res.status(204).send("");
+    } catch (e: any) {
+      return res.status(403).send(e?.message || "forbidden");
     }
   });
 
@@ -242,7 +514,7 @@ export function registerV1Routes(app: Express) {
       if (site_id) await corsBySiteDomains(req, res, site_id);
 
       res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "Content-Type,X-Site-Id,X-Site-Key");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,X-Site-Id,X-Site-Key,Authorization");
       res.status(204).send("");
     } catch (e: any) {
       return res.status(403).send(e?.message || "forbidden");
@@ -403,6 +675,300 @@ export function registerV1Routes(app: Express) {
   });
 
   /* -----------------------------
+     /v1/ai/review  ★管理画面専用（ADMIN_ORIGINS）
+     - シナリオの actions + stats_daily を元に、AIが改善ポイント(最大3)を返す
+  ------------------------------ */
+
+  const AiReviewHighlightSchema = z.object({
+    action_id: z.string().min(1),
+    label: z.string().min(1),
+    reason: z.string().min(1),
+    severity: z.enum(["info", "warn", "bad"]),
+  });
+
+  app.post("/v1/ai/review", async (req, res) => {
+    try {
+      const body = AiReviewReqSchema.parse(req.body);
+
+      // 管理画面CORS
+      corsByAdminOrigins(req, res);
+
+      const site = await pickSiteById(body.site_id);
+      if (!site) return res.status(404).json({ error: "site not found" });
+
+      const db = adminDb();
+
+      const siteId = body.site_id;
+      const day = body.day;
+      const scenarioId = body.scenario_id;
+      const variantId = String(body.variant_id ?? "na") || "na";
+
+      // ===============================
+      // 1) キャッシュ
+      // ===============================
+      const cacheId = `${siteId}__${scenarioId}__${variantId}__${day}`;
+      const cacheRef = db.collection("ai_reviews_daily").doc(cacheId);
+      const cacheSnap = await cacheRef.get();
+      if (cacheSnap.exists) {
+        return res.json({ ok: true, cached: true, ...(cacheSnap.data() as any) });
+      }
+
+      // ===============================
+      // 2) scenario + actions
+      // ===============================
+      const sSnap = await db.collection("scenarios").doc(scenarioId).get();
+      if (!sSnap.exists) return res.status(404).json({ error: "scenario not found" });
+      const s = (sSnap.data() || {}) as any;
+
+      // v1/serve と同じ: actionRefs[{actionId, enabled}]
+      const actionRefs = Array.isArray(s.actionRefs) ? s.actionRefs : [];
+      const enabledActionIds: string[] = actionRefs
+        .filter((r: any) => r && r.enabled)
+        .map((r: any) => String(r.actionId || ""))
+        .filter((id: string) => Boolean(id));
+
+      if (!enabledActionIds.length) {
+        return res.status(400).json({ ok: false, error: "no_actions" });
+      }
+
+      const actionSnaps = await Promise.all(
+        enabledActionIds.map((id: string) => db.collection("actions").doc(id).get())
+      );
+      const actions = actionSnaps
+        .filter((snap) => snap.exists)
+        .map((snap) => {
+          const d = (snap.data() || {}) as any;
+          return {
+            action_id: snap.id,
+            type: (d.type || "modal") as "modal" | "banner" | "toast",
+            creative: d.creative || {},
+          };
+        });
+
+      // ===============================
+      // 3) stats_daily（actionごと）
+      // ===============================
+      const statsSnap = await db
+        .collection("stats_daily")
+        .where("siteId", "==", siteId)
+        .where("day", "==", day)
+        .where("scenarioId", "==", scenarioId)
+        .where("variantId", "==", variantId)
+        .get();
+
+      const metricsMap: Record<
+        string,
+        {
+          impressions: number;
+          clicks: number;
+          click_links: number;
+          closes: number;
+          conversions: number;
+          ctr: number;
+          link_ctr: number;
+          close_rate: number;
+        }
+      > = {};
+
+      for (const doc of statsSnap.docs) {
+        const d = doc.data() as any;
+        const actionId = String(d.actionId || "");
+        if (!actionId) continue;
+
+        if (!metricsMap[actionId]) {
+          metricsMap[actionId] = {
+            impressions: 0,
+            clicks: 0,
+            click_links: 0,
+            closes: 0,
+            conversions: 0,
+            ctr: 0,
+            link_ctr: 0,
+            close_rate: 0,
+          };
+        }
+
+        const ev = String(d.event || "");
+        const c = Number(d.count || 0);
+        if (!c) continue;
+
+        if (ev === "impression") metricsMap[actionId].impressions += c;
+        else if (ev === "click") metricsMap[actionId].clicks += c;
+        else if (ev === "click_link") metricsMap[actionId].click_links += c;
+        else if (ev === "close") metricsMap[actionId].closes += c;
+        else if (ev === "conversion") metricsMap[actionId].conversions += c;
+      }
+
+      Object.keys(metricsMap).forEach((id) => {
+        const m = metricsMap[id];
+        const imp = m.impressions || 0;
+        m.ctr = imp > 0 ? Number(((m.clicks / imp) * 100).toFixed(2)) : 0;
+        m.link_ctr = imp > 0 ? Number(((m.click_links / imp) * 100).toFixed(2)) : 0;
+        m.close_rate = imp > 0 ? Number(((m.closes / imp) * 100).toFixed(2)) : 0;
+      });
+
+      // ===============================
+      // 3.5) データ不足ならAIを呼ばずに返す（課金保護）
+      // ===============================
+      const totalImpressionsPre = Object.values(metricsMap).reduce((sum, m) => sum + (m.impressions || 0), 0);
+      const totalClicksPre = Object.values(metricsMap).reduce((sum, m) => sum + (m.clicks || 0), 0);
+      const rule = ruleMark({ impressions: totalImpressionsPre, clicks: totalClicksPre, conversions: 0 });
+
+      if (rule.grade === "need_data") {
+        const pack = {
+          variantId,
+          actions,
+          highlights: [],
+          metrics: {
+            impressions: totalImpressionsPre,
+            clicks: totalClicksPre,
+            ctr: totalImpressionsPre > 0 ? Number(((totalClicksPre / totalImpressionsPre) * 100).toFixed(2)) : 0,
+          },
+        };
+
+        const response = {
+          ok: true,
+          site_id: siteId,
+          scenario_id: scenarioId,
+          day,
+          rule,
+          packs: [pack],
+        };
+
+        await cacheRef.set(
+          {
+            ...response,
+            createdAt: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        return res.json({ ...response, cached: false });
+      }
+
+      // ===============================
+      // 4) AI入力
+      // ===============================
+      const aiInput = actions.map((a) => ({
+        action_id: a.action_id,
+        type: a.type,
+        title: String(a.creative?.title || ""),
+        body: String(a.creative?.body || ""),
+        cta_text: String(a.creative?.cta_text || ""),
+        cta_url: String(a.creative?.cta_url || ""),
+        metrics: metricsMap[a.action_id] || {
+          impressions: 0,
+          clicks: 0,
+          click_links: 0,
+          closes: 0,
+          conversions: 0,
+          ctr: 0,
+          link_ctr: 0,
+          close_rate: 0,
+        },
+      }));
+
+      const prompt = {
+        role: "ux_optimizer",
+        task: "以下の actions から改善優先度が高いものを最大3つ選び、短い見出し(label)と理由(reason)を返してください。必ず action_id は入力のものをそのまま返す。",
+        severity_guide: {
+          bad: "明確な問題（例: CTR/リンクCTRが極端に低い、close_rateが高い、文言が弱い/誤解を招く、CTAが不明瞭）",
+          warn: "改善余地あり（例: 数字は悪くないが伸ばせる、CTA/本文が長い、価値が伝わりにくい）",
+          info: "軽微な改善",
+        },
+        output_rule: "JSON配列のみ。最大3件。",
+        inputs: {
+          site_id: siteId,
+          day,
+          scenario_id: scenarioId,
+          variant_id: variantId,
+          actions: aiInput,
+        },
+      };
+
+      // NOTE: Model sometimes wraps the array in an object (e.g. { highlights: [...] }).
+      // Accept both shapes and normalize to Highlight[].
+      const highlightsRaw = await callOpenAIJson({
+        model: "gpt-4.1-mini",
+        input: {
+          ...prompt,
+          // Stronger instruction for strict JSON output
+          output_rule:
+            "Return ONLY a JSON array (no object wrapper). Example: [{\"action_id\":\"...\",\"label\":\"...\",\"reason\":\"...\",\"severity\":\"warn\"}] . Max 3 items.",
+        },
+        schema: z
+          .union([
+            z.array(AiReviewHighlightSchema).max(3),
+            z.object({ highlights: z.array(AiReviewHighlightSchema).max(3) }),
+            z.object({ items: z.array(AiReviewHighlightSchema).max(3) }),
+            z.object({ result: z.array(AiReviewHighlightSchema).max(3) }),
+          ])
+          .transform((v) => {
+            // normalize to array
+            if (Array.isArray(v)) return v;
+            const anyV: any = v as any;
+            return (anyV.highlights || anyV.items || anyV.result || []) as any;
+          }),
+      });
+
+      const highlights = Array.isArray(highlightsRaw) ? highlightsRaw : [];
+
+      // ===============================
+      // 5) packs
+      // ===============================
+      const totalImpressions = totalImpressionsPre;
+      const totalClicks = totalClicksPre;
+      const totalCtr = totalImpressions > 0 ? Number(((totalClicks / totalImpressions) * 100).toFixed(2)) : 0;
+
+      const pack = {
+        variantId,
+        actions,
+        highlights: Array.isArray(highlights) ? highlights : [],
+        metrics: {
+          impressions: totalImpressions,
+          clicks: totalClicks,
+          ctr: totalCtr,
+        },
+      };
+
+      const response = {
+        ok: true,
+        site_id: siteId,
+        scenario_id: scenarioId,
+        day,
+        rule,
+        packs: [pack],
+      };
+
+      await cacheRef.set(
+        {
+          ...response,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      return res.json({ ...response, cached: false });
+    } catch (e: any) {
+      console.error("[/v1/ai/review] error:", e);
+      return res.status(400).json({ ok: false, error: "ai_review_failed", message: e?.message || String(e) });
+    }
+  });
+
+  app.options("/v1/ai/review", (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,X-Site-Id,X-Site-Key");
+      res.status(204).send("");
+    } catch (e: any) {
+      return res.status(403).send(e?.message || "forbidden");
+    }
+  });
+
+  /* -----------------------------
      /v1/variant
      - ABテストのvariant解決
   ------------------------------ */
@@ -466,4 +1032,8 @@ export function registerV1Routes(app: Express) {
       return res.status(403).send(e?.message || "forbidden");
     }
   });
+
+
+
+
 }

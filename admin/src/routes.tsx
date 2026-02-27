@@ -9,6 +9,8 @@ import SitesPage from "./pages/SitesPage";
 import TemplatesPage from "./pages/TemplatesPage";
 import WorkspacesPage from "./pages/WorkspacesPage";
 import MediaLibraryPage from "./pages/MediaLibraryPage";
+import ScenarioReviewPage from "./pages/ScenarioReviewPage";
+import ScenarioAiPage from "./pages/ScenarioAiPage";
 
 function TopNav() {
   const linkStyle: React.CSSProperties = { marginRight: 12 };
@@ -68,6 +70,8 @@ export default function AppRoutes() {
         <Route path="/actions" element={<ActionsPage />} />
         <Route path="/templates" element={<TemplatesPage />} />
         <Route path="/media" element={<MediaLibraryPage />} />
+        <Route path="/scenarios/:scenarioId/review" element={<ScenarioReviewPage />} />
+        <Route path="/ai" element={<ScenarioAiPage />} />
         <Route
           path="*"
           element={

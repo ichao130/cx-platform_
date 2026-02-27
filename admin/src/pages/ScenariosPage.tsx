@@ -979,6 +979,12 @@ export default function ScenariosPage() {
 
             <div style={{ height: 14 }} />
             <div className="row" style={{ gap: 10 }}>
+              <button
+                className="text-blue-600 underline"
+                onClick={() => navigate(`/scenarios/${scenario.id}/review`)}
+              >
+              AIレビュー
+              </button>
               <button className="btn btn--primary" onClick={createOrUpdate}>保存</button>
               <button className="btn" onClick={resetForm}>新規（リセット）</button>
             </div>

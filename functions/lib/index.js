@@ -23,6 +23,7 @@ const OPENAI_API_KEY = (0, params_1.defineSecret)("OPENAI_API_KEY");
  */
 const v1_1 = require("./routes/v1");
 const app = (0, express_1.default)();
+app.set("etag", false);
 app.use((0, cors_1.default)({ origin: true }));
 app.use(express_1.default.json({ limit: "1mb" }));
 app.get("/", (_req, res) => res.status(200).send("ok"));

@@ -25,6 +25,7 @@ const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
 import { registerV1Routes } from "./routes/v1";
 
 const app = express();
+app.set("etag", false);
 app.use(cors({ origin: true }));
 app.use(express.json({ limit: "1mb" }));
 
