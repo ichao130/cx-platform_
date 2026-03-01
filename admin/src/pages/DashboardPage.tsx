@@ -54,6 +54,13 @@ export default function DashboardPage() {
   const [aiMap, setAiMap] = useState<Record<string, any>>({});
   const [loadingAi, setLoadingAi] = useState<string | null>(null);
 
+  const [abSummary, setAbSummary] = useState<any | null>(null);
+  const [loadingAb, setLoadingAb] = useState(false);
+  const [abErr, setAbErr] = useState<string>("");
+
+  // Phase2: とりあえず固定の scenario_id（後でUI化する）
+  const [abScenarioId, setAbScenarioId] = useState<string>("scn_y3ab6lj2_1772003107750");
+
 
 
   async function generateAiInsight(payload: any) {
@@ -126,6 +133,54 @@ export default function DashboardPage() {
       alert(`AIレビューで例外: ${e?.message || String(e)}`);
     } finally {
       setLoadingReview(false);
+    }
+  }
+
+  async function loadAbSummary() {
+    if (!siteId || !latestDay) return;
+
+    try {
+      setLoadingAb(true);
+      setAbErr("");
+
+      const base = API_BASE.replace(/\/$/, "");
+      const res = await fetch(`${base}/v1/stats/summary`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Site-Id": siteId,
+        },
+        body: JSON.stringify({
+          site_id: siteId,
+          day: latestDay,
+          scope: "scenario",
+          scope_id: abScenarioId,
+          variant_id: null,
+        }),
+      });
+
+      const text = await res.text();
+      let data: any = null;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { ok: false, raw: text };
+      }
+
+      if (!res.ok || !data?.ok) {
+        console.error("[stats/summary] failed:", res.status, data);
+        setAbErr(`A/B集計失敗: ${res.status} ${data?.message || data?.error || text}`);
+        setAbSummary(null);
+        return;
+      }
+
+      setAbSummary(data);
+    } catch (e: any) {
+      console.error(e);
+      setAbErr(`A/B集計で例外: ${e?.message || String(e)}`);
+      setAbSummary(null);
+    } finally {
+      setLoadingAb(false);
     }
   }
 
@@ -208,11 +263,12 @@ export default function DashboardPage() {
     return chartData.length ? chartData[chartData.length - 1].day : "";
   }, [chartData]);
 
-  // latest AI insight (fallback: variant "na")
-  const insight = useMemo(() => {
-    if (!latestDay) return null;
-    return aiMap[`${latestDay}__na`] || null;
-  }, [aiMap, latestDay]);
+
+  useEffect(() => {
+    // latestDay が取れてから自動取得
+    loadAbSummary();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [siteId, latestDay, abScenarioId]);
 
 
   const summaryTable = useMemo(() => {
@@ -301,18 +357,18 @@ export default function DashboardPage() {
                 generateAiReview({
                   site_id: siteId,
                   day: latestDay,
-                  scenario_id: "scn_y3ab6lj2_1772003107750",
+                  scenario_id: abScenarioId,
                   variant_id: "na",
                 })
               }
-              disabled={!latestDay || loadingReview}
+              disabled={!latestDay || !abScenarioId || loadingReview}
             >
               {loadingReview ? "生成中..." : "AIレビューを生成"}
             </button>
           </div>
 
           <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
-            ※ まずは固定の scenario_id / variant_id で叩いてOK（後でUI化する）
+            ※ scenario_id は下の A/B 統計カードと同じ入力を使います（variant は一旦 na）
           </div>
 
           <div style={{ height: 12 }} />
@@ -325,6 +381,156 @@ export default function DashboardPage() {
           ) : (
             <div className="small" style={{ opacity: 0.8 }}>
               まだAIレビュー結果がありません（右上のボタンで生成）
+            </div>
+          )}
+        </div>
+
+        <div
+          className="card"
+          style={{
+            marginTop: 12,
+            border: "1px solid rgba(255,255,255,0.10)",
+            background: "rgba(0,0,0,0.20)",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+            <div className="h2" style={{ margin: 0 }}>A/B 統計（stats/summary）</div>
+            <button onClick={() => loadAbSummary()} disabled={!latestDay || !abScenarioId || loadingAb}>
+              {loadingAb ? "更新中..." : "更新"}
+            </button>
+          </div>
+
+          <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
+            ※ variant_id:null でAPIを叩いて、variants / ab（あれば）をそのまま表示する。
+          </div>
+
+          <div style={{ height: 10 }} />
+
+          <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <div className="small" style={{ opacity: 0.8 }}>scenario_id</div>
+            <input
+              className="input"
+              value={abScenarioId}
+              onChange={(e) => setAbScenarioId(e.target.value)}
+              style={{ minWidth: 320, flex: "1 1 320px" }}
+              placeholder="scn_..."
+            />
+            <div className="small" style={{ opacity: 0.8 }}>day</div>
+            <input className="input" value={latestDay || ""} readOnly style={{ width: 140, opacity: 0.9 }} />
+          </div>
+
+          {abErr ? (
+            <div className="small" style={{ marginTop: 10, color: "#ff6b6b", whiteSpace: "pre-wrap" }}>{abErr}</div>
+          ) : null}
+
+          {abSummary?.ok ? (
+            <div style={{ marginTop: 10 }}>
+              <div className="small" style={{ opacity: 0.85 }}>
+                scope: <b>{abSummary.scope}</b> / scope_id: <b>{abSummary.scope_id}</b> / variant_id: <b>{String(abSummary.variant_id)}</b>
+              </div>
+
+              <div style={{ height: 8 }} />
+
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left" }}>TOTAL</th>
+                    <th style={{ textAlign: "right" }}>impressions</th>
+                    <th style={{ textAlign: "right" }}>click_links</th>
+                    <th style={{ textAlign: "right" }}>CTR%</th>
+                    <th style={{ textAlign: "right" }}>closes</th>
+                    <th style={{ textAlign: "right" }}>conversions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={{ textAlign: "left" }}><b>all</b></td>
+                    <td style={{ textAlign: "right" }}><b>{safeNum(abSummary?.counts?.impressions)}</b></td>
+                    <td style={{ textAlign: "right" }}><b>{safeNum(abSummary?.counts?.click_links)}</b></td>
+                    <td style={{ textAlign: "right" }}><b>{safeNum(abSummary?.metrics?.link_ctr ?? abSummary?.metrics?.ctr)}</b></td>
+                    <td style={{ textAlign: "right" }}><b>{safeNum(abSummary?.counts?.closes)}</b></td>
+                    <td style={{ textAlign: "right" }}><b>{safeNum(abSummary?.counts?.conversions)}</b></td>
+                  </tr>
+                </tbody>
+              </table>
+
+              {Array.isArray(abSummary?.variants) && abSummary.variants.length ? (
+                <>
+                  <div style={{ height: 10 }} />
+                  <div className="h2" style={{ margin: 0, fontSize: 14 }}>Variants</div>
+                  <div style={{ height: 6 }} />
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th style={{ textAlign: "left" }}>variant</th>
+                        <th style={{ textAlign: "right" }}>impressions</th>
+                        <th style={{ textAlign: "right" }}>click_links</th>
+                        <th style={{ textAlign: "right" }}>CTR%</th>
+                        <th style={{ textAlign: "right" }}>closes</th>
+                        <th style={{ textAlign: "right" }}>conversions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {abSummary.variants.map((v: any) => (
+                        <tr key={String(v?.variant_id ?? v?.variantId ?? "na")}>
+                          <td style={{ textAlign: "left" }}><b>{String(v?.variant_id ?? v?.variantId ?? "na")}</b></td>
+                          <td style={{ textAlign: "right" }}>{safeNum(v?.counts?.impressions)}</td>
+                          <td style={{ textAlign: "right" }}>{safeNum(v?.counts?.click_links)}</td>
+                          <td style={{ textAlign: "right" }}>{safeNum(v?.metrics?.link_ctr ?? v?.metrics?.ctr)}</td>
+                          <td style={{ textAlign: "right" }}>{safeNum(v?.counts?.closes)}</td>
+                          <td style={{ textAlign: "right" }}>{safeNum(v?.counts?.conversions)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              ) : (
+                <div className="small" style={{ marginTop: 10, opacity: 0.8 }}>
+                  variants がまだ返ってきてない（バックエンドがTOTALだけ返す版の可能性あり）。
+                </div>
+              )}
+
+              {abSummary?.ab ? (
+                <>
+                  <div style={{ height: 10 }} />
+                  <div className="h2" style={{ margin: 0, fontSize: 14 }}>A/B z検定</div>
+                  <div style={{ height: 6 }} />
+                  <div className="small" style={{ opacity: 0.9, lineHeight: 1.7 }}>
+                    p-value: <b>{String(abSummary.ab.p_value ?? abSummary.ab.pValue ?? "-")}</b> / significant: <b>{String(abSummary.ab.significant)}</b> / winner: <b>{String(abSummary.ab.winner ?? "-")}</b>
+                    <br />
+                    lift_abs: <b>{String(abSummary.ab.lift_abs ?? abSummary.ab.liftAbs ?? "-")}</b> / lift_rel: <b>{String(abSummary.ab.lift_rel ?? abSummary.ab.liftRel ?? "-")}</b>
+                  </div>
+                  {Array.isArray(abSummary.ab.reasons) && abSummary.ab.reasons.length ? (
+                    <ul>
+                      {abSummary.ab.reasons.map((t: string, i: number) => (
+                        <li key={i}>{t}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </>
+              ) : null}
+
+              {abSummary?.rule ? (
+                <>
+                  <div style={{ height: 10 }} />
+                  <div className="h2" style={{ margin: 0, fontSize: 14 }}>Rule</div>
+                  <div style={{ height: 6 }} />
+                  <div className="small" style={{ opacity: 0.9 }}>
+                    grade: <b>{String(abSummary.rule.grade)}</b>
+                    {Array.isArray(abSummary.rule.reasons) && abSummary.rule.reasons.length ? (
+                      <ul>
+                        {abSummary.rule.reasons.map((t: string, i: number) => (
+                          <li key={i}>{t}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                </>
+              ) : null}
+            </div>
+          ) : (
+            <div className="small" style={{ marginTop: 10, opacity: 0.8 }}>
+              まだ集計がありません（day/site/scenario_id を確認して「更新」）。
             </div>
           )}
         </div>
@@ -449,7 +655,7 @@ export default function DashboardPage() {
                       site_id: siteId,
                       day,
                       scope: "scenario",
-                      scope_id: "all",
+                      scope_id: abScenarioId,
                       variant_id: r.v,
                       metrics: {
                         impressions: r.imp,

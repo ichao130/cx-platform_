@@ -81,6 +81,92 @@ const StatsSummaryReqSchema = zod_1.z.object({
     scope_id: zod_1.z.string().min(1), // site の場合は "all"
     variant_id: zod_1.z.string().nullable().optional(), // null or "A"/"B"/"na"
 });
+// Workspace management schemas
+const WorkspaceCreateReqSchema = zod_1.z.object({
+    name: zod_1.z.string().min(1).max(80),
+});
+const WorkspaceListReqSchema = zod_1.z.object({});
+// Workspace members / invites schemas
+const WorkspaceMembersListReqSchema = zod_1.z.object({
+    workspace_id: zod_1.z.string().min(1),
+});
+const WorkspaceMemberUpsertReqSchema = zod_1.z.object({
+    workspace_id: zod_1.z.string().min(1),
+    uid: zod_1.z.string().min(1),
+    role: zod_1.z.string().min(1), // owner/admin/member/viewer
+});
+const WorkspaceMemberRemoveReqSchema = zod_1.z.object({
+    workspace_id: zod_1.z.string().min(1),
+    uid: zod_1.z.string().min(1),
+});
+const WorkspaceInviteCreateReqSchema = zod_1.z.object({
+    workspace_id: zod_1.z.string().min(1),
+    email: zod_1.z.string().email(),
+    role: zod_1.z.string().min(1).default("member"),
+});
+const WorkspaceInviteListReqSchema = zod_1.z.object({
+    workspace_id: zod_1.z.string().min(1),
+});
+const WorkspaceInviteRevokeReqSchema = zod_1.z.object({
+    invite_id: zod_1.z.string().min(1),
+});
+const WorkspaceInviteAcceptReqSchema = zod_1.z.object({
+    token: zod_1.z.string().min(8),
+    email: zod_1.z.string().email().optional(), // optional check
+});
+// Site management schemas
+const SiteCreateReqSchema = zod_1.z.object({
+    workspace_id: zod_1.z.string().min(1),
+    name: zod_1.z.string().min(1).max(80),
+    domains: zod_1.z.array(zod_1.z.string().min(1)).optional().default([]),
+});
+const SiteListReqSchema = zod_1.z.object({
+    workspace_id: zod_1.z.string().min(1),
+});
+const WorkspaceDomainsUpdateReqSchema = zod_1.z.object({
+    workspace_id: zod_1.z.string().min(1),
+    domains: zod_1.z.array(zod_1.z.string().min(1)).optional().default([]),
+});
+const SiteDomainsUpdateReqSchema = zod_1.z.object({
+    site_id: zod_1.z.string().min(1),
+    domains: zod_1.z.array(zod_1.z.string().min(1)).optional().default([]),
+});
+const SiteDeleteReqSchema = zod_1.z.object({
+    site_id: zod_1.z.string().min(1),
+});
+const ROLE_RANK = {
+    owner: 4,
+    admin: 3,
+    member: 2,
+    viewer: 1,
+};
+function rankOfRole(role) {
+    const r = String(role || "").toLowerCase();
+    return ROLE_RANK[r] ?? 0;
+}
+function isOwnerOrAdmin(role) {
+    return rankOfRole(role) >= ROLE_RANK.admin;
+}
+function isOwner(role) {
+    return String(role || "").toLowerCase() === "owner";
+}
+function isRoleValidForMember(role) {
+    const r = String(role || "").toLowerCase();
+    return r === "admin" || r === "member" || r === "viewer"; // owner is excluded from upsert via API
+}
+function nowTs() {
+    return firestore_1.Timestamp.fromDate(new Date());
+}
+function addDaysTs(days) {
+    const ms = Math.max(0, days) * 24 * 60 * 60 * 1000;
+    return firestore_1.Timestamp.fromDate(new Date(Date.now() + ms));
+}
+async function requireWorkspaceRoleBySiteId(req, siteId, allowedRoles = ["owner", "admin"]) {
+    const uid = await (0, admin_1.requireAuthUid)(req);
+    const workspaceId = await (0, site_1.requireWorkspaceIdFromSite)(siteId);
+    await (0, site_1.assertWorkspaceRole)({ workspaceId, uid, allowedRoles });
+    return { uid, workspaceId };
+}
 /* =========================================
    Admin allowlist helpers (for dashboard)
 ========================================= */
@@ -95,13 +181,27 @@ function parseOriginsEnv(s) {
         .map((x) => x.trim())
         .filter(Boolean);
 }
-function hostOf(u) {
-    return new URL(u).host;
+function normalizeHost(input) {
+    const s = String(input || "").trim();
+    if (!s)
+        return "";
+    // If it's already a host (no scheme), accept as-is.
+    // e.g. "cx-platform-v1.web.app" or "localhost:5174"
+    if (!/^https?:\/\//i.test(s)) {
+        return s.replace(/\/$/, "");
+    }
+    // Otherwise parse as URL.
+    try {
+        return new URL(s).host;
+    }
+    catch {
+        return "";
+    }
 }
 function assertAllowedAdminOrigin(origin) {
     const allowed = parseOriginsEnv(ADMIN_ORIGINS.value());
-    const allowedHosts = allowed.map(hostOf);
-    const originHost = origin ? hostOf(origin) : "";
+    const allowedHosts = allowed.map(normalizeHost).filter(Boolean);
+    const originHost = normalizeHost(origin);
     if (originHost && allowedHosts.includes(originHost))
         return;
     throw new Error(`admin origin not allowed (originHost=${originHost})`);
@@ -109,6 +209,17 @@ function assertAllowedAdminOrigin(origin) {
 /* =========================================
    Small utils
 ========================================= */
+function genId(prefix) {
+    const rand = Math.random().toString(36).slice(2, 10);
+    const ts = Date.now().toString(36);
+    return `${prefix}_${ts}${rand}`;
+}
+function genToken(bytes = 24) {
+    // url-safe-ish token
+    const buf = Array.from({ length: bytes }, () => Math.floor(Math.random() * 256));
+    const b64 = Buffer.from(buf).toString("base64");
+    return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
 function yyyyMmDdJST(d) {
     // stats_daily の day はJST基準で切る
     const parts = new Intl.DateTimeFormat("en-CA", {
@@ -121,6 +232,50 @@ function yyyyMmDdJST(d) {
     const m = parts.find((p) => p.type === "month")?.value || "01";
     const dd = parts.find((p) => p.type === "day")?.value || "01";
     return `${y}-${m}-${dd}`;
+}
+// ---- stats helpers (z-test for A/B) ----
+function erfApprox(x) {
+    // Abramowitz and Stegun 7.1.26
+    const sign = x < 0 ? -1 : 1;
+    const ax = Math.abs(x);
+    const a1 = 0.254829592;
+    const a2 = -0.284496736;
+    const a3 = 1.421413741;
+    const a4 = -1.453152027;
+    const a5 = 1.061405429;
+    const p = 0.3275911;
+    const t = 1.0 / (1.0 + p * ax);
+    const y = 1.0 - (((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t) * Math.exp(-ax * ax);
+    return sign * y;
+}
+function normalCdf(z) {
+    // Φ(z) = 0.5 * (1 + erf(z / sqrt(2)))
+    return 0.5 * (1 + erfApprox(z / Math.SQRT2));
+}
+function twoPropZTest(aClicks, aImps, bClicks, bImps) {
+    const aN = Math.max(0, aImps | 0);
+    const bN = Math.max(0, bImps | 0);
+    const aX = Math.max(0, aClicks | 0);
+    const bX = Math.max(0, bClicks | 0);
+    if (aN <= 0 || bN <= 0) {
+        return { ok: false, reason: "insufficient_impressions" };
+    }
+    const p1 = aX / aN;
+    const p2 = bX / bN;
+    const pPool = (aX + bX) / (aN + bN);
+    const se = Math.sqrt(pPool * (1 - pPool) * (1 / aN + 1 / bN));
+    if (!isFinite(se) || se === 0) {
+        return { ok: false, reason: "degenerate" };
+    }
+    const z = (p2 - p1) / se;
+    const pTwoTail = 2 * (1 - normalCdf(Math.abs(z)));
+    return {
+        ok: true,
+        z,
+        p_value: pTwoTail,
+        a: { clicks: aX, impressions: aN, ctr: aN > 0 ? aX / aN : 0 },
+        b: { clicks: bX, impressions: bN, ctr: bN > 0 ? bX / bN : 0 },
+    };
 }
 function ruleMark(metrics) {
     const imp = metrics.impressions || 0;
@@ -194,6 +349,672 @@ function registerV1Routes(app) {
         res.setHeader("Access-Control-Allow-Origin", origin);
         res.setHeader("Vary", "Origin");
     }
+    /* -----------------------------
+       /v1/workspaces/create  ★管理画面専用（ADMIN_ORIGINS）
+       - workspace を作成し、作成者を owner として member 登録
+    ------------------------------ */
+    app.post("/v1/workspaces/create", async (req, res) => {
+        try {
+            // admin CORS + allowlist
+            corsByAdminOrigins(req, res);
+            const uid = await (0, admin_1.requireAuthUid)(req);
+            const body = WorkspaceCreateReqSchema.parse(req.body);
+            const db = (0, admin_1.adminDb)();
+            const workspaceId = genId("ws");
+            const now = firestore_1.FieldValue.serverTimestamp();
+            await db.collection("workspaces").doc(workspaceId).set({
+                id: workspaceId,
+                name: body.name,
+                createdAt: now,
+                updatedAt: now,
+                createdBy: uid,
+                // 最小構成: ドメインは空（あとでUIで追加）
+                domains: [],
+                // members は map で保持（ロール判定を簡単に）
+                members: {
+                    [uid]: "owner",
+                },
+            }, { merge: true });
+            return res.json({ ok: true, workspace_id: workspaceId });
+        }
+        catch (e) {
+            console.error("[/v1/workspaces/create] error:", e);
+            return res
+                .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+                .json({ ok: false, error: "workspace_create_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/workspaces/create", (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+            res.status(204).send("");
+        }
+        catch (e) {
+            return res.status(403).send(e?.message || "forbidden");
+        }
+    });
+    /* -----------------------------
+       /v1/workspaces/list  ★管理画面専用（ADMIN_ORIGINS）
+       - 自分がメンバーの workspaces を返す
+    ------------------------------ */
+    app.post("/v1/workspaces/list", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const uid = await (0, admin_1.requireAuthUid)(req);
+            WorkspaceListReqSchema.parse(req.body || {});
+            const db = (0, admin_1.adminDb)();
+            // members は map: members.<uid> が存在する workspace を探す
+            // Firestore では dynamic field path を where できる
+            const fieldPath = `members.${uid}`;
+            const snap = await db.collection("workspaces").where(fieldPath, "in", ["owner", "admin", "member", "viewer"]).get();
+            const items = snap.docs.map((d) => {
+                const w = (d.data() || {});
+                return {
+                    workspace_id: d.id,
+                    name: w.name || "",
+                    role: w?.members?.[uid] || null,
+                    createdAt: w.createdAt || null,
+                    updatedAt: w.updatedAt || null,
+                };
+            });
+            return res.json({ ok: true, items });
+        }
+        catch (e) {
+            console.error("[/v1/workspaces/list] error:", e);
+            return res
+                .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+                .json({ ok: false, error: "workspace_list_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/workspaces/list", (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+            res.status(204).send("");
+        }
+        catch (e) {
+            return res.status(403).send(e?.message || "forbidden");
+        }
+    });
+    /* -----------------------------
+       /v1/workspaces/updateDomains  ★管理画面専用（ADMIN_ORIGINS）
+       - workspace.domains を更新
+    ------------------------------ */
+    /* -----------------------------
+       /v1/workspaces/members/list  ★管理画面専用（ADMIN_ORIGINS）
+       - workspace の members を返す
+    ------------------------------ */
+    app.post("/v1/workspaces/members/list", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const uid = await (0, admin_1.requireAuthUid)(req);
+            const body = WorkspaceMembersListReqSchema.parse(req.body);
+            // viewer 以上なら閲覧OK
+            await (0, site_1.assertWorkspaceRole)({
+                workspaceId: body.workspace_id,
+                uid,
+                allowedRoles: ["owner", "admin", "member", "viewer"],
+            });
+            const db = (0, admin_1.adminDb)();
+            const wSnap = await db.collection("workspaces").doc(body.workspace_id).get();
+            if (!wSnap.exists)
+                return res.status(404).json({ ok: false, error: "workspace_not_found" });
+            const w = (wSnap.data() || {});
+            const members = (w.members || {});
+            const items = Object.entries(members)
+                .map(([memberUid, role]) => ({ uid: memberUid, role: String(role || "member") }))
+                .sort((a, b) => a.uid.localeCompare(b.uid));
+            return res.json({ ok: true, workspace_id: body.workspace_id, items });
+        }
+        catch (e) {
+            console.error("[/v1/workspaces/members/list] error:", e);
+            return res
+                .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+                .json({ ok: false, error: "workspace_members_list_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/workspaces/members/list", (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+            res.status(204).send("");
+        }
+        catch (e) {
+            return res.status(403).send(e?.message || "forbidden");
+        }
+    });
+    /* -----------------------------
+       /v1/workspaces/members/upsert  ★管理画面専用（ADMIN_ORIGINS）
+       - members に uid/role を追加・更新
+    ------------------------------ */
+    app.post("/v1/workspaces/members/upsert", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const actorUid = await (0, admin_1.requireAuthUid)(req);
+            const body = WorkspaceMemberUpsertReqSchema.parse(req.body);
+            // 変更権限は owner/admin のみ
+            await (0, site_1.assertWorkspaceRole)({ workspaceId: body.workspace_id, uid: actorUid, allowedRoles: ["owner", "admin"] });
+            // owner を member が作る、とかは防ぐ（site.ts側の共通ルール）
+            // ※ canManageMembers は roleRank ベースの簡易判定
+            const db = (0, admin_1.adminDb)();
+            const wRef = db.collection("workspaces").doc(body.workspace_id);
+            const wSnap = await wRef.get();
+            if (!wSnap.exists)
+                return res.status(404).json({ ok: false, error: "workspace_not_found" });
+            const w = (wSnap.data() || {});
+            const actorRole = String(w?.members?.[actorUid] || "");
+            // Disallow assigning owner via this endpoint (avoid privilege escalation).
+            if (!isRoleValidForMember(body.role)) {
+                return res.status(400).json({ ok: false, error: "invalid_role", message: "role must be admin|member|viewer" });
+            }
+            // Actor must be able to manage members and the target role.
+            if (!isOwnerOrAdmin(actorRole) || !(0, site_1.canManageMembers)(actorRole, body.role)) {
+                return res.status(403).json({ ok: false, error: "forbidden", message: "insufficient_role" });
+            }
+            const now = firestore_1.FieldValue.serverTimestamp();
+            await wRef.set({ updatedAt: now }, { merge: true });
+            await wRef.update({ [`members.${body.uid}`]: body.role });
+            return res.json({ ok: true, workspace_id: body.workspace_id, uid: body.uid, role: body.role });
+        }
+        catch (e) {
+            console.error("[/v1/workspaces/members/upsert] error:", e);
+            return res
+                .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+                .json({ ok: false, error: "workspace_member_upsert_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/workspaces/members/upsert", (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+            res.status(204).send("");
+        }
+        catch (e) {
+            return res.status(403).send(e?.message || "forbidden");
+        }
+    });
+    /* -----------------------------
+       /v1/workspaces/members/remove  ★管理画面専用（ADMIN_ORIGINS）
+    ------------------------------ */
+    app.post("/v1/workspaces/members/remove", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const actorUid = await (0, admin_1.requireAuthUid)(req);
+            const body = WorkspaceMemberRemoveReqSchema.parse(req.body);
+            await (0, site_1.assertWorkspaceRole)({ workspaceId: body.workspace_id, uid: actorUid, allowedRoles: ["owner", "admin"] });
+            const db = (0, admin_1.adminDb)();
+            const wRef = db.collection("workspaces").doc(body.workspace_id);
+            const wSnap = await wRef.get();
+            if (!wSnap.exists)
+                return res.status(404).json({ ok: false, error: "workspace_not_found" });
+            const w = (wSnap.data() || {});
+            const actorRole = String(w?.members?.[actorUid] || "");
+            if (!isOwnerOrAdmin(actorRole) || !(0, site_1.canManageMembers)(actorRole, "member")) {
+                return res.status(403).json({ ok: false, error: "forbidden", message: "insufficient_role" });
+            }
+            // owner を消すのは禁止
+            const targetRole = String(w?.members?.[body.uid] || "");
+            if (isOwner(targetRole)) {
+                return res.status(400).json({ ok: false, error: "cannot_remove_owner" });
+            }
+            const now = firestore_1.FieldValue.serverTimestamp();
+            await wRef.update({ updatedAt: now, [`members.${body.uid}`]: firestore_1.FieldValue.delete() });
+            return res.json({ ok: true, workspace_id: body.workspace_id, uid: body.uid });
+        }
+        catch (e) {
+            console.error("[/v1/workspaces/members/remove] error:", e);
+            return res
+                .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+                .json({ ok: false, error: "workspace_member_remove_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/workspaces/members/remove", (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+            res.status(204).send("");
+        }
+        catch (e) {
+            return res.status(403).send(e?.message || "forbidden");
+        }
+    });
+    /* -----------------------------
+       /v1/workspaces/invites/create  ★管理画面専用（ADMIN_ORIGINS）
+    ------------------------------ */
+    app.post("/v1/workspaces/invites/create", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const actorUid = await (0, admin_1.requireAuthUid)(req);
+            const body = WorkspaceInviteCreateReqSchema.parse(req.body);
+            await (0, site_1.assertWorkspaceRole)({ workspaceId: body.workspace_id, uid: actorUid, allowedRoles: ["owner", "admin"] });
+            const db = (0, admin_1.adminDb)();
+            const wRef = db.collection("workspaces").doc(body.workspace_id);
+            const wSnap = await wRef.get();
+            if (!wSnap.exists)
+                return res.status(404).json({ ok: false, error: "workspace_not_found" });
+            const w = (wSnap.data() || {});
+            const actorRole = String(w?.members?.[actorUid] || "");
+            if (!(0, site_1.canManageMembers)(actorRole, body.role)) {
+                return res.status(403).json({ ok: false, error: "forbidden", message: "insufficient_role" });
+            }
+            const inviteId = genId("inv");
+            const token = genToken(24);
+            const now = firestore_1.FieldValue.serverTimestamp();
+            await db.collection("workspace_invites").doc(inviteId).set({
+                id: inviteId,
+                workspaceId: body.workspace_id,
+                email: body.email.toLowerCase(),
+                role: body.role,
+                token,
+                expiresAt: addDaysTs(7),
+                status: "pending",
+                createdBy: actorUid,
+                createdAt: now,
+                updatedAt: now,
+            }, { merge: true });
+            return res.json({ ok: true, invite_id: inviteId, workspace_id: body.workspace_id, email: body.email, role: body.role, token });
+        }
+        catch (e) {
+            console.error("[/v1/workspaces/invites/create] error:", e);
+            return res
+                .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+                .json({ ok: false, error: "workspace_invite_create_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/workspaces/invites/create", (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+            res.status(204).send("");
+        }
+        catch (e) {
+            return res.status(403).send(e?.message || "forbidden");
+        }
+    });
+    /* -----------------------------
+       /v1/workspaces/invites/list  ★管理画面専用（ADMIN_ORIGINS）
+    ------------------------------ */
+    app.post("/v1/workspaces/invites/list", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const uid = await (0, admin_1.requireAuthUid)(req);
+            const body = WorkspaceInviteListReqSchema.parse(req.body);
+            await (0, site_1.assertWorkspaceRole)({ workspaceId: body.workspace_id, uid, allowedRoles: ["owner", "admin"] });
+            const db = (0, admin_1.adminDb)();
+            const snap = await db
+                .collection("workspace_invites")
+                .where("workspaceId", "==", body.workspace_id)
+                .orderBy("createdAt", "desc")
+                .get();
+            const items = snap.docs.map((d) => {
+                const v = (d.data() || {});
+                return {
+                    invite_id: d.id,
+                    email: v.email || "",
+                    role: v.role || "member",
+                    status: v.status || "pending",
+                    createdBy: v.createdBy || null,
+                    createdAt: v.createdAt || null,
+                    acceptedBy: v.acceptedBy || null,
+                    acceptedAt: v.acceptedAt || null,
+                };
+            });
+            return res.json({ ok: true, workspace_id: body.workspace_id, items });
+        }
+        catch (e) {
+            console.error("[/v1/workspaces/invites/list] error:", e);
+            return res
+                .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+                .json({ ok: false, error: "workspace_invite_list_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/workspaces/invites/list", (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+            res.status(204).send("");
+        }
+        catch (e) {
+            return res.status(403).send(e?.message || "forbidden");
+        }
+    });
+    /* -----------------------------
+       /v1/workspaces/invites/revoke  ★管理画面専用（ADMIN_ORIGINS）
+    ------------------------------ */
+    app.post("/v1/workspaces/invites/revoke", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const uid = await (0, admin_1.requireAuthUid)(req);
+            const body = WorkspaceInviteRevokeReqSchema.parse(req.body);
+            const db = (0, admin_1.adminDb)();
+            const ref = db.collection("workspace_invites").doc(body.invite_id);
+            const snap = await ref.get();
+            if (!snap.exists)
+                return res.status(404).json({ ok: false, error: "invite_not_found" });
+            const inv = (snap.data() || {});
+            const workspaceId = String(inv.workspaceId || "");
+            if (!workspaceId)
+                return res.status(400).json({ ok: false, error: "invite_invalid" });
+            if (String(inv.status || "pending") !== "pending") {
+                return res.status(400).json({ ok: false, error: "invite_not_pending" });
+            }
+            await (0, site_1.assertWorkspaceRole)({ workspaceId, uid, allowedRoles: ["owner", "admin"] });
+            const now = firestore_1.FieldValue.serverTimestamp();
+            await ref.set({ status: "revoked", updatedAt: now, revokedBy: uid, revokedAt: now }, { merge: true });
+            return res.json({ ok: true, invite_id: body.invite_id });
+        }
+        catch (e) {
+            console.error("[/v1/workspaces/invites/revoke] error:", e);
+            return res
+                .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+                .json({ ok: false, error: "workspace_invite_revoke_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/workspaces/invites/revoke", (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+            res.status(204).send("");
+        }
+        catch (e) {
+            return res.status(403).send(e?.message || "forbidden");
+        }
+    });
+    /* -----------------------------
+       /v1/workspaces/invites/accept  ★管理画面専用（ADMIN_ORIGINS）
+       - token を使って invite を受諾し、workspace.members に追加
+    ------------------------------ */
+    app.post("/v1/workspaces/invites/accept", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const uid = await (0, admin_1.requireAuthUid)(req);
+            const body = WorkspaceInviteAcceptReqSchema.parse(req.body);
+            const db = (0, admin_1.adminDb)();
+            // token で検索
+            const q = await db.collection("workspace_invites").where("token", "==", body.token).limit(1).get();
+            if (q.empty)
+                return res.status(404).json({ ok: false, error: "invite_not_found" });
+            const doc = q.docs[0];
+            const inv = (doc.data() || {});
+            if (String(inv.status || "pending") !== "pending") {
+                return res.status(400).json({ ok: false, error: "invite_not_pending" });
+            }
+            const inviteEmail = String(inv.email || "").toLowerCase();
+            if (body.email && String(body.email).toLowerCase() !== inviteEmail) {
+                return res.status(400).json({ ok: false, error: "email_mismatch" });
+            }
+            const exp = inv.expiresAt;
+            if (exp) {
+                const expDate = typeof exp.toDate === "function" ? exp.toDate() : new Date(exp);
+                if (isFinite(expDate.getTime()) && expDate.getTime() < Date.now()) {
+                    return res.status(400).json({ ok: false, error: "invite_expired" });
+                }
+            }
+            const workspaceId = String(inv.workspaceId || "");
+            const role = String(inv.role || "member");
+            if (!workspaceId)
+                return res.status(400).json({ ok: false, error: "invite_invalid" });
+            const now = firestore_1.FieldValue.serverTimestamp(); // write timestamps
+            // workspace に member 追加
+            const wRef = db.collection("workspaces").doc(workspaceId);
+            await wRef.set({ updatedAt: now }, { merge: true });
+            await wRef.update({ [`members.${uid}`]: role });
+            // invite を accepted に
+            await doc.ref.set({ status: "accepted", acceptedBy: uid, acceptedAt: now, updatedAt: now }, { merge: true });
+            return res.json({ ok: true, workspace_id: workspaceId, uid, role });
+        }
+        catch (e) {
+            console.error("[/v1/workspaces/invites/accept] error:", e);
+            return res
+                .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+                .json({ ok: false, error: "workspace_invite_accept_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/workspaces/invites/accept", (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+            res.status(204).send("");
+        }
+        catch (e) {
+            return res.status(403).send(e?.message || "forbidden");
+        }
+    });
+    app.post("/v1/workspaces/updateDomains", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const uid = await (0, admin_1.requireAuthUid)(req);
+            const body = WorkspaceDomainsUpdateReqSchema.parse(req.body);
+            await (0, site_1.assertWorkspaceRole)({ workspaceId: body.workspace_id, uid, allowedRoles: ["owner", "admin"] });
+            const db = (0, admin_1.adminDb)();
+            const now = firestore_1.FieldValue.serverTimestamp();
+            await db.collection("workspaces").doc(body.workspace_id).set({
+                domains: body.domains,
+                updatedAt: now,
+            }, { merge: true });
+            return res.json({ ok: true, workspace_id: body.workspace_id, domains: body.domains });
+        }
+        catch (e) {
+            console.error("[/v1/workspaces/updateDomains] error:", e);
+            return res
+                .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+                .json({ ok: false, error: "workspace_update_domains_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/workspaces/updateDomains", (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+            res.status(204).send("");
+        }
+        catch (e) {
+            return res.status(403).send(e?.message || "forbidden");
+        }
+    });
+    /* -----------------------------
+       /v1/sites/create  ★管理画面専用（ADMIN_ORIGINS）
+       - workspace 配下に site を作成
+    ------------------------------ */
+    app.post("/v1/sites/create", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const uid = await (0, admin_1.requireAuthUid)(req);
+            const body = SiteCreateReqSchema.parse(req.body);
+            await (0, site_1.assertWorkspaceRole)({ workspaceId: body.workspace_id, uid, allowedRoles: ["owner", "admin"] });
+            const db = (0, admin_1.adminDb)();
+            const siteId = genId("site");
+            const publicKey = genId("pk");
+            const now = firestore_1.FieldValue.serverTimestamp();
+            await db.collection("sites").doc(siteId).set({
+                id: siteId,
+                workspaceId: body.workspace_id,
+                name: body.name,
+                publicKey,
+                domains: body.domains,
+                createdAt: now,
+                updatedAt: now,
+                createdBy: uid,
+            }, { merge: true });
+            return res.json({ ok: true, site_id: siteId, public_key: publicKey });
+        }
+        catch (e) {
+            console.error("[/v1/sites/create] error:", e);
+            return res
+                .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+                .json({ ok: false, error: "site_create_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/sites/create", (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+            res.status(204).send("");
+        }
+        catch (e) {
+            return res.status(403).send(e?.message || "forbidden");
+        }
+    });
+    /* -----------------------------
+       /v1/sites/list  ★管理画面専用（ADMIN_ORIGINS）
+       - workspace 配下の sites を返す
+    ------------------------------ */
+    app.post("/v1/sites/list", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const uid = await (0, admin_1.requireAuthUid)(req);
+            const body = SiteListReqSchema.parse(req.body);
+            await (0, site_1.assertWorkspaceRole)({ workspaceId: body.workspace_id, uid, allowedRoles: ["owner", "admin", "member", "viewer"] });
+            const db = (0, admin_1.adminDb)();
+            const snap = await db.collection("sites").where("workspaceId", "==", body.workspace_id).get();
+            const items = snap.docs.map((d) => {
+                const s = (d.data() || {});
+                return {
+                    site_id: d.id,
+                    name: s.name || "",
+                    publicKey: s.publicKey || null,
+                    domains: Array.isArray(s.domains) ? s.domains : [],
+                    createdAt: s.createdAt || null,
+                    updatedAt: s.updatedAt || null,
+                };
+            });
+            return res.json({ ok: true, workspace_id: body.workspace_id, items });
+        }
+        catch (e) {
+            console.error("[/v1/sites/list] error:", e);
+            return res
+                .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+                .json({ ok: false, error: "site_list_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/sites/list", (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+            res.status(204).send("");
+        }
+        catch (e) {
+            return res.status(403).send(e?.message || "forbidden");
+        }
+    });
+    /* -----------------------------
+       /v1/sites/updateDomains  ★管理画面専用（ADMIN_ORIGINS）
+       - site.domains を更新（owner/adminのみ）
+    ------------------------------ */
+    app.post("/v1/sites/updateDomains", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const body = SiteDomainsUpdateReqSchema.parse(req.body);
+            // siteId -> workspace role check
+            await requireWorkspaceRoleBySiteId(req, body.site_id, ["owner", "admin"]);
+            const db = (0, admin_1.adminDb)();
+            const now = firestore_1.FieldValue.serverTimestamp();
+            await db.collection("sites").doc(body.site_id).set({
+                domains: body.domains,
+                updatedAt: now,
+            }, { merge: true });
+            return res.json({ ok: true, site_id: body.site_id, domains: body.domains });
+        }
+        catch (e) {
+            console.error("[/v1/sites/updateDomains] error:", e);
+            return res
+                .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+                .json({ ok: false, error: "site_update_domains_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/sites/updateDomains", (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+            res.status(204).send("");
+        }
+        catch (e) {
+            return res.status(403).send(e?.message || "forbidden");
+        }
+    });
+    /* -----------------------------
+       /v1/sites/delete  ★管理画面専用（ADMIN_ORIGINS）
+       - site を論理削除（status=deleted）
+       - ついでに当該 site の active scenarios を inactive に落とす
+    ------------------------------ */
+    app.post("/v1/sites/delete", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const body = SiteDeleteReqSchema.parse(req.body);
+            // siteId -> workspace role check (owner/admin only)
+            const { uid } = await requireWorkspaceRoleBySiteId(req, body.site_id, ["owner", "admin"]);
+            const db = (0, admin_1.adminDb)();
+            // site existence check
+            const siteSnap = await db.collection("sites").doc(body.site_id).get();
+            if (!siteSnap.exists)
+                return res.status(404).json({ ok: false, error: "site_not_found" });
+            const now = firestore_1.FieldValue.serverTimestamp();
+            // 1) logical delete site
+            await db
+                .collection("sites")
+                .doc(body.site_id)
+                .set({
+                status: "deleted",
+                deletedAt: now,
+                deletedBy: uid,
+                updatedAt: now,
+            }, { merge: true });
+            // 2) deactivate active scenarios under this site (best-effort)
+            const scenSnap = await db
+                .collection("scenarios")
+                .where("siteId", "==", body.site_id)
+                .where("status", "==", "active")
+                .get();
+            if (!scenSnap.empty) {
+                // Firestore batch limit is 500 operations
+                const docs = scenSnap.docs;
+                for (let i = 0; i < docs.length; i += 450) {
+                    const chunk = docs.slice(i, i + 450);
+                    const batch = db.batch();
+                    for (const d of chunk) {
+                        batch.set(d.ref, {
+                            status: "inactive",
+                            updatedAt: now,
+                            disabledBy: uid,
+                            disabledReason: "site_deleted",
+                        }, { merge: true });
+                    }
+                    await batch.commit();
+                }
+            }
+            return res.json({ ok: true, site_id: body.site_id, deactivated_scenarios: scenSnap.size });
+        }
+        catch (e) {
+            console.error("[/v1/sites/delete] error:", e);
+            return res
+                .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+                .json({ ok: false, error: "site_delete_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/sites/delete", (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+            res.status(204).send("");
+        }
+        catch (e) {
+            return res.status(403).send(e?.message || "forbidden");
+        }
+    });
     /* -----------------------------
        /v1/serve
        - 埋め込みJSが設定を取りに来る想定
@@ -272,7 +1093,7 @@ function registerV1Routes(app) {
     });
     app.options("/v1/serve", async (req, res) => {
         try {
-            const site_id = String(req.query.site_id || req.body?.site_id || "");
+            const site_id = String(req.query.site_id || req.header("X-Site-Id") || req.body?.site_id || "");
             if (site_id)
                 await corsBySiteDomains(req, res, site_id);
             res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
@@ -360,6 +1181,7 @@ function registerV1Routes(app) {
             const body = StatsSummaryReqSchema.parse(req.body);
             // admin CORS + allowlist
             corsByAdminOrigins(req, res);
+            await requireWorkspaceRoleBySiteId(req, body.site_id, ["owner", "admin", "member"]);
             // ---- debug logs (temporary) ----
             const origin = req.header("Origin") || "";
             console.log("[/v1/stats/summary] origin", origin);
@@ -376,12 +1198,15 @@ function registerV1Routes(app) {
                 return res.status(404).json({ error: "site not found" });
             const db = (0, admin_1.adminDb)();
             // Normalize filters
-            const variantId = String(body.variant_id ?? "na") || "na";
+            const variantFilter = body.variant_id; // null/undefined -> aggregate across all variants
             let q = db
                 .collection("stats_daily")
                 .where("siteId", "==", body.site_id)
-                .where("day", "==", body.day)
-                .where("variantId", "==", variantId);
+                .where("day", "==", body.day);
+            if (variantFilter != null) {
+                const variantId = String(variantFilter || "na") || "na";
+                q = q.where("variantId", "==", variantId);
+            }
             if (body.scope === "scenario") {
                 q = q.where("scenarioId", "==", body.scope_id);
             }
@@ -398,31 +1223,77 @@ function registerV1Routes(app) {
                 console.log("[/v1/stats/summary] first doc id", first.id);
                 console.log("[/v1/stats/summary] first doc data", first.data());
             }
-            const counts = {
-                impressions: 0,
-                clicks: 0,
-                click_links: 0,
-                closes: 0,
-                conversions: 0,
-            };
+            const countsByVariant = {};
+            function ensureVariant(v) {
+                if (!countsByVariant[v]) {
+                    countsByVariant[v] = { impressions: 0, clicks: 0, click_links: 0, closes: 0, conversions: 0 };
+                }
+                return countsByVariant[v];
+            }
             for (const doc of snap.docs) {
                 const d = doc.data();
                 const ev = String(d.event || "");
                 const c = Number(d.count || 0);
                 if (!c)
                     continue;
+                const v = String(d.variantId || "na") || "na";
+                const bucket = ensureVariant(v);
                 if (ev === "impression")
-                    counts.impressions += c;
+                    bucket.impressions += c;
                 else if (ev === "click")
-                    counts.clicks += c;
+                    bucket.clicks += c;
                 else if (ev === "click_link")
-                    counts.click_links += c;
+                    bucket.click_links += c;
                 else if (ev === "close")
-                    counts.closes += c;
+                    bucket.closes += c;
                 else if (ev === "conversion")
-                    counts.conversions += c;
+                    bucket.conversions += c;
             }
-            const metrics = buildMetricsFromCounts(counts);
+            const variants = Object.keys(countsByVariant).sort();
+            const totalCounts = variants.reduce((acc, v) => {
+                const c = countsByVariant[v];
+                acc.impressions += c.impressions;
+                acc.clicks += c.clicks;
+                acc.click_links += c.click_links;
+                acc.closes += c.closes;
+                acc.conversions += c.conversions;
+                return acc;
+            }, { impressions: 0, clicks: 0, click_links: 0, closes: 0, conversions: 0 });
+            const metricsByVariant = {};
+            for (const v of variants) {
+                metricsByVariant[v] = buildMetricsFromCounts(countsByVariant[v]);
+            }
+            // Pick two variants for z-test: top2 by impressions
+            const top2 = variants
+                .map((v) => ({ v, imp: countsByVariant[v].impressions }))
+                .sort((a, b) => b.imp - a.imp)
+                .slice(0, 2);
+            let ztest = null;
+            if (top2.length === 2) {
+                const A = top2[0].v;
+                const B = top2[1].v;
+                const a = countsByVariant[A];
+                const b = countsByVariant[B];
+                const z = twoPropZTest(a.clicks, a.impressions, b.clicks, b.impressions);
+                if (z.ok) {
+                    const winner = z.b.ctr > z.a.ctr ? B : A;
+                    ztest = {
+                        ok: true,
+                        variantA: A,
+                        variantB: B,
+                        z: z.z,
+                        p_value: z.p_value,
+                        significant_95: z.p_value < 0.05,
+                        winner,
+                        ctrA: z.a.ctr,
+                        ctrB: z.b.ctr,
+                    };
+                }
+                else {
+                    ztest = { ok: false, reason: z.reason, variantA: A, variantB: B };
+                }
+            }
+            const metrics = buildMetricsFromCounts(totalCounts);
             const rule = ruleMark({ impressions: metrics.impressions, clicks: metrics.clicks, conversions: metrics.conversions });
             return res.json({
                 ok: true,
@@ -430,22 +1301,32 @@ function registerV1Routes(app) {
                 day: body.day,
                 scope: body.scope,
                 scope_id: body.scope_id,
-                variant_id: variantId,
-                counts,
+                variant_id: body.variant_id ?? null,
+                counts: totalCounts,
                 metrics,
                 rule,
+                variants: variants.map((v) => ({
+                    variant_id: v,
+                    counts: countsByVariant[v],
+                    metrics: metricsByVariant[v],
+                })),
+                ztest,
             });
         }
         catch (e) {
             console.error("[/v1/stats/summary] error:", e);
-            return res.status(400).json({ error: "stats_summary_failed", message: e?.message || String(e) });
+            return res
+                .status(e?.message === "missing_authorization" || e?.message === "invalid_token"
+                ? 401
+                : 400)
+                .json({ error: "stats_summary_failed", message: e?.message || String(e) });
         }
     });
     app.options("/v1/stats/summary", (req, res) => {
         try {
             corsByAdminOrigins(req, res);
             res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-            res.setHeader("Access-Control-Allow-Headers", "Content-Type,X-Site-Id,X-Site-Key");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
             res.status(204).send("");
         }
         catch (e) {
@@ -454,7 +1335,8 @@ function registerV1Routes(app) {
     });
     app.options("/v1/log", async (req, res) => {
         try {
-            const site_id = String(req.body?.site_id || "");
+            // Preflight usually has no body. Try query/header fallbacks.
+            const site_id = String(req.query.site_id || req.header("X-Site-Id") || req.body?.site_id || "");
             if (site_id)
                 await corsBySiteDomains(req, res, site_id);
             res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
@@ -475,6 +1357,7 @@ function registerV1Routes(app) {
             const body = CopyReqSchema.parse(req.body);
             // 管理画面CORS
             corsByAdminOrigins(req, res);
+            await requireWorkspaceRoleBySiteId(req, body.site_id, ["owner", "admin", "member"]);
             // site存在確認だけしたいならここで
             const site = await (0, site_1.pickSiteById)(body.site_id);
             if (!site)
@@ -493,14 +1376,18 @@ function registerV1Routes(app) {
         }
         catch (e) {
             console.error("[/v1/ai/copy] error:", e);
-            return res.status(400).json({ error: "ai_copy_failed", message: e?.message || String(e) });
+            return res
+                .status(e?.message === "missing_authorization" || e?.message === "invalid_token"
+                ? 401
+                : 400)
+                .json({ error: "ai_copy_failed", message: e?.message || String(e) });
         }
     });
     app.options("/v1/ai/copy", (req, res) => {
         try {
             corsByAdminOrigins(req, res);
             res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-            res.setHeader("Access-Control-Allow-Headers", "Content-Type,X-Site-Id,X-Site-Key");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
             res.status(204).send("");
         }
         catch (e) {
@@ -516,6 +1403,7 @@ function registerV1Routes(app) {
             const body = AiInsightReqSchema.parse(req.body);
             // ---- CORS + admin allowlist（ai/insight は管理画面専用） ----
             corsByAdminOrigins(req, res);
+            await requireWorkspaceRoleBySiteId(req, body.site_id, ["owner", "admin", "member"]);
             // ---- site/workspace は「存在確認」だけ（domains判定には使わない） ----
             const site = await (0, site_1.pickSiteById)(body.site_id);
             if (!site)
@@ -590,14 +1478,18 @@ function registerV1Routes(app) {
         }
         catch (e) {
             console.error("[/v1/ai/insight] error:", e);
-            return res.status(400).json({ error: "ai_insight_failed", message: e?.message || String(e) });
+            return res
+                .status(e?.message === "missing_authorization" || e?.message === "invalid_token"
+                ? 401
+                : 400)
+                .json({ error: "ai_insight_failed", message: e?.message || String(e) });
         }
     });
     app.options("/v1/ai/insight", (req, res) => {
         try {
             corsByAdminOrigins(req, res);
             res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-            res.setHeader("Access-Control-Allow-Headers", "Content-Type,X-Site-Id,X-Site-Key");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
             res.status(204).send("");
         }
         catch (e) {
@@ -619,6 +1511,7 @@ function registerV1Routes(app) {
             const body = AiReviewReqSchema.parse(req.body);
             // 管理画面CORS
             corsByAdminOrigins(req, res);
+            await requireWorkspaceRoleBySiteId(req, body.site_id, ["owner", "admin", "member"]);
             const site = await (0, site_1.pickSiteById)(body.site_id);
             if (!site)
                 return res.status(404).json({ error: "site not found" });
@@ -841,14 +1734,18 @@ function registerV1Routes(app) {
         }
         catch (e) {
             console.error("[/v1/ai/review] error:", e);
-            return res.status(400).json({ ok: false, error: "ai_review_failed", message: e?.message || String(e) });
+            return res
+                .status(e?.message === "missing_authorization" || e?.message === "invalid_token"
+                ? 401
+                : 400)
+                .json({ ok: false, error: "ai_review_failed", message: e?.message || String(e) });
         }
     });
     app.options("/v1/ai/review", (req, res) => {
         try {
             corsByAdminOrigins(req, res);
             res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-            res.setHeader("Access-Control-Allow-Headers", "Content-Type,X-Site-Id,X-Site-Key");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
             res.status(204).send("");
         }
         catch (e) {
