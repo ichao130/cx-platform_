@@ -1,0 +1,33 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "stats_daily",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "siteId", "order": "ASCENDING" },
+        { "fieldPath": "day", "order": "ASCENDING" },
+        { "fieldPath": "scenarioId", "order": "ASCENDING" },
+        { "fieldPath": "variantId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "stats_daily",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "siteId", "order": "ASCENDING" },
+        { "fieldPath": "day", "order": "ASCENDING" },
+        { "fieldPath": "actionId", "order": "ASCENDING" },
+        { "fieldPath": "variantId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "workspace_invites",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "workspaceId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

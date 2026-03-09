@@ -3,6 +3,7 @@ import type { Express } from "express";
 import { z } from "zod";
 import { adminDb, requireAuthUid } from "../services/admin";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
+import { getAuth } from "firebase-admin/auth";
 import {
   pickSiteById,
   pickWorkspaceById,
@@ -139,6 +140,7 @@ const WorkspaceInviteAcceptReqSchema = z.object({
 const SiteCreateReqSchema = z.object({
   workspace_id: z.string().min(1),
   name: z.string().min(1).max(80),
+  public_key: z.string().min(8).max(120),
   domains: z.array(z.string().min(1)).optional().default([]),
 });
 
@@ -149,6 +151,23 @@ const SiteListReqSchema = z.object({
 const WorkspaceDomainsUpdateReqSchema = z.object({
   workspace_id: z.string().min(1),
   domains: z.array(z.string().min(1)).optional().default([]),
+});
+
+// Workspace billing/subscription schemas
+const WorkspaceBillingGetReqSchema = z.object({
+  workspace_id: z.string().min(1),
+});
+
+const WorkspaceBillingUpdateReqSchema = z.object({
+  workspace_id: z.string().min(1),
+  plan: z.enum(["free", "starter", "pro", "team", "enterprise"]).optional(),
+  status: z.enum(["inactive", "trialing", "active", "past_due", "canceled"]).optional(),
+  // trial end: days from now (recommended)
+  trial_days: z.number().int().min(0).max(365).optional(),
+  // or explicit ISO timestamps (if provided, takes precedence)
+  trial_ends_at: z.string().datetime().optional(),
+  current_period_ends_at: z.string().datetime().optional(),
+  billing_email: z.string().email().optional(),
 });
 
 const SiteDomainsUpdateReqSchema = z.object({
@@ -168,7 +187,23 @@ const SiteDeleteReqSchema = z.object({
 
 
 
+
 type WorkspaceRole = "owner" | "admin" | "member" | "viewer" | string;
+
+type AccessKey =
+  | "dashboard"
+  | "workspaces"
+  | "sites"
+  | "scenarios"
+  | "actions"
+  | "templates"
+  | "media"
+  | "ai"
+  | "members"
+  | "billing";
+
+type AccessMatrix = Record<string, Partial<Record<AccessKey, boolean>>>;
+
 
 const ROLE_RANK: Record<string, number> = {
   owner: 4,
@@ -176,6 +211,97 @@ const ROLE_RANK: Record<string, number> = {
   member: 2,
   viewer: 1,
 };
+
+const ACCESS_KEYS: AccessKey[] = [
+  "dashboard",
+  "workspaces",
+  "sites",
+  "scenarios",
+  "actions",
+  "templates",
+  "media",
+  "ai",
+  "members",
+  "billing",
+];
+
+function defaultAccessMatrix(): AccessMatrix {
+  return {
+    owner: {
+      dashboard: true,
+      workspaces: true,
+      sites: true,
+      scenarios: true,
+      actions: true,
+      templates: true,
+      media: true,
+      ai: true,
+      members: true,
+      billing: true,
+    },
+    admin: {
+      dashboard: true,
+      workspaces: false,
+      sites: true,
+      scenarios: true,
+      actions: true,
+      templates: true,
+      media: true,
+      ai: true,
+      members: true,
+      billing: false,
+    },
+    member: {
+      dashboard: true,
+      workspaces: false,
+      sites: true,
+      scenarios: true,
+      actions: true,
+      templates: false,
+      media: false,
+      ai: true,
+      members: false,
+      billing: false,
+    },
+    viewer: {
+      dashboard: true,
+      workspaces: false,
+      sites: true,
+      scenarios: true,
+      actions: false,
+      templates: false,
+      media: false,
+      ai: true,
+      members: false,
+      billing: false,
+    },
+  };
+}
+
+function normalizeAccessMatrix(input: any): AccessMatrix {
+  const base = defaultAccessMatrix();
+  for (const role of Object.keys(base)) {
+    for (const key of ACCESS_KEYS) {
+      const next = input?.[role]?.[key];
+      if (typeof next === "boolean") {
+        base[role][key] = next;
+      }
+    }
+  }
+  return base;
+}
+
+function readMemberRole(raw: any): string {
+  if (typeof raw === "string") return raw;
+  if (raw && typeof raw.role === "string") return raw.role;
+  return "";
+}
+
+function hasWorkspaceAccess(role: string | null | undefined, access: AccessMatrix, key: AccessKey): boolean {
+  const r = String(role || "").toLowerCase();
+  if (!r) return false;
+  return !!access?.[r]?.[key];
+}
 
 function rankOfRole(role: string | null | undefined): number {
   const r = String(role || "").toLowerCase();
@@ -204,6 +330,14 @@ function addDaysTs(days: number): Timestamp {
   return Timestamp.fromDate(new Date(Date.now() + ms));
 }
 
+function parseIsoToDate(iso: string | undefined): Date | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (!isFinite(d.getTime())) return null;
+  return d;
+}
+
+
 
 
 async function requireWorkspaceRoleBySiteId(
@@ -216,6 +350,65 @@ async function requireWorkspaceRoleBySiteId(
 
   await assertWorkspaceRole({ workspaceId, uid, allowedRoles });
   return { uid, workspaceId };
+}
+
+async function requireWorkspaceRoleByWorkspaceId(
+  req: any,
+  workspaceId: string,
+  allowedRoles: WorkspaceRole[] = ["owner", "admin"]
+): Promise<{ uid: string; workspaceId: string }> {
+  const uid = await requireAuthUid(req);
+  await assertWorkspaceRole({ workspaceId, uid, allowedRoles });
+  return { uid, workspaceId };
+}
+
+async function requireWorkspaceAccessByWorkspaceId(
+  req: any,
+  workspaceId: string,
+  accessKey: AccessKey,
+  allowedRoles: WorkspaceRole[] = ["owner", "admin", "member", "viewer"]
+): Promise<{ uid: string; workspaceId: string; role: string }> {
+  const uid = await requireAuthUid(req);
+  await assertWorkspaceRole({ workspaceId, uid, allowedRoles });
+
+  const db = adminDb();
+  const wSnap = await db.collection("workspaces").doc(workspaceId).get();
+  if (!wSnap.exists) throw new Error("workspace_not_found");
+
+  const w = (wSnap.data() || {}) as any;
+  const role = readMemberRole(w?.members?.[uid]);
+  const access = normalizeAccessMatrix(w?.defaults?.access);
+
+  if (!hasWorkspaceAccess(role, access, accessKey)) {
+    throw new Error(`workspace_access_denied:${accessKey}`);
+  }
+
+  return { uid, workspaceId, role };
+}
+
+async function requireWorkspaceAccessBySiteId(
+  req: any,
+  siteId: string,
+  accessKey: AccessKey,
+  allowedRoles: WorkspaceRole[] = ["owner", "admin", "member", "viewer"]
+): Promise<{ uid: string; workspaceId: string; role: string }> {
+  const uid = await requireAuthUid(req);
+  const workspaceId = await requireWorkspaceIdFromSite(siteId);
+  await assertWorkspaceRole({ workspaceId, uid, allowedRoles });
+
+  const db = adminDb();
+  const wSnap = await db.collection("workspaces").doc(workspaceId).get();
+  if (!wSnap.exists) throw new Error("workspace_not_found");
+
+  const w = (wSnap.data() || {}) as any;
+  const role = readMemberRole(w?.members?.[uid]);
+  const access = normalizeAccessMatrix(w?.defaults?.access);
+
+  if (!hasWorkspaceAccess(role, access, accessKey)) {
+    throw new Error(`workspace_access_denied:${accessKey}`);
+  }
+
+  return { uid, workspaceId, role };
 }
 
 /* =========================================
@@ -253,14 +446,38 @@ function normalizeHost(input: string): string {
   }
 }
 
+function normalizeOrigin(input: string): string {
+  const s = String(input || "").trim();
+  if (!s) return "";
+  try {
+    // Keep scheme + host (+ port). Drop trailing slash.
+    const u = new URL(s);
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    // If it's not a URL, treat it as host and assume https? is unknown.
+    return s.replace(/\/$/, "");
+  }
+}
+
 function assertAllowedAdminOrigin(origin: string) {
   const allowed = parseOriginsEnv(ADMIN_ORIGINS.value());
+
+  // Allow either exact origin match (scheme+host) OR host match.
+  // This makes env values flexible: you can set `http://localhost:5173` or `localhost:5173`.
   const allowedHosts = allowed.map(normalizeHost).filter(Boolean);
+  const allowedOrigins = allowed.map(normalizeOrigin).filter(Boolean);
+
   const originHost = normalizeHost(origin);
+  const originNorm = normalizeOrigin(origin);
 
-  if (originHost && allowedHosts.includes(originHost)) return;
+  if ((originNorm && allowedOrigins.includes(originNorm)) || (originHost && allowedHosts.includes(originHost))) {
+    return;
+  }
 
-  throw new Error(`admin origin not allowed (originHost=${originHost})`);
+  // Include a tiny hint to debug env mismatch.
+  throw new Error(
+    `admin origin not allowed (originHost=${originHost}, origin=${originNorm})`
+  );
 }
 
 /* =========================================
@@ -472,6 +689,25 @@ export function registerV1Routes(app: Express) {
         { merge: true }
       );
 
+      // bootstrap users/{uid}
+      const authUser = await getAuth().getUser(uid);
+      const userRef = db.collection("users").doc(uid);
+      const userSnap = await userRef.get();
+      const existingUser = (userSnap.data() || {}) as any;
+
+      await userRef.set(
+        {
+          uid,
+          email: String(authUser.email || existingUser.email || "").toLowerCase(),
+          displayName: authUser.displayName || existingUser.displayName || "",
+          photoURL: authUser.photoURL || existingUser.photoURL || "",
+          primaryWorkspaceId: existingUser.primaryWorkspaceId || workspaceId,
+          createdAt: existingUser.createdAt || now,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
+
       return res.json({ ok: true, workspace_id: workspaceId });
     } catch (e: any) {
       console.error("[/v1/workspaces/create] error:", e);
@@ -554,15 +790,9 @@ export function registerV1Routes(app: Express) {
     try {
       corsByAdminOrigins(req, res);
 
-      const uid = await requireAuthUid(req);
       const body = WorkspaceMembersListReqSchema.parse(req.body);
-
       // viewer 以上なら閲覧OK
-      await assertWorkspaceRole({
-        workspaceId: body.workspace_id,
-        uid,
-        allowedRoles: ["owner", "admin", "member", "viewer"],
-      });
+      await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "members", ["owner", "admin", "member", "viewer"]);
 
       const db = adminDb();
       const wSnap = await db.collection("workspaces").doc(body.workspace_id).get();
@@ -579,7 +809,13 @@ export function registerV1Routes(app: Express) {
     } catch (e: any) {
       console.error("[/v1/workspaces/members/list] error:", e);
       return res
-        .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+        .status(
+          e?.message === "missing_authorization" || e?.message === "invalid_token"
+            ? 401
+            : String(e?.message || "").startsWith("workspace_access_denied:")
+            ? 403
+            : 400
+        )
         .json({ ok: false, error: "workspace_members_list_failed", message: e?.message || String(e) });
     }
   });
@@ -603,11 +839,9 @@ export function registerV1Routes(app: Express) {
     try {
       corsByAdminOrigins(req, res);
 
-      const actorUid = await requireAuthUid(req);
       const body = WorkspaceMemberUpsertReqSchema.parse(req.body);
-
       // 変更権限は owner/admin のみ
-      await assertWorkspaceRole({ workspaceId: body.workspace_id, uid: actorUid, allowedRoles: ["owner", "admin"] });
+      const { uid: actorUid } = await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "members", ["owner", "admin"]);
 
       // owner を member が作る、とかは防ぐ（site.ts側の共通ルール）
       // ※ canManageMembers は roleRank ベースの簡易判定
@@ -637,7 +871,13 @@ export function registerV1Routes(app: Express) {
     } catch (e: any) {
       console.error("[/v1/workspaces/members/upsert] error:", e);
       return res
-        .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+        .status(
+          e?.message === "missing_authorization" || e?.message === "invalid_token"
+            ? 401
+            : String(e?.message || "").startsWith("workspace_access_denied:")
+            ? 403
+            : 400
+        )
         .json({ ok: false, error: "workspace_member_upsert_failed", message: e?.message || String(e) });
     }
   });
@@ -660,10 +900,8 @@ export function registerV1Routes(app: Express) {
     try {
       corsByAdminOrigins(req, res);
 
-      const actorUid = await requireAuthUid(req);
       const body = WorkspaceMemberRemoveReqSchema.parse(req.body);
-
-      await assertWorkspaceRole({ workspaceId: body.workspace_id, uid: actorUid, allowedRoles: ["owner", "admin"] });
+      const { uid: actorUid } = await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "members", ["owner", "admin"]);
 
       const db = adminDb();
       const wRef = db.collection("workspaces").doc(body.workspace_id);
@@ -671,25 +909,66 @@ export function registerV1Routes(app: Express) {
       if (!wSnap.exists) return res.status(404).json({ ok: false, error: "workspace_not_found" });
 
       const w = (wSnap.data() || {}) as any;
-      const actorRole = String(w?.members?.[actorUid] || "");
-      if (!isOwnerOrAdmin(actorRole) || !canManageMembers(actorRole, "member")) {
-        return res.status(403).json({ ok: false, error: "forbidden", message: "insufficient_role" });
+      const actorRole = readMemberRole(w?.members?.[actorUid]);
+      const targetRole = readMemberRole(w?.members?.[body.uid]);
+
+      if (!targetRole) {
+        return res.status(404).json({ ok: false, error: "member_not_found" });
       }
 
-      // owner を消すのは禁止
-      const targetRole = String(w?.members?.[body.uid] || "");
+      // 自分自身をここから削除するのは禁止（leave は別APIに分ける）
+      if (body.uid === actorUid) {
+        return res.status(400).json({ ok: false, error: "cannot_remove_self" });
+      }
+
+      // owner は削除禁止
       if (isOwner(targetRole)) {
         return res.status(400).json({ ok: false, error: "cannot_remove_owner" });
+      }
+
+      // actor が targetRole を管理できるか厳密に判定
+      if (!isOwnerOrAdmin(actorRole) || !canManageMembers(actorRole, targetRole)) {
+        return res.status(403).json({ ok: false, error: "forbidden", message: "insufficient_role" });
       }
 
       const now = FieldValue.serverTimestamp();
       await wRef.update({ updatedAt: now, [`members.${body.uid}`]: FieldValue.delete() as any });
 
+      // primaryWorkspaceId が今回の workspace だった場合は、残っている所属先へ付け替える
+      const userRef = db.collection("users").doc(body.uid);
+      const userSnap = await userRef.get();
+      const userData = (userSnap.data() || {}) as any;
+      const currentPrimaryWorkspaceId = String(userData.primaryWorkspaceId || "");
+
+      if (currentPrimaryWorkspaceId === body.workspace_id) {
+        const fieldPath = `members.${body.uid}`;
+        const otherWsSnap = await db
+          .collection("workspaces")
+          .where(fieldPath, "in", ["owner", "admin", "member", "viewer"])
+          .limit(1)
+          .get();
+
+        const nextWorkspaceId = otherWsSnap.empty ? "" : otherWsSnap.docs[0].id;
+        await userRef.set(
+          {
+            primaryWorkspaceId: nextWorkspaceId || "",
+            updatedAt: now,
+          },
+          { merge: true }
+        );
+      }
+
       return res.json({ ok: true, workspace_id: body.workspace_id, uid: body.uid });
     } catch (e: any) {
       console.error("[/v1/workspaces/members/remove] error:", e);
       return res
-        .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+        .status(
+          e?.message === "missing_authorization" || e?.message === "invalid_token"
+            ? 401
+            : String(e?.message || "").startsWith("workspace_access_denied:")
+            ? 403
+            : 400
+        )
         .json({ ok: false, error: "workspace_member_remove_failed", message: e?.message || String(e) });
     }
   });
@@ -705,17 +984,12 @@ export function registerV1Routes(app: Express) {
     }
   });
 
-  /* -----------------------------
-     /v1/workspaces/invites/create  ★管理画面専用（ADMIN_ORIGINS）
-  ------------------------------ */
-  app.post("/v1/workspaces/invites/create", async (req, res) => {
+  async function handleWorkspaceInviteCreate(req: any, res: any) {
     try {
       corsByAdminOrigins(req, res);
 
-      const actorUid = await requireAuthUid(req);
       const body = WorkspaceInviteCreateReqSchema.parse(req.body);
-
-      await assertWorkspaceRole({ workspaceId: body.workspace_id, uid: actorUid, allowedRoles: ["owner", "admin"] });
+      const { uid: actorUid } = await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "members", ["owner", "admin"]);
 
       const db = adminDb();
       const wRef = db.collection("workspaces").doc(body.workspace_id);
@@ -752,12 +1026,34 @@ export function registerV1Routes(app: Express) {
     } catch (e: any) {
       console.error("[/v1/workspaces/invites/create] error:", e);
       return res
-        .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+        .status(
+          e?.message === "missing_authorization" || e?.message === "invalid_token"
+            ? 401
+            : String(e?.message || "").startsWith("workspace_access_denied:")
+            ? 403
+            : 400
+        )
         .json({ ok: false, error: "workspace_invite_create_failed", message: e?.message || String(e) });
     }
-  });
+  }
+
+  /* -----------------------------
+     /v1/workspaces/invites/create  ★管理画面専用（ADMIN_ORIGINS）
+  ------------------------------ */
+  app.post("/v1/workspaces/invites/create", handleWorkspaceInviteCreate);
+  app.post("/v1/workspaces/members/invite", handleWorkspaceInviteCreate);
 
   app.options("/v1/workspaces/invites/create", (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+      res.status(204).send("");
+    } catch (e: any) {
+      return res.status(403).send(e?.message || "forbidden");
+    }
+  });
+  app.options("/v1/workspaces/members/invite", (req, res) => {
     try {
       corsByAdminOrigins(req, res);
       res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
@@ -775,10 +1071,8 @@ export function registerV1Routes(app: Express) {
     try {
       corsByAdminOrigins(req, res);
 
-      const uid = await requireAuthUid(req);
       const body = WorkspaceInviteListReqSchema.parse(req.body);
-
-      await assertWorkspaceRole({ workspaceId: body.workspace_id, uid, allowedRoles: ["owner", "admin"] });
+      await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "members", ["owner", "admin"]);
 
       const db = adminDb();
       const snap = await db
@@ -793,11 +1087,14 @@ export function registerV1Routes(app: Express) {
           invite_id: d.id,
           email: v.email || "",
           role: v.role || "member",
+          token: v.token || "",
           status: v.status || "pending",
           createdBy: v.createdBy || null,
           createdAt: v.createdAt || null,
+          expiresAt: v.expiresAt || null,
           acceptedBy: v.acceptedBy || null,
           acceptedAt: v.acceptedAt || null,
+          revokedAt: v.revokedAt || null,
         };
       });
 
@@ -805,7 +1102,13 @@ export function registerV1Routes(app: Express) {
     } catch (e: any) {
       console.error("[/v1/workspaces/invites/list] error:", e);
       return res
-        .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+        .status(
+          e?.message === "missing_authorization" || e?.message === "invalid_token"
+            ? 401
+            : String(e?.message || "").startsWith("workspace_access_denied:")
+            ? 403
+            : 400
+        )
         .json({ ok: false, error: "workspace_invite_list_failed", message: e?.message || String(e) });
     }
   });
@@ -844,7 +1147,7 @@ export function registerV1Routes(app: Express) {
         return res.status(400).json({ ok: false, error: "invite_not_pending" });
       }
 
-      await assertWorkspaceRole({ workspaceId, uid, allowedRoles: ["owner", "admin"] });
+      await requireWorkspaceAccessByWorkspaceId(req, workspaceId, "members", ["owner", "admin"]);
 
       const now = FieldValue.serverTimestamp();
       await ref.set({ status: "revoked", updatedAt: now, revokedBy: uid, revokedAt: now }, { merge: true });
@@ -853,7 +1156,13 @@ export function registerV1Routes(app: Express) {
     } catch (e: any) {
       console.error("[/v1/workspaces/invites/revoke] error:", e);
       return res
-        .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+        .status(
+          e?.message === "missing_authorization" || e?.message === "invalid_token"
+            ? 401
+            : String(e?.message || "").startsWith("workspace_access_denied:")
+            ? 403
+            : 400
+        )
         .json({ ok: false, error: "workspace_invite_revoke_failed", message: e?.message || String(e) });
     }
   });
@@ -886,8 +1195,8 @@ export function registerV1Routes(app: Express) {
       const q = await db.collection("workspace_invites").where("token", "==", body.token).limit(1).get();
       if (q.empty) return res.status(404).json({ ok: false, error: "invite_not_found" });
 
-      const doc = q.docs[0];
-      const inv = (doc.data() || {}) as any;
+      const inviteDoc = q.docs[0];
+      const inv = (inviteDoc.data() || {}) as any;
 
       if (String(inv.status || "pending") !== "pending") {
         return res.status(400).json({ ok: false, error: "invite_not_pending" });
@@ -896,6 +1205,12 @@ export function registerV1Routes(app: Express) {
       const inviteEmail = String(inv.email || "").toLowerCase();
       if (body.email && String(body.email).toLowerCase() !== inviteEmail) {
         return res.status(400).json({ ok: false, error: "email_mismatch" });
+      }
+
+      const authUser = await getAuth().getUser(uid);
+      const signedInEmail = String(authUser.email || "").toLowerCase();
+      if (!signedInEmail || signedInEmail !== inviteEmail) {
+        return res.status(400).json({ ok: false, error: "email_mismatch", message: "signed_in_email_mismatch" });
       }
 
       const exp: any = inv.expiresAt;
@@ -910,17 +1225,61 @@ export function registerV1Routes(app: Express) {
       const role = String(inv.role || "member");
       if (!workspaceId) return res.status(400).json({ ok: false, error: "invite_invalid" });
 
-      const now = FieldValue.serverTimestamp(); // write timestamps
+      const wRef = db.collection("workspaces").doc(workspaceId);
+      const wSnap = await wRef.get();
+      if (!wSnap.exists) return res.status(404).json({ ok: false, error: "workspace_not_found" });
+
+      const workspace = (wSnap.data() || {}) as any;
+      const workspaceName = String(workspace.name || "");
+      const now = FieldValue.serverTimestamp();
 
       // workspace に member 追加
-      const wRef = db.collection("workspaces").doc(workspaceId);
-      await wRef.set({ updatedAt: now }, { merge: true });
-      await wRef.update({ [`members.${uid}`]: role });
+      await wRef.set(
+        {
+          members: {
+            ...(workspace.members || {}),
+            [uid]: role,
+          },
+          updatedAt: now,
+        },
+        { merge: true }
+      );
+
+      // users/{uid} を補完（招待参加ユーザーの bootstrap）
+      const userRef = db.collection("users").doc(uid);
+      const userSnap = await userRef.get();
+      const existingUser = (userSnap.data() || {}) as any;
+      await userRef.set(
+        {
+          uid,
+          email: signedInEmail,
+          displayName: authUser.displayName || existingUser.displayName || "",
+          photoURL: authUser.photoURL || existingUser.photoURL || "",
+          primaryWorkspaceId: existingUser.primaryWorkspaceId || workspaceId,
+          updatedAt: now,
+          createdAt: existingUser.createdAt || now,
+        },
+        { merge: true }
+      );
 
       // invite を accepted に
-      await doc.ref.set({ status: "accepted", acceptedBy: uid, acceptedAt: now, updatedAt: now }, { merge: true });
+      await inviteDoc.ref.set(
+        {
+          status: "accepted",
+          acceptedBy: uid,
+          acceptedAt: now,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
 
-      return res.json({ ok: true, workspace_id: workspaceId, uid, role });
+      return res.json({
+        ok: true,
+        workspace_id: workspaceId,
+        workspace_name: workspaceName,
+        uid,
+        role,
+      });
     } catch (e: any) {
       console.error("[/v1/workspaces/invites/accept] error:", e);
       return res
@@ -943,10 +1302,8 @@ export function registerV1Routes(app: Express) {
     try {
       corsByAdminOrigins(req, res);
 
-      const uid = await requireAuthUid(req);
       const body = WorkspaceDomainsUpdateReqSchema.parse(req.body);
-
-      await assertWorkspaceRole({ workspaceId: body.workspace_id, uid, allowedRoles: ["owner", "admin"] });
+      await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "workspaces", ["owner", "admin"]);
 
       const db = adminDb();
       const now = FieldValue.serverTimestamp();
@@ -963,7 +1320,13 @@ export function registerV1Routes(app: Express) {
     } catch (e: any) {
       console.error("[/v1/workspaces/updateDomains] error:", e);
       return res
-        .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+        .status(
+          e?.message === "missing_authorization" || e?.message === "invalid_token"
+            ? 401
+            : String(e?.message || "").startsWith("workspace_access_denied:")
+            ? 403
+            : 400
+        )
         .json({ ok: false, error: "workspace_update_domains_failed", message: e?.message || String(e) });
     }
   });
@@ -987,15 +1350,22 @@ export function registerV1Routes(app: Express) {
     try {
       corsByAdminOrigins(req, res);
 
-      const uid = await requireAuthUid(req);
       const body = SiteCreateReqSchema.parse(req.body);
-
-      await assertWorkspaceRole({ workspaceId: body.workspace_id, uid, allowedRoles: ["owner", "admin"] });
+      const { uid } = await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "sites", ["owner", "admin"]);
 
       const db = adminDb();
       const siteId = genId("site");
-      const publicKey = genId("pk");
+      const publicKey = String(body.public_key || "").trim();
       const now = FieldValue.serverTimestamp();
+
+      if (!publicKey) {
+        return res.status(400).json({ ok: false, error: "public_key_required" });
+      }
+
+      const dupSnap = await db.collection("sites").where("publicKey", "==", publicKey).limit(1).get();
+      if (!dupSnap.empty) {
+        return res.status(400).json({ ok: false, error: "public_key_already_exists" });
+      }
 
       await db.collection("sites").doc(siteId).set(
         {
@@ -1015,7 +1385,13 @@ export function registerV1Routes(app: Express) {
     } catch (e: any) {
       console.error("[/v1/sites/create] error:", e);
       return res
-        .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+        .status(
+          e?.message === "missing_authorization" || e?.message === "invalid_token"
+            ? 401
+            : String(e?.message || "").startsWith("workspace_access_denied:")
+            ? 403
+            : 400
+        )
         .json({ ok: false, error: "site_create_failed", message: e?.message || String(e) });
     }
   });
@@ -1039,10 +1415,8 @@ export function registerV1Routes(app: Express) {
     try {
       corsByAdminOrigins(req, res);
 
-      const uid = await requireAuthUid(req);
       const body = SiteListReqSchema.parse(req.body);
-
-      await assertWorkspaceRole({ workspaceId: body.workspace_id, uid, allowedRoles: ["owner", "admin", "member", "viewer"] });
+      await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "sites", ["owner", "admin", "member", "viewer"]);
 
       const db = adminDb();
       const snap = await db.collection("sites").where("workspaceId", "==", body.workspace_id).get();
@@ -1063,7 +1437,13 @@ export function registerV1Routes(app: Express) {
     } catch (e: any) {
       console.error("[/v1/sites/list] error:", e);
       return res
-        .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+        .status(
+          e?.message === "missing_authorization" || e?.message === "invalid_token"
+            ? 401
+            : String(e?.message || "").startsWith("workspace_access_denied:")
+            ? 403
+            : 400
+        )
         .json({ ok: false, error: "site_list_failed", message: e?.message || String(e) });
     }
   });
@@ -1090,7 +1470,7 @@ export function registerV1Routes(app: Express) {
       const body = SiteDomainsUpdateReqSchema.parse(req.body);
 
       // siteId -> workspace role check
-      await requireWorkspaceRoleBySiteId(req, body.site_id, ["owner", "admin"]);
+      await requireWorkspaceAccessBySiteId(req, body.site_id, "sites", ["owner", "admin"]);
 
       const db = adminDb();
       const now = FieldValue.serverTimestamp();
@@ -1107,7 +1487,13 @@ export function registerV1Routes(app: Express) {
     } catch (e: any) {
       console.error("[/v1/sites/updateDomains] error:", e);
       return res
-        .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+        .status(
+          e?.message === "missing_authorization" || e?.message === "invalid_token"
+            ? 401
+            : String(e?.message || "").startsWith("workspace_access_denied:")
+            ? 403
+            : 400
+        )
         .json({ ok: false, error: "site_update_domains_failed", message: e?.message || String(e) });
     }
   });
@@ -1124,6 +1510,150 @@ export function registerV1Routes(app: Express) {
   });
 
   /* -----------------------------
+     /v1/workspaces/billing/get  ★管理画面専用（ADMIN_ORIGINS）
+     - workspace の課金状態/プラン情報を取得
+  ------------------------------ */
+  app.post("/v1/workspaces/billing/get", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+
+      const body = WorkspaceBillingGetReqSchema.parse(req.body);
+      await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner", "admin", "member", "viewer"]);
+
+      const db = adminDb();
+      const wSnap = await db.collection("workspaces").doc(body.workspace_id).get();
+      if (!wSnap.exists) return res.status(404).json({ ok: false, error: "workspace_not_found" });
+
+      const w = (wSnap.data() || {}) as any;
+      const billing = (w.billing || {}) as any;
+
+      return res.json({
+        ok: true,
+        workspace_id: body.workspace_id,
+        billing: {
+          plan: billing.plan || "free",
+          status: billing.status || "inactive",
+          billing_email: billing.billing_email || null,
+          trial_ends_at: billing.trial_ends_at || null,
+          current_period_ends_at: billing.current_period_ends_at || null,
+          updatedAt: billing.updatedAt || w.updatedAt || null,
+        },
+      });
+    } catch (e: any) {
+      console.error("[/v1/workspaces/billing/get] error:", e);
+      return res
+        .status(
+          e?.message === "missing_authorization" || e?.message === "invalid_token"
+            ? 401
+            : String(e?.message || "").startsWith("workspace_access_denied:")
+            ? 403
+            : 400
+        )
+        .json({ ok: false, error: "workspace_billing_get_failed", message: e?.message || String(e) });
+    }
+  });
+
+  app.options("/v1/workspaces/billing/get", (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+      res.status(204).send("");
+    } catch (e: any) {
+      return res.status(403).send(e?.message || "forbidden");
+    }
+  });
+
+  /* -----------------------------
+     /v1/workspaces/billing/update  ★管理画面専用（ADMIN_ORIGINS）
+     - workspace.billing を更新
+     - Stripe連携前の“内部課金状態”の土台
+  ------------------------------ */
+  app.post("/v1/workspaces/billing/update", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+
+      const body = WorkspaceBillingUpdateReqSchema.parse(req.body);
+      await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner", "admin"]);
+
+      const db = adminDb();
+      const wRef = db.collection("workspaces").doc(body.workspace_id);
+      const wSnap = await wRef.get();
+      if (!wSnap.exists) return res.status(404).json({ ok: false, error: "workspace_not_found" });
+
+      const patch: any = {};
+
+      if (body.plan) patch.plan = body.plan;
+      if (body.status) patch.status = body.status;
+      if (body.billing_email) patch.billing_email = body.billing_email.toLowerCase();
+
+      const explicitTrial = parseIsoToDate(body.trial_ends_at);
+      if (explicitTrial) {
+        patch.trial_ends_at = explicitTrial.toISOString();
+      } else if (typeof body.trial_days === "number") {
+        const d = new Date(Date.now() + Math.max(0, body.trial_days) * 24 * 60 * 60 * 1000);
+        patch.trial_ends_at = d.toISOString();
+      }
+
+      const explicitPeriod = parseIsoToDate(body.current_period_ends_at);
+      if (explicitPeriod) {
+        patch.current_period_ends_at = explicitPeriod.toISOString();
+      }
+
+      const now = FieldValue.serverTimestamp();
+      patch.updatedAt = now;
+
+      const updateObj: any = { updatedAt: now };
+      for (const [k, v] of Object.entries(patch)) {
+        updateObj[`billing.${k}`] = v;
+      }
+
+      await wRef.set({ updatedAt: now }, { merge: true });
+      await wRef.update(updateObj);
+
+      const after = await wRef.get();
+      const w2 = (after.data() || {}) as any;
+      const billing = (w2.billing || {}) as any;
+
+      return res.json({
+        ok: true,
+        workspace_id: body.workspace_id,
+        billing: {
+          plan: billing.plan || "free",
+          status: billing.status || "inactive",
+          billing_email: billing.billing_email || null,
+          trial_ends_at: billing.trial_ends_at || null,
+          current_period_ends_at: billing.current_period_ends_at || null,
+          updatedAt: billing.updatedAt || w2.updatedAt || null,
+        },
+      });
+    } catch (e: any) {
+      console.error("[/v1/workspaces/billing/update] error:", e);
+      return res
+        .status(
+          e?.message === "missing_authorization" || e?.message === "invalid_token"
+            ? 401
+            : String(e?.message || "").startsWith("workspace_access_denied:")
+            ? 403
+            : 400
+        )
+        .json({ ok: false, error: "workspace_billing_update_failed", message: e?.message || String(e) });
+    }
+  });
+
+  app.options("/v1/workspaces/billing/update", (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+      res.status(204).send("");
+    } catch (e: any) {
+      return res.status(403).send(e?.message || "forbidden");
+    }
+  });
+
+
+  /* -----------------------------
      /v1/sites/delete  ★管理画面専用（ADMIN_ORIGINS）
      - site を論理削除（status=deleted）
      - ついでに当該 site の active scenarios を inactive に落とす
@@ -1135,7 +1665,7 @@ export function registerV1Routes(app: Express) {
       const body = SiteDeleteReqSchema.parse(req.body);
 
       // siteId -> workspace role check (owner/admin only)
-      const { uid } = await requireWorkspaceRoleBySiteId(req, body.site_id, ["owner", "admin"]);
+      const { uid } = await requireWorkspaceAccessBySiteId(req, body.site_id, "sites", ["owner", "admin"]);
 
       const db = adminDb();
 
@@ -1192,7 +1722,13 @@ export function registerV1Routes(app: Express) {
     } catch (e: any) {
       console.error("[/v1/sites/delete] error:", e);
       return res
-        .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400)
+        .status(
+          e?.message === "missing_authorization" || e?.message === "invalid_token"
+            ? 401
+            : String(e?.message || "").startsWith("workspace_access_denied:")
+            ? 403
+            : 400
+        )
         .json({ ok: false, error: "site_delete_failed", message: e?.message || String(e) });
     }
   });
@@ -1397,7 +1933,7 @@ export function registerV1Routes(app: Express) {
 
       // admin CORS + allowlist
       corsByAdminOrigins(req, res);
-      await requireWorkspaceRoleBySiteId(req, body.site_id, ["owner", "admin", "member"]);
+      await requireWorkspaceAccessBySiteId(req, body.site_id, "dashboard", ["owner", "admin", "member"]);
       // ---- debug logs (temporary) ----
       const origin = req.header("Origin") || "";
       console.log("[/v1/stats/summary] origin", origin);
@@ -1550,6 +2086,8 @@ export function registerV1Routes(app: Express) {
         .status(
           e?.message === "missing_authorization" || e?.message === "invalid_token"
             ? 401
+            : String(e?.message || "").startsWith("workspace_access_denied:")
+            ? 403
             : 400
         )
         .json({ error: "stats_summary_failed", message: e?.message || String(e) });
@@ -1560,7 +2098,10 @@ export function registerV1Routes(app: Express) {
     try {
       corsByAdminOrigins(req, res);
       res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        "Content-Type,Authorization,X-Site-Id,X-Site-Key"
+      );
       res.status(204).send("");
     } catch (e: any) {
       return res.status(403).send(e?.message || "forbidden");
@@ -1592,7 +2133,7 @@ export function registerV1Routes(app: Express) {
 
       // 管理画面CORS
       corsByAdminOrigins(req, res);
-      await requireWorkspaceRoleBySiteId(req, body.site_id, ["owner", "admin", "member"]);
+      await requireWorkspaceAccessBySiteId(req, body.site_id, "ai", ["owner", "admin", "member"]);
 
       // site存在確認だけしたいならここで
       const site = await pickSiteById(body.site_id);
@@ -1616,6 +2157,8 @@ export function registerV1Routes(app: Express) {
         .status(
           e?.message === "missing_authorization" || e?.message === "invalid_token"
             ? 401
+            : String(e?.message || "").startsWith("workspace_access_denied:")
+            ? 403
             : 400
         )
         .json({ error: "ai_copy_failed", message: e?.message || String(e) });
@@ -1643,7 +2186,7 @@ export function registerV1Routes(app: Express) {
 
       // ---- CORS + admin allowlist（ai/insight は管理画面専用） ----
       corsByAdminOrigins(req, res);
-      await requireWorkspaceRoleBySiteId(req, body.site_id, ["owner", "admin", "member"]);
+      await requireWorkspaceAccessBySiteId(req, body.site_id, "ai", ["owner", "admin", "member"]);
 
       // ---- site/workspace は「存在確認」だけ（domains判定には使わない） ----
       const site = await pickSiteById(body.site_id);
@@ -1731,6 +2274,8 @@ export function registerV1Routes(app: Express) {
         .status(
           e?.message === "missing_authorization" || e?.message === "invalid_token"
             ? 401
+            : String(e?.message || "").startsWith("workspace_access_denied:")
+            ? 403
             : 400
         )
         .json({ error: "ai_insight_failed", message: e?.message || String(e) });
@@ -1766,7 +2311,7 @@ export function registerV1Routes(app: Express) {
 
       // 管理画面CORS
       corsByAdminOrigins(req, res);
-      await requireWorkspaceRoleBySiteId(req, body.site_id, ["owner", "admin", "member"]);
+      await requireWorkspaceAccessBySiteId(req, body.site_id, "ai", ["owner", "admin", "member"]);
 
       const site = await pickSiteById(body.site_id);
       if (!site) return res.status(404).json({ error: "site not found" });

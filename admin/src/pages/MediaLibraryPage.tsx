@@ -43,8 +43,19 @@ function fmtSize(n?: number) {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function workspaceLabel(workspaces: Array<{ id: string; data?: { name?: string } }>, workspaceId: string) {
+  const hit = workspaces.find((w) => w.id === workspaceId);
+  return String(hit?.data?.name || hit?.id || workspaceId || "");
+}
+
+function contentTypeLabel(contentType?: string) {
+  if (!contentType) return "-";
+  if (contentType.startsWith("image/")) return `画像 (${contentType})`;
+  return contentType;
+}
+
 export default function MediaPage() {
-  const [workspaces, setWorkspaces] = useState<Array<{ id: string }>>([]);
+  const [workspaces, setWorkspaces] = useState<Array<{ id: string; data?: { name?: string } }>>([]);
   const [workspaceId, setWorkspaceId] = useState("");
 
   const [mediaRows, setMediaRows] = useState<Row<MediaDoc>[]>([]);
@@ -57,6 +68,7 @@ export default function MediaPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadErr, setUploadErr] = useState("");
   const [uploadInfo, setUploadInfo] = useState<{ ok: number; total: number } | null>(null);
+  const selectedWorkspaceName = useMemo(() => workspaceLabel(workspaces, workspaceId), [workspaces, workspaceId]);
 
   // 最新追加を自動選択したい
   const lastUploadedRef = useRef<{ workspaceId: string; downloadURL: string } | null>(null);
@@ -65,7 +77,7 @@ export default function MediaPage() {
   useEffect(() => {
     const q = query(collection(db, "workspaces"), orderBy("__name__"));
     return onSnapshot(q, (snap) => {
-      const list = snap.docs.map((d) => ({ id: d.id }));
+      const list = snap.docs.map((d) => ({ id: d.id, data: d.data() as any }));
       setWorkspaces(list);
       if (!workspaceId && list.length) setWorkspaceId(list[0].id);
     });
@@ -175,32 +187,40 @@ export default function MediaPage() {
   return (
     <div className="container">
       <div className="card">
-        <h1 className="h1">Media Library</h1>
-        <div className="small">メディアのアップロード / 一覧 / 使用箇所 / 削除</div>
+        <h1 className="h1">メディアライブラリ</h1>
+        <div className="small">画像などのメディアをアップロードし、一覧確認、使用箇所の確認、削除ができます。</div>
+        <div className="small" style={{ opacity: 0.72 }}>アクションやテンプレートで使う素材を、ワークスペースごとにまとめて管理します。</div>
 
         <div style={{ height: 12 }} />
 
+        <div className="small" style={{ opacity: 0.72, marginBottom: 8 }}>
+          現在のワークスペース: <b>{selectedWorkspaceName || workspaceId || "-"}</b>
+        </div>
+
         <div className="row" style={{ gap: 10, alignItems: "center" }}>
           <div style={{ flex: 1, minWidth: 240 }}>
-            <div className="h2">workspace</div>
+            <div className="h2">ワークスペース</div>
             <select className="input" value={workspaceId} onChange={(e) => setWorkspaceId(e.target.value)}>
-              {workspaces.map((w) => (
+            {workspaces.map((w) => {
+              const label = workspaceLabel(workspaces, w.id);
+              return (
                 <option key={w.id} value={w.id}>
-                  {w.id}
+                  {label}{label !== w.id ? ` (${w.id})` : ""}
                 </option>
-              ))}
+              );
+            })}
             </select>
           </div>
 
           <div style={{ flex: 2, minWidth: 240 }}>
-            <div className="h2">search</div>
-            <input className="input" value={qText} onChange={(e) => setQText(e.target.value)} placeholder="filename / type / id" />
+            <div className="h2">検索</div>
+            <input className="input" value={qText} onChange={(e) => setQText(e.target.value)} placeholder="ファイル名 / タイプ / ID で検索" />
           </div>
 
           <div style={{ flex: 1, minWidth: 220 }}>
-            <div className="h2">count</div>
+            <div className="h2">件数</div>
             <div className="small">
-              media: <b>{filtered.length}</b> / actions: <b>{actionRows.length}</b>
+              メディア: <b>{filtered.length}</b> / 参照アクション: <b>{actionRows.length}</b>
             </div>
           </div>
         </div>
@@ -215,9 +235,9 @@ export default function MediaPage() {
             background: "rgba(255,255,255,.06)",
           }}
         >
-          <div className="h2">アップロード</div>
+          <div className="h2">メディアを追加</div>
           <div className="small" style={{ opacity: 0.75 }}>
-            ここから直接メディアライブラリに追加できる（まずは画像のみ）
+            ここから直接メディアライブラリに追加できます。現在は画像アップロードに対応しています。
           </div>
 
           <div style={{ height: 10 }} />
@@ -259,12 +279,12 @@ export default function MediaPage() {
                 }
               }}
             />
-            {uploading ? <div className="small">Uploading...</div> : null}
+            {uploading ? <div className="small">アップロード中...</div> : null}
           </div>
 
           {uploadInfo ? (
             <div className="small" style={{ marginTop: 8, opacity: 0.85 }}>
-              upload: <b>{uploadInfo.ok}</b> / {uploadInfo.total}
+              アップロード完了: <b>{uploadInfo.ok}</b> / {uploadInfo.total}
             </div>
           ) : null}
 
@@ -280,16 +300,19 @@ export default function MediaPage() {
 
       <div className="row" style={{ alignItems: "flex-start", gap: 14 }}>
         <div className="card" style={{ flex: 2, minWidth: 520 }}>
-          <div className="h2">一覧</div>
+          <div className="h2">メディア一覧</div>
+          <div className="small" style={{ opacity: 0.72, marginBottom: 8 }}>
+            ファイル名を中心に確認できます。使用中の素材は削除前に参照先を確認してください。
+          </div>
 
           <table className="table">
             <thead>
               <tr>
-                <th style={{ width: 70 }}>thumb</th>
-                <th>name</th>
-                <th style={{ width: 160 }}>type</th>
-                <th style={{ width: 120 }}>size</th>
-                <th style={{ width: 120 }}>used</th>
+                <th style={{ width: 70 }}>サムネイル</th>
+                <th>ファイル</th>
+                <th style={{ width: 160 }}>種類</th>
+                <th style={{ width: 120 }}>サイズ</th>
+                <th style={{ width: 120 }}>使用数</th>
                 <th style={{ width: 160 }}></th>
               </tr>
             </thead>
@@ -333,17 +356,17 @@ export default function MediaPage() {
                     </td>
                     <td>
                       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                        <div style={{ fontWeight: 800 }}>{r.data.originalName || "(no name)"}</div>
-                        <div className="small"><code>{r.id}</code></div>
+                        <div style={{ fontWeight: 800 }}>{r.data.originalName || "名称未設定"}</div>
+                        <div className="small" style={{ opacity: 0.72 }}><code>{r.id}</code></div>
                       </div>
                     </td>
-                    <td className="small">{r.data.contentType || "-"}</td>
+                    <td className="small">{contentTypeLabel(r.data.contentType)}</td>
                     <td className="small">{fmtSize(r.data.size)}</td>
                     <td className="small">{used ? <b>{used}</b> : <span style={{ opacity: 0.65 }}>0</span>}</td>
                     <td>
-                      <button className="btn" onClick={() => setSelected(r)}>詳細</button>
+                      <button className="btn" onClick={() => setSelected(r)}>詳細を見る</button>
                       <span style={{ width: 8, display: "inline-block" }} />
-                      <button className="btn btn--danger" onClick={() => onDelete(r.id)}>削除</button>
+                      <button className="btn btn--danger" onClick={() => onDelete(r.id)}>削除する</button>
                     </td>
                   </tr>
                 );
@@ -352,7 +375,7 @@ export default function MediaPage() {
               {!filtered.length ? (
                 <tr>
                   <td colSpan={6} className="small" style={{ opacity: 0.7 }}>
-                    該当なし
+                    該当するメディアはありません
                   </td>
                 </tr>
               ) : null}
@@ -364,7 +387,7 @@ export default function MediaPage() {
           <div className="h2">詳細</div>
 
           {!selected ? (
-            <div className="small" style={{ opacity: 0.7 }}>左の一覧から選択してね</div>
+            <div className="small" style={{ opacity: 0.7 }}>左の一覧からメディアを選択してください</div>
           ) : (
             <>
               <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -400,7 +423,7 @@ export default function MediaPage() {
                 )}
 
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 900 }}>{selected.data.originalName || "(no name)"}</div>
+                  <div style={{ fontWeight: 900 }}>{selected.data.originalName || "名称未設定"}</div>
                   <div className="small"><code>{selected.id}</code></div>
                   <div className="small" style={{ opacity: 0.75 }}>
                     {selected.data.contentType || "-"} / {fmtSize(selected.data.size)}
@@ -410,21 +433,21 @@ export default function MediaPage() {
 
               <div style={{ height: 10 }} />
 
-              <div className="h2">downloadURL</div>
+              <div className="h2">ダウンロードURL</div>
               <div className="small" style={{ wordBreak: "break-all", opacity: 0.85 }}>
                 {selected.data.downloadURL}
               </div>
 
               <div style={{ height: 10 }} />
 
-              <div className="h2">storagePath</div>
+              <div className="h2">保存先パス</div>
               <div className="small" style={{ wordBreak: "break-all", opacity: 0.85 }}>
                 {selected.data.storagePath}
               </div>
 
               <div style={{ height: 12 }} />
 
-              <div className="h2">使用箇所（Actions）</div>
+              <div className="h2">使用箇所（アクション）</div>
               {selectedUsedIn.length ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {selectedUsedIn.map((x) => (
@@ -435,13 +458,13 @@ export default function MediaPage() {
                   ))}
                 </div>
               ) : (
-                <div className="small" style={{ opacity: 0.7 }}>（未使用）</div>
+                <div className="small" style={{ opacity: 0.7 }}>（まだ使われていません）</div>
               )}
 
               <div style={{ height: 12 }} />
 
               <button className="btn btn--danger" onClick={() => onDelete(selected.id)}>
-                このメディアを削除
+                このメディアを削除する
               </button>
             </>
           )}

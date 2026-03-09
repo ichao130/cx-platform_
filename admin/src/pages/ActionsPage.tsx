@@ -113,6 +113,25 @@ function uniq(arr: string[]) {
   return Array.from(new Set(arr.filter(Boolean)));
 }
 
+const LS_WORKSPACE_KEY = "cx_admin_workspace_id";
+
+function readSelectedWorkspaceId(): string {
+  try {
+    return localStorage.getItem(LS_WORKSPACE_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function writeSelectedWorkspaceId(workspaceId: string) {
+  try {
+    localStorage.setItem(LS_WORKSPACE_KEY, workspaceId);
+    window.dispatchEvent(new CustomEvent("cx_admin_workspace_changed", { detail: { workspaceId } }));
+  } catch {
+    // ignore
+  }
+}
+
 function normalizeActionFromDb(a: ActionDoc) {
   const mountSel = a.mount?.selector ?? "";
   const legacySel = a.selector ?? "";
@@ -134,6 +153,30 @@ function normalizeActionFromDb(a: ActionDoc) {
     imageMediaId: a.creative?.image_media_id ?? "",
     mediaIds: Array.isArray(a.mediaIds) ? a.mediaIds : [],
   };
+}
+
+function workspaceLabel(workspaces: Array<{ id: string; data?: { name?: string } }>, workspaceId: string) {
+  const hit = workspaces.find((w) => w.id === workspaceId);
+  return String(hit?.data?.name || hit?.id || workspaceId || "");
+}
+
+function actionTypeLabel(type: ActionType) {
+  if (type === "modal") return "モーダル";
+  if (type === "banner") return "バナー";
+  return "トースト";
+}
+
+function placementLabel(v: MountPlacement) {
+  if (v === "append") return "末尾に追加";
+  if (v === "prepend") return "先頭に追加";
+  if (v === "before") return "要素の前";
+  return "要素の後";
+}
+
+function modeLabel(v: MountMode) {
+  if (v === "shadow") return "shadow";
+  if (v === "theme") return "theme";
+  return "inherit";
 }
 
 /** フォーム→保存 payload（mount + mediaIds + primary image_media_id） */
@@ -373,7 +416,7 @@ function MediaPickerModal(props: {
 export default function ActionsPage() {
   const deleteMediaFn = useMemo(() => httpsCallable(getFunctions(), "deleteMedia"), []);
 
-  const [workspaces, setWorkspaces] = useState<Array<{ id: string }>>([]);
+  const [workspaces, setWorkspaces] = useState<Array<{ id: string; data?: { name?: string } }>>([]);
   const [rows, setRows] = useState<Array<{ id: string; data: ActionDoc }>>([]);
   const [templates, setTemplates] = useState<TemplateRow[]>([]);
 
@@ -382,7 +425,7 @@ export default function ActionsPage() {
 
   // ---- form state ----
   const [id, setId] = useState(() => genId("act"));
-  const [workspaceId, setWorkspaceId] = useState("");
+  const [workspaceId, setWorkspaceId] = useState(() => readSelectedWorkspaceId());
   const [type, setType] = useState<ActionType>("modal");
 
   const [selector, setSelector] = useState("body");
@@ -420,6 +463,28 @@ export default function ActionsPage() {
   const [uploadErr, setUploadErr] = useState<string>("");
 
   const [pickerOpen, setPickerOpen] = useState(false);
+  const selectedWorkspaceName = useMemo(() => workspaceLabel(workspaces, workspaceId), [workspaces, workspaceId]);
+
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === LS_WORKSPACE_KEY) setWorkspaceId(readSelectedWorkspaceId());
+    };
+    const onCustom = (e: any) => {
+      const next = e?.detail?.workspaceId;
+      if (typeof next === "string") setWorkspaceId(next);
+    };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("cx_admin_workspace_changed" as any, onCustom);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("cx_admin_workspace_changed" as any, onCustom);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    writeSelectedWorkspaceId(workspaceId);
+  }, [workspaceId]);
 
 
   useEffect(() => {
@@ -439,23 +504,47 @@ export default function ActionsPage() {
   
   useEffect(() => {
     const q = query(collection(db, "workspaces"), orderBy("__name__"));
-    return onSnapshot(q, (snap) => setWorkspaces(snap.docs.map((d) => ({ id: d.id }))));
-  }, []);
-
-  useEffect(() => {
-    const q = query(collection(db, "actions"), orderBy("__name__"));
-    return onSnapshot(q, (snap) => setRows(snap.docs.map((d) => ({ id: d.id, data: d.data() as ActionDoc }))));
-  }, []);
-
-  useEffect(() => {
-    const q = query(collection(db, "templates"), orderBy("__name__"));
     return onSnapshot(q, (snap) =>
-      setTemplates(snap.docs.map((d) => ({ id: d.id, data: d.data() as any })))
+      setWorkspaces(snap.docs.map((d) => ({ id: d.id, data: d.data() as any })))
     );
   }, []);
 
   useEffect(() => {
-    if (!workspaceId && workspaces.length) setWorkspaceId(workspaces[0].id);
+    if (!workspaceId) {
+      setRows([]);
+      return;
+    }
+
+    const q = query(
+      collection(db, "actions"),
+      where("workspaceId", "==", workspaceId),
+      orderBy("__name__")
+    );
+    return onSnapshot(q, (snap) =>
+      setRows(snap.docs.map((d) => ({ id: d.id, data: d.data() as ActionDoc })))
+    );
+  }, [workspaceId]);
+
+  useEffect(() => {
+    if (!workspaceId) {
+      setTemplates([]);
+      return;
+    }
+
+    const q = query(
+      collection(db, "templates"),
+      where("workspaceId", "==", workspaceId),
+      orderBy("__name__")
+    );
+    return onSnapshot(q, (snap) =>
+      setTemplates(snap.docs.map((d) => ({ id: d.id, data: d.data() as any })))
+    );
+  }, [workspaceId]);
+
+  useEffect(() => {
+    if (!workspaces.length) return;
+    const exists = workspaceId && workspaces.some((w) => w.id === workspaceId);
+    if (!exists) setWorkspaceId(workspaces[0].id);
   }, [workspaces, workspaceId]);
 
   // build media cache for thumbnails (fetch only missing ids)
@@ -590,8 +679,11 @@ export default function ActionsPage() {
   return (
     <div className="container">
       <div className="card">
-        <h1 className="h1">Actions</h1>
-        <div className="small">Action（モーダル/バナー/トースト）の部品を作るページ。</div>
+        <h1 className="h1">アクション</h1>
+        <div className="small">モーダル・バナー・トーストなど、実際に表示する部品を作る画面です。</div>
+        <div className="small" style={{ opacity: 0.72 }}>
+          シナリオから呼び出して使うため、まずは分かりやすいタイトルと表示内容を整えます。
+        </div>
 
         <div style={{ height: 14 }} />
 
@@ -600,23 +692,38 @@ export default function ActionsPage() {
               Left: Form
           ======================= */}
           <div style={{ flex: 1, minWidth: 280 }}>
-            <div className="h2">actionId</div>
+            <div className="small" style={{ opacity: 0.72, marginBottom: 8 }}>
+              現在のワークスペース: <b>{selectedWorkspaceName || workspaceId || "-"}</b>
+            </div>
+
+            <div className="h2">アクションID</div>
             <input className="input" value={id} onChange={(e) => setId(e.target.value)} />
 
             <div style={{ height: 10 }} />
-            <div className="h2">workspaceId</div>
-            <select className="input" value={workspaceId} onChange={(e) => setWorkspaceId(e.target.value)}>
-              {workspaces.map((w) => (
+            <div className="h2">ワークスペース</div>
+            <select
+              className="input"
+              value={workspaceId}
+              onChange={(e) => {
+                setWorkspaceId(e.target.value);
+                writeSelectedWorkspaceId(e.target.value);
+              }}
+            >
+
+            {workspaces.map((w) => {
+              const label = workspaceLabel(workspaces, w.id);
+              return (
                 <option key={w.id} value={w.id}>
-                  {w.id}
+                  {label}{label !== w.id ? ` (${w.id})` : ""}
                 </option>
-              ))}
+              );
+            })}
             </select>
 
             <div style={{ height: 10 }} />
             <div className="row">
               <div style={{ flex: 1 }}>
-                <div className="h2">type</div>
+                <div className="h2">表示タイプ</div>
                 <select
                   className="input"
                   value={type}
@@ -627,41 +734,41 @@ export default function ActionsPage() {
                     if (t === "modal") setSelector("body");
                   }}
                 >
-                  <option value="modal">modal</option>
-                  <option value="banner">banner</option>
-                  <option value="toast">toast</option>
+                  <option value="modal">modal（モーダル）</option>
+                  <option value="banner">banner（バナー）</option>
+                  <option value="toast">toast（トースト）</option>
                 </select>
               </div>
 
               <div style={{ flex: 2 }}>
-                <div className="h2">selector（mount.selector）</div>
+                <div className="h2">表示位置セレクタ</div>
                 <input
                   className="input"
                   value={selector}
                   onChange={(e) => setSelector(e.target.value)}
                   placeholder="#Header など"
                 />
-                <div className="small">banner/toast のときだけ mount に使う（modal は無視）</div>
+                <div className="small">バナー / トーストで使う表示位置です。モーダルでは無視されます。</div>
               </div>
             </div>
 
             <div className="row" style={{ marginTop: 10 }}>
               <div style={{ flex: 1 }}>
-                <div className="h2">placement</div>
+                <div className="h2">表示位置</div>
                 <select
                   className="input"
                   value={placement}
                   onChange={(e) => setPlacement(e.target.value as MountPlacement)}
                   disabled={type === "modal"}
                 >
-                  <option value="append">append</option>
-                  <option value="prepend">prepend</option>
-                  <option value="before">before</option>
-                  <option value="after">after</option>
+                  <option value="append">append（末尾に追加）</option>
+                  <option value="prepend">prepend（先頭に追加）</option>
+                  <option value="before">before（要素の前）</option>
+                  <option value="after">after（要素の後）</option>
                 </select>
               </div>
               <div style={{ flex: 1 }}>
-                <div className="h2">mode</div>
+                <div className="h2">描画モード</div>
                 <select
                   className="input"
                   value={mode}
@@ -676,9 +783,9 @@ export default function ActionsPage() {
             </div>
 
             <div style={{ height: 10 }} />
-            <div className="h2">templateId（任意）</div>
+            <div className="h2">テンプレート（任意）</div>
             <select className="input" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
-              <option value="">(default / built-in)</option>
+              <option value="">（標準 / built-in）</option>
               {templates
                 .filter((t) => t.data?.workspaceId === workspaceId && t.data?.type === type)
                 .map((t) => (
@@ -689,27 +796,27 @@ export default function ActionsPage() {
             </select>
 
             <div style={{ height: 10 }} />
-            <div className="h2">title</div>
+            <div className="h2">タイトル</div>
             <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
 
             <div style={{ height: 10 }} />
-            <div className="h2">body</div>
+            <div className="h2">本文</div>
             <textarea className="input" value={body} onChange={(e) => setBody(e.target.value)} />
 
             <div style={{ height: 10 }} />
             <div className="row">
               <div style={{ flex: 1 }}>
-                <div className="h2">cta_text</div>
+                <div className="h2">CTAボタン文言</div>
                 <input className="input" value={ctaText} onChange={(e) => setCtaText(e.target.value)} />
               </div>
               <div style={{ flex: 2 }}>
-                <div className="h2">cta_url</div>
+                <div className="h2">遷移先URL</div>
                 <input className="input" value={ctaUrl} onChange={(e) => setCtaUrl(e.target.value)} />
               </div>
             </div>
 
             <div style={{ height: 10 }} />
-            <div className="h2">cta_url_text（任意）</div>
+            <div className="h2">補助リンク文言（任意）</div>
             <input className="input" value={ctaUrlText} onChange={(e) => setCtaUrlText(e.target.value)} />
 
             <div style={{ height: 14 }} />
@@ -717,15 +824,15 @@ export default function ActionsPage() {
             {/* =======================
                 Media linking UI
             ======================= */}
-            <div className="h2">Media紐付け</div>
+            <div className="h2">メディア設定</div>
 
             <div className="row" style={{ alignItems: "center", gap: 10 }}>
               <button className="btn" type="button" onClick={() => setPickerOpen(true)} disabled={!workspaceId}>
-                メディアから追加
+                メディアを追加
               </button>
 
               <div className="small">
-                Primary（image_media_id）:
+                メイン画像:
                 {imageMediaId ? (
                   <>
                     {" "}
@@ -736,7 +843,7 @@ export default function ActionsPage() {
                       style={{ marginLeft: 8 }}
                       onClick={() => setImageMediaId("")}
                     >
-                      解除
+                      クリア
                     </button>
                   </>
                 ) : (
@@ -860,13 +967,13 @@ export default function ActionsPage() {
                   })}
               </div>
             ) : (
-              <div className="small">（まだメディア紐付けなし）</div>
+              <div className="small">（まだメディアは設定されていません）</div>
             )}
 
             <div style={{ height: 12 }} />
-            <div className="h2">image_url（任意）</div>
+            <div className="h2">画像URL（任意）</div>
             <input className="input" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} />
-            <div className="small">URL直入力 or 下のアップロードで自動入力。</div>
+            <div className="small">直接入力するか、下のアップロードで自動入力できます。</div>
 
             <div style={{ height: 10 }} />
             <div className="row" style={{ alignItems: "center", gap: 10 }}>
@@ -894,14 +1001,14 @@ export default function ActionsPage() {
                   }
                 }}
               />
-              {uploading && <div className="small">Uploading...</div>}
+              {uploading && <div className="small">アップロード中...</div>}
             </div>
 
             {uploadErr && <div className="small" style={{ color: "#ff6b6b" }}>{uploadErr}</div>}
 
             {imageUrl?.trim() && (
               <div style={{ marginTop: 10 }}>
-                <div className="small">Preview</div>
+                <div className="small">プレビュー</div>
                 <img
                   src={imageUrl}
                   alt="preview"
@@ -921,10 +1028,10 @@ export default function ActionsPage() {
               Right: Payload Preview
           ======================= */}
           <div style={{ flex: 1, minWidth: 280 }}>
-            <div className="h2">プレビュー（保存されるJSON）</div>
+            <div className="h2">確認用JSON（上級者向け）</div>
             <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{JSON.stringify(payload, null, 2)}</pre>
             <div className="small" style={{ marginTop: 8 }}>
-              banner/toast なら <code>mount.selector</code> が入ってるかチェック。
+              バナー / トーストでは <code>mount.selector</code> が入っていることを確認してください。
             </div>
           </div>
         </div>
@@ -936,15 +1043,18 @@ export default function ActionsPage() {
           List
       ======================= */}
       <div className="card">
-        <div className="h2">一覧（サムネ表示）</div>
+        <div className="h2">アクション一覧</div>
+        <div className="small" style={{ opacity: 0.72, marginBottom: 8 }}>
+          ワークスペース: <b>{selectedWorkspaceName || workspaceId || "-"}</b>
+        </div>
         <table className="table">
           <thead>
             <tr>
-              <th>ID</th>
-              <th>workspaceId</th>
-              <th>type</th>
-              <th>title</th>
-              <th>media</th>
+              <th>アクション</th>
+              <th>ワークスペース</th>
+              <th>表示タイプ</th>
+              <th>タイトル</th>
+              <th>メディア</th>
               <th></th>
             </tr>
           </thead>
@@ -955,10 +1065,15 @@ export default function ActionsPage() {
               const primary = r.data.creative?.image_media_id ? [String(r.data.creative.image_media_id)] : [];
               return (
                 <tr key={r.id}>
-                  <td><code>{r.id}</code></td>
-                  <td><code>{r.data.workspaceId}</code></td>
-                  <td>{r.data.type}</td>
-                  <td>{r.data.creative?.title}</td>
+                  <td>
+                    <div style={{ fontWeight: 700 }}>{r.data.creative?.title || "名称未設定"}</div>
+                    <div className="small" style={{ opacity: 0.72 }}>
+                      ID: <code>{r.id}</code>
+                    </div>
+                  </td>
+                  <td>{workspaceLabel(workspaces, r.data.workspaceId)}</td>
+                  <td>{actionTypeLabel(r.data.type)}</td>
+                  <td>{r.data.creative?.title || "-"}</td>
 
                   {/* thumbs */}
                   <td>
@@ -1020,6 +1135,7 @@ export default function ActionsPage() {
                         const f = normalizeActionFromDb(r.data);
 
                         setWorkspaceId(f.workspaceId);
+                        writeSelectedWorkspaceId(f.workspaceId);
                         setType(f.type);
                         setSelector(f.selector);
                         setPlacement(f.placement);
@@ -1037,7 +1153,7 @@ export default function ActionsPage() {
                         setMediaIds(f.mediaIds);
                       }}
                     >
-                      編集
+                      編集する
                     </button>
 
                     <span style={{ width: 8, display: "inline-block" }} />
@@ -1059,7 +1175,7 @@ export default function ActionsPage() {
                           await deleteDoc(doc(db, "actions", r.id));
                         }}
                       >
-                        削除
+                        削除する
                       </button>
 
 

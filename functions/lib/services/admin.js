@@ -7,6 +7,10 @@ exports.adminAuth = adminAuth;
 exports.verifyIdToken = verifyIdToken;
 exports.extractBearerToken = extractBearerToken;
 exports.requireAuthUid = requireAuthUid;
+exports.extractWorkspaceId = extractWorkspaceId;
+exports.requireAuthWithWorkspace = requireAuthWithWorkspace;
+exports.corsForAdmin = corsForAdmin;
+exports.resolveHttpStatusFromError = resolveHttpStatusFromError;
 const app_1 = require("firebase-admin/app");
 const firestore_1 = require("firebase-admin/firestore");
 const storage_1 = require("firebase-admin/storage");
@@ -47,4 +51,52 @@ async function requireAuthUid(req) {
     if (!decoded?.uid)
         throw new Error("invalid_token");
     return decoded.uid;
+}
+/**
+ * Extract workspaceId from header.
+ * We standardize on: x-workspace-id
+ */
+function extractWorkspaceId(req) {
+    const wid = req.header("x-workspace-id");
+    if (!wid)
+        throw new Error("missing_workspace_id");
+    return wid;
+}
+/**
+ * Require both authenticated user and workspaceId.
+ * Returns { uid, workspaceId }
+ */
+async function requireAuthWithWorkspace(req) {
+    const uid = await requireAuthUid(req);
+    const workspaceId = extractWorkspaceId(req);
+    return { uid, workspaceId };
+}
+/**
+ * Simple CORS handler for admin APIs.
+ * Call at the top of route handler.
+ */
+function corsForAdmin(req, res) {
+    const origin = req.header("Origin");
+    if (origin) {
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Vary", "Origin");
+    }
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-workspace-id, x-site-id");
+    res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS");
+    if (req.method === "OPTIONS") {
+        res.status(204).end();
+        return true;
+    }
+    return false;
+}
+/**
+ * Standard error → HTTP status mapping.
+ */
+function resolveHttpStatusFromError(e) {
+    const msg = e?.message || "";
+    if (msg === "missing_authorization" || msg === "invalid_token")
+        return 401;
+    if (msg === "missing_workspace_id")
+        return 400;
+    return 400;
 }

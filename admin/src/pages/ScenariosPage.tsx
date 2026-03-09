@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   collection,
   doc,
@@ -7,6 +8,7 @@ import {
   query,
   setDoc,
   deleteDoc,
+  where,
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { genId } from "../components/id";
@@ -110,39 +112,46 @@ function newVariant(): ExperimentVariant {
   };
 }
 
+function siteLabel(site: SiteRow | undefined) {
+  if (!site) return "";
+  return String(site.data?.name || site.id || "");
+}
+
+function workspaceLabel(sites: SiteRow[], workspaceId: string) {
+  const hit = sites.find((s) => String(s.data?.workspaceId || "") === String(workspaceId || ""));
+  return String(hit?.data?.workspaceName || hit?.data?.workspace_name || workspaceId || "");
+}
+
+const LS_SITE_KEY = "cx_admin_site_id";
+
+function readSelectedSiteId(): string {
+  try {
+    return localStorage.getItem(LS_SITE_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function writeSelectedSiteId(siteId: string) {
+  try {
+    localStorage.setItem(LS_SITE_KEY, siteId);
+    window.dispatchEvent(new CustomEvent("cx_admin_site_changed", { detail: { siteId } }));
+  } catch {
+    // ignore
+  }
+}
+
 export default function ScenariosPage() {
+  const navigate = useNavigate();
   const [sites, setSites] = useState<SiteRow[]>([]);
   const [actions, setActions] = useState<ActionRow[]>([]);
   const [rows, setRows] = useState<Array<{ id: string; data: Scenario }>>([]);
-
-  useEffect(() => {
-    const q = query(collection(db, "sites"), orderBy("__name__"));
-    return onSnapshot(q, (snap) =>
-      setSites(snap.docs.map((d) => ({ id: d.id, data: d.data() })))
-    );
-  }, []);
-
-  useEffect(() => {
-    const q = query(collection(db, "actions"), orderBy("__name__"));
-    return onSnapshot(q, (snap) =>
-      setActions(snap.docs.map((d) => ({ id: d.id, data: d.data() })))
-    );
-  }, []);
-
-  useEffect(() => {
-    const q = query(collection(db, "scenarios"), orderBy("__name__"));
-    return onSnapshot(q, (snap) =>
-      setRows(
-        snap.docs.map((d) => ({ id: d.id, data: d.data() as Scenario }))
-      )
-    );
-  }, []);
 
   // -------------------------
   // Form state
   // -------------------------
   const [id, setId] = useState(() => genId("scn"));
-  const [siteId, setSiteId] = useState("");
+  const [siteId, setSiteId] = useState(() => readSelectedSiteId());
   const [workspaceId, setWorkspaceId] = useState("");
   const [name, setName] = useState("New scenario");
   const [status, setStatus] = useState<"active" | "paused">("active");
@@ -178,9 +187,75 @@ export default function ScenariosPage() {
   const [actionIdToAdd, setActionIdToAdd] = useState("");
   const [variantIdToEdit, setVariantIdToEdit] = useState<string>("A");
 
+  // entry rules (URL)
+  const [urlEnabled, setUrlEnabled] = useState(false);
+  const [urlMode, setUrlMode] = useState<"contains" | "equals" | "prefix" | "regex">("contains");
+  const [urlValue, setUrlValue] = useState("/products/");
+  const [urlTarget, setUrlTarget] = useState<"url" | "path">("path");
+
   useEffect(() => {
-    if (!siteId && sites.length) setSiteId(sites[0].id);
-  }, [sites, siteId]);
+    const q = query(collection(db, "sites"), orderBy("__name__"));
+    return onSnapshot(q, (snap) =>
+      setSites(snap.docs.map((d) => ({ id: d.id, data: d.data() })))
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!workspaceId) {
+      setActions([]);
+      return;
+    }
+
+    const q = query(
+      collection(db, "actions"),
+      where("workspaceId", "==", workspaceId),
+      orderBy("__name__")
+    );
+    return onSnapshot(q, (snap) =>
+      setActions(snap.docs.map((d) => ({ id: d.id, data: d.data() })))
+    );
+  }, [workspaceId]);
+
+  useEffect(() => {
+    if (!siteId) {
+      setRows([]);
+      return;
+    }
+
+    const q = query(
+      collection(db, "scenarios"),
+      where("siteId", "==", siteId),
+      orderBy("__name__")
+    );
+
+    return onSnapshot(q, (snap) =>
+      setRows(
+        snap.docs.map((d) => ({ id: d.id, data: d.data() as Scenario }))
+      )
+    );
+  }, [siteId]);
+
+
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === LS_SITE_KEY) setSiteId(readSelectedSiteId());
+    };
+    const onCustom = (e: any) => {
+      const next = e?.detail?.siteId;
+      if (typeof next === "string") setSiteId(next);
+    };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("cx_admin_site_changed" as any, onCustom);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("cx_admin_site_changed" as any, onCustom);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!siteId) return;
+    writeSelectedSiteId(siteId);
+  }, [siteId]);
 
   useEffect(() => {
     const s = sites.find((x) => x.id === siteId);
@@ -190,6 +265,16 @@ export default function ScenariosPage() {
   const actionsForWorkspace = useMemo(() => {
     return actions.filter((a) => a.data?.workspaceId === workspaceId);
   }, [actions, workspaceId]);
+
+  const selectedSite = useMemo(() => sites.find((s) => s.id === siteId), [sites, siteId]);
+  const selectedSiteName = useMemo(() => siteLabel(selectedSite), [selectedSite]);
+  const selectedWorkspaceName = useMemo(() => workspaceLabel(sites, workspaceId), [sites, workspaceId]);
+
+  useEffect(() => {
+    if (!sites.length) return;
+    const exists = siteId && sites.some((s) => s.id === siteId);
+    if (!exists) setSiteId(sites[0].id);
+  }, [sites, siteId]);
 
   useEffect(() => {
     if (!actionIdToAdd && actionsForWorkspace.length)
@@ -203,11 +288,7 @@ export default function ScenariosPage() {
     if (!exists) setVariantIdToEdit(variants[0].id);
   }, [variants, variantIdToEdit]);
 
-  // entry rules (URL)
-  const [urlEnabled, setUrlEnabled] = useState(false);
-  const [urlMode, setUrlMode] = useState<"contains" | "equals" | "prefix" | "regex">("contains");
-  const [urlValue, setUrlValue] = useState("/products/");
-  const [urlTarget, setUrlTarget] = useState<"url" | "path">("path"); // 迷ったら path 推し
+
 
   const entry_rules = useMemo(
     () => ({
@@ -516,11 +597,11 @@ export default function ScenariosPage() {
   return (
     <div className="container">
       <div className="card">
-        <h1 className="h1">Scenarios</h1>
+        <h1 className="h1">シナリオ</h1>
         <div className="small">
-          “いつ / どのページで / 何を出すか” の定義。
+          「どのサイトで」「どんな条件のときに」「何を表示するか」を決める画面です。
           <br />
-          <b>Phase1</b>：A/B・効果測定・CV（goal）・DOM挿入の前提になる場所。
+          A/Bテスト、コンバージョン計測、AIレビューの起点になる重要な設定です。
         </div>
 
         <div style={{ height: 14 }} />
@@ -528,32 +609,44 @@ export default function ScenariosPage() {
         <div className="row" style={{ alignItems: "flex-start" }}>
           {/* LEFT: editor */}
           <div style={{ flex: 1, minWidth: 360 }}>
-            <div className="h2">scenarioId</div>
+            <div className="h2">シナリオID</div>
             <input className="input" value={id} onChange={(e) => setId(e.target.value)} />
 
             <div style={{ height: 10 }} />
-            <div className="h2">siteId</div>
-            <select className="input" value={siteId} onChange={(e) => setSiteId(e.target.value)}>
+            <div className="small" style={{ opacity: 0.72, marginBottom: 6 }}>
+              現在のサイト: <b>{selectedSiteName || siteId || "-"}</b> / ワークスペース: <b>{selectedWorkspaceName || workspaceId || "-"}</b>
+            </div>
+            <div className="h2">サイト</div>
+            <select
+              className="input"
+              value={siteId}
+              onChange={(e) => {
+                setSiteId(e.target.value);
+                writeSelectedSiteId(e.target.value);
+              }}
+            >
               {sites.map((s) => (
-                <option key={s.id} value={s.id}>{s.id}</option>
+                <option key={s.id} value={s.id}>
+                  {siteLabel(s)}{siteLabel(s) !== s.id ? ` (${s.id})` : ""}
+                </option>
               ))}
             </select>
 
             <div style={{ height: 10 }} />
             <div className="row">
               <div style={{ flex: 2 }}>
-                <div className="h2">name</div>
+                <div className="h2">シナリオ名</div>
                 <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
               </div>
               <div style={{ flex: 1 }}>
-                <div className="h2">status</div>
+                <div className="h2">状態</div>
                 <select className="input" value={status} onChange={(e) => setStatus(e.target.value as any)}>
-                  <option value="active">active</option>
-                  <option value="paused">paused</option>
+                  <option value="active">active（配信中）</option>
+                  <option value="paused">paused（一時停止）</option>
                 </select>
               </div>
               <div style={{ flex: 1 }}>
-                <div className="h2">priority</div>
+                <div className="h2">優先度</div>
                 <input
                   className="input"
                   type="number"
@@ -564,7 +657,7 @@ export default function ScenariosPage() {
             </div>
 
             <div style={{ height: 10 }} />
-            <div className="h2">memo（施策メモ）</div>
+            <div className="h2">メモ（施策メモ）</div>
             <textarea
               className="input"
               style={{ minHeight: 72 }}
@@ -574,7 +667,7 @@ export default function ScenariosPage() {
             />
 
             <div style={{ height: 12 }} />
-            <div className="h2">entry_rules（最小セット）</div>
+            <div className="h2">表示条件（基本設定）</div>
             <div className="row">
               {PAGE_TYPES.map((pt) => (
                 <label key={pt} className="badge" style={{ cursor: "pointer" }}>
@@ -596,7 +689,7 @@ export default function ScenariosPage() {
             </div>
 
             <div style={{ height: 10 }} />
-            <div className="h2">URL条件（発火URL）</div>
+            <div className="h2">URL条件</div>
 
             <div className="row" style={{ alignItems: "center", gap: 10 }}>
               <label className="badge" style={{ cursor: "pointer" }}>
@@ -605,7 +698,7 @@ export default function ScenariosPage() {
                   checked={urlEnabled}
                   onChange={(e) => setUrlEnabled(e.target.checked)}
                 />
-                enable url rule
+                URL条件を有効化
               </label>
 
               <select
@@ -643,12 +736,11 @@ export default function ScenariosPage() {
             </div>
 
             <div className="small" style={{ marginTop: 6 }}>
-              例：<code>path + prefix = /products/</code>（Shopify商品ページ） /{" "}
-              <code>regex = ^/lp/</code>
+              例：<code>path + prefix = /products/</code>（商品ページ） / <code>regex = ^/lp/</code>
             </div>
 
             <div style={{ height: 12 }} />
-            <div className="h2">goal（コンバージョン）</div>
+            <div className="h2">コンバージョン条件</div>
             <div className="row" style={{ alignItems: "center", gap: 10 }}>
               <label className="badge" style={{ cursor: "pointer" }}>
                 <input
@@ -656,7 +748,7 @@ export default function ScenariosPage() {
                   checked={goalEnabled}
                   onChange={(e) => setGoalEnabled(e.target.checked)}
                 />
-                enable goal
+                コンバージョン計測を有効化
               </label>
 
               <select
@@ -685,7 +777,7 @@ export default function ScenariosPage() {
             </div>
 
             <div style={{ height: 14 }} />
-            <div className="h2">A/B test（experiment）</div>
+            <div className="h2">A/Bテスト設定</div>
 
             <div className="row" style={{ alignItems: "center", gap: 10 }}>
               <label className="badge" style={{ cursor: "pointer" }}>
@@ -694,12 +786,12 @@ export default function ScenariosPage() {
                   checked={expEnabled}
                   onChange={(e) => setExpEnabled(e.target.checked)}
                 />
-                enable experiment
+                A/Bテストを有効化
               </label>
 
               <div style={{ width: 10 }} />
 
-              <div className="small">sticky</div>
+              <div className="small">固定単位</div>
               <select
                 className="input"
                 style={{ width: 120 }}
@@ -714,12 +806,12 @@ export default function ScenariosPage() {
               <div style={{ flex: 1 }} />
               {expEnabled ? (
                 <button className="btn" onClick={normalizeWeightsTo100}>
-                  weightを100に正規化
+                  配分合計を100に調整
                 </button>
               ) : null}
               {expEnabled ? (
                 <button className="btn" onClick={addVariant}>
-                  variant追加
+                  パターン追加
                 </button>
               ) : null}
             </div>
@@ -728,7 +820,7 @@ export default function ScenariosPage() {
               <>
                 <div style={{ height: 10 }} />
                 <div className="small">
-                  weight合計：<b>{weightsSum}</b>（目安100）
+                  配分合計：<b>{weightsSum}</b>（目安100）
                 </div>
 
                 <div style={{ height: 10 }} />
@@ -794,7 +886,7 @@ export default function ScenariosPage() {
                 </table>
 
                 <div style={{ height: 12 }} />
-                <div className="h2">variant actions：<code>{variantIdToEdit}</code></div>
+                <div className="h2">パターン別アクション：<code>{variantIdToEdit}</code></div>
 
                 <div className="row">
                   <select
@@ -874,14 +966,14 @@ export default function ScenariosPage() {
                   </table>
                 ) : (
                   <div className="small">
-                    まだ何も追加されてない（このvariantだとSDKに出す actions が空になる）
+                    まだアクションが追加されていません（このパターンでは何も表示されません）。
                   </div>
                 )}
               </>
             ) : (
               <>
                 <div style={{ height: 12 }} />
-                <div className="h2">actionRefs（シナリオのアクション / 非A/B）</div>
+                <div className="h2">アクション設定（通常配信 / 非A/B）</div>
                 <div className="row">
                   <select
                     className="input"
@@ -971,42 +1063,53 @@ export default function ScenariosPage() {
                   </table>
                 ) : (
                   <div className="small">
-                    まだ何も追加されてない（これだとSDKに出す actions が空になる）
+                    まだアクションが追加されていません（このシナリオでは何も表示されません）。
                   </div>
                 )}
               </>
             )}
 
-            <div style={{ height: 14 }} />
-            <div className="row" style={{ gap: 10 }}>
+            <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
               <button
                 className="text-blue-600 underline"
-                onClick={() => navigate(`/scenarios/${scenario.id}/review`)}
+                onClick={() => navigate(`/scenarios/${id}/review`)}
               >
-              AIレビュー
+                AIレビューを見る
+              </button>
+              <button
+                className="text-blue-600 underline"
+                onClick={() => navigate(`/scenarios/${id}/ai`)}
+              >
+                AIインサイトを見る
+              </button>
+              <button className="btn" onClick={() => navigate("/dashboard")}>
+                ダッシュボードへ
+              </button>
+              <button className="btn" onClick={() => navigate("/actions")}>
+                アクション一覧へ
               </button>
               <button className="btn btn--primary" onClick={createOrUpdate}>保存</button>
-              <button className="btn" onClick={resetForm}>新規（リセット）</button>
+              <button className="btn" onClick={resetForm}>新規作成に戻す</button>
             </div>
           </div>
 
           {/* RIGHT: JSON debug */}
           <div style={{ flex: 1, minWidth: 320 }}>
-            <div className="h2">確認用JSON</div>
+            <div className="h2">確認用JSON（上級者向け）</div>
             <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
               {JSON.stringify(payload, null, 2)}
             </pre>
 
             <div style={{ height: 12 }} />
             <div className="card" style={{ background: "rgba(255,255,255,.03)" }}>
-              <div className="h2">ここが “迷子” ポイント（超重要）</div>
+              <div className="h2">この画面の考え方</div>
               <ul className="small">
-                <li><b>Actions</b> は部品（単体）</li>
-                <li><b>Scenario</b> は「出し分けルール」</li>
-                <li><b>A/B ON時</b>：scenario.experiment.variants[*].actionRefs を編集する（これが配信内容）</li>
-                <li><b>A/B OFF時</b>：scenario.actionRefs を編集する</li>
-                <li>SDKに返すのはサーバーが actionRefs を join して作る <code>scenario.actions</code></li>
-                <li>goalは “conversionログ” を増やすための最小設定</li>
+                <li><b>アクション</b> は表示する部品です。</li>
+                <li><b>シナリオ</b> は「どの条件で何を出すか」を決めるルールです。</li>
+                <li><b>A/BテストON</b> のときは、各パターンごとにアクションを設定します。</li>
+                <li><b>A/BテストOFF</b> のときは、通常配信用のアクションを設定します。</li>
+                <li>サーバー側で actionRefs をもとに、実際に配信する actions を組み立てます。</li>
+                <li>コンバージョン条件は、成果地点の計測に使います。</li>
               </ul>
             </div>
           </div>
@@ -1016,19 +1119,22 @@ export default function ScenariosPage() {
       <div style={{ height: 14 }} />
 
       {/* LIST */}
-      <div className="card">
-        <div className="h2">一覧</div>
-        <table className="table">
+        <div className="card">
+          <div className="h2">シナリオ一覧</div>
+          <div className="small" style={{ opacity: 0.72, marginBottom: 8 }}>
+            現在のサイト: <b>{selectedSiteName || siteId || "-"}</b> / ワークスペース: <b>{selectedWorkspaceName || workspaceId || "-"}</b>
+          </div>
+          <table className="table">
           <thead>
             <tr>
-              <th>ID</th>
-              <th>siteId</th>
-              <th>name</th>
-              <th>status</th>
-              <th>priority</th>
+              <th>シナリオ</th>
+              <th>サイト</th>
+              <th>状態</th>
+              <th>優先度</th>
               <th>A/B</th>
-              <th>goal</th>
-              <th>actions</th>
+              <th>コンバージョン</th>
+              <th>アクション数</th>
+              <th>AIツール</th>
               <th></th>
             </tr>
           </thead>
@@ -1046,14 +1152,37 @@ export default function ScenariosPage() {
 
               return (
                 <tr key={r.id}>
-                  <td><code>{r.id}</code></td>
-                  <td><code>{r.data.siteId}</code></td>
-                  <td>{r.data.name}</td>
+                  <td>
+                    <div style={{ fontWeight: 700 }}>{r.data.name || "名称未設定"}</div>
+                    <div className="small" style={{ opacity: 0.72 }}>
+                      ID: <code>{r.id}</code>
+                    </div>
+                  </td>
+                  <td>
+                    {siteLabel(sites.find((s) => s.id === r.data.siteId)) || r.data.siteId}
+                  </td>
                   <td>{r.data.status}</td>
                   <td>{r.data.priority ?? 0}</td>
                   <td>{ab ? "ON" : "OFF"}</td>
                   <td className="small">{goalLabel}</td>
                   <td style={{ textAlign: "center" }}>{actionsCount}</td>
+
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <button
+                      className="btn"
+                      onClick={() => navigate(`/scenarios/${r.id}/review`)}
+                    >
+                      AIレビュー
+                    </button>
+                    <span style={{ width: 6, display: "inline-block" }} />
+                    <button
+                      className="btn"
+                      onClick={() => navigate(`/scenarios/${r.id}/ai`)}
+                    >
+                      AI
+                    </button>
+                  </td>
+
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button
                       className="btn"

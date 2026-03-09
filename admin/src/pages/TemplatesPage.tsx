@@ -59,6 +59,11 @@ function buildPreviewSrcDoc(opts: { html: string; css: string; data: Record<stri
 </html>`;
 }
 
+function workspaceLabel(workspaces: Array<{ id: string; data?: { name?: string } }>, workspaceId: string) {
+  const hit = workspaces.find((w) => w.id === workspaceId);
+  return String(hit?.data?.name || hit?.id || workspaceId || '');
+}
+
 const DEFAULTS: Record<TemplateDoc['type'], { html: string; css: string }> = {
   modal: {
     html: `
@@ -114,7 +119,7 @@ const DEFAULTS: Record<TemplateDoc['type'], { html: string; css: string }> = {
   {{#if body}}<div class="cx-toast__body">{{body}}</div>{{/if}}
   <div class="cx-toast__footer">
     {{#if cta_url}}<a class="cx-btn cx-btn--ghost" href="{{cta_url}}" target="_blank" rel="noopener">{{cta_url_text}}</a>{{/if}}
-    <button class="cx-btn cx-btn--primary" data-cx-close>{{cta_text}}</button>
+    <button className="cx-btn cx-btn--primary" data-cx-close>{{cta_text}}</button>
   </div>
 </div>
 `.trim(),
@@ -131,12 +136,14 @@ const DEFAULTS: Record<TemplateDoc['type'], { html: string; css: string }> = {
 };
 
 export default function TemplatesPage() {
-  const [workspaces, setWorkspaces] = useState<Array<{ id: string }>>([]);
+  const [workspaces, setWorkspaces] = useState<Array<{ id: string; data?: { name?: string } }>>([]);
   const [rows, setRows] = useState<Array<{ id: string; data: TemplateDoc }>>([]);
 
   useEffect(() => {
     const q = query(collection(db, 'workspaces'), orderBy('__name__'));
-    return onSnapshot(q, (snap) => setWorkspaces(snap.docs.map((d) => ({ id: d.id }))));
+    return onSnapshot(q, (snap) =>
+      setWorkspaces(snap.docs.map((d) => ({ id: d.id, data: d.data() as any })))
+    );
   }, []);
 
   useEffect(() => {
@@ -150,6 +157,8 @@ export default function TemplatesPage() {
   const [name, setName] = useState('Default');
   const [html, setHtml] = useState(DEFAULTS.modal.html);
   const [css, setCss] = useState(DEFAULTS.modal.css);
+
+  const selectedWorkspaceName = useMemo(() => workspaceLabel(workspaces, workspaceId), [workspaces, workspaceId]);
 
   const [sample, setSample] = useState<SampleData>({
     title: 'テスト表示',
@@ -192,51 +201,60 @@ export default function TemplatesPage() {
   return (
     <div className="container">
       <div className="card">
-        <h1 className="h1">Templates</h1>
-        <div className="small">モーダル/バナー/トーストの HTML/CSS を管理。Action から templateId を選ぶと SDK 側でこのテンプレが使われる。</div>
+        <h1 className="h1">テンプレート</h1>
+        <div className="small">モーダル・バナー・トーストの見た目を管理する画面です。</div>
+        <div className="small" style={{ opacity: 0.72 }}>アクションからテンプレートを選ぶと、この見た目が適用されます。</div>
         <div style={{ height: 14 }} />
 
         <div className="row" style={{ alignItems: 'flex-start' }}>
           <div style={{ flex: 1, minWidth: 280 }}>
-            <div className="h2">templateId</div>
+            <div className="small" style={{ opacity: 0.72, marginBottom: 8 }}>
+              現在のワークスペース: <b>{selectedWorkspaceName || workspaceId || '（未選択）'}</b>
+            </div>
+            <div className="h2">テンプレートID</div>
             <input className="input" value={id} onChange={(e) => setId(e.target.value)} />
             <div style={{ height: 10 }} />
 
-            <div className="h2">workspaceId</div>
+            <div className="h2">ワークスペース</div>
             <select className="input" value={workspaceId} onChange={(e) => setWorkspaceId(e.target.value)}>
-              {workspaces.map((w) => (
-                <option key={w.id} value={w.id}>{w.id}</option>
-              ))}
+            {workspaces.map((w) => {
+              const label = workspaceLabel(workspaces, w.id);
+              return (
+                <option key={w.id} value={w.id}>
+                  {label}{label !== w.id ? ` (${w.id})` : ''}
+                </option>
+              );
+            })}
             </select>
             <div style={{ height: 10 }} />
 
             <div className="row">
               <div style={{ flex: 1 }}>
-                <div className="h2">type</div>
+                <div className="h2">表示タイプ</div>
                 <select className="input" value={type} onChange={(e) => {
                   const t = e.target.value as TemplateDoc['type'];
                   setType(t);
                   setHtml(DEFAULTS[t].html);
                   setCss(DEFAULTS[t].css);
                 }}>
-                  <option value="modal">modal</option>
-                  <option value="banner">banner</option>
-                  <option value="toast">toast</option>
+                  <option value="modal">modal（モーダル）</option>
+                  <option value="banner">banner（バナー）</option>
+                  <option value="toast">toast（トースト）</option>
                 </select>
               </div>
               <div style={{ flex: 2 }}>
-                <div className="h2">name</div>
+                <div className="h2">テンプレート名</div>
                 <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
               </div>
             </div>
 
             <div style={{ height: 10 }} />
-            <div className="h2">HTML</div>
+            <div className="h2">HTMLテンプレート</div>
             <textarea className="input" style={{ minHeight: 240, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }} value={html} onChange={(e) => setHtml(e.target.value)} />
-            <div className="small">対応変数：title / body / image_url / cta_text / cta_url / cta_url_text。 <code>{'{{#if key}}...{{/if}}'}</code> も使える。</div>
+            <div className="small">差し込み変数：title / body / image_url / cta_text / cta_url / cta_url_text。 <code>{'{{#if key}}...{{/if}}'}</code> も使えます。</div>
 
             <div style={{ height: 10 }} />
-            <div className="h2">CSS</div>
+            <div className="h2">CSSスタイル</div>
             <textarea className="input" style={{ minHeight: 180, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }} value={css} onChange={(e) => setCss(e.target.value)} />
 
             <div style={{ height: 14 }} />
@@ -244,35 +262,35 @@ export default function TemplatesPage() {
           </div>
 
           <div style={{ flex: 1, minWidth: 280 }}>
-            <div className="h2">プレビュー（Phase 1）</div>
-            <div className="small">※ scripts は実行しない（iframe sandbox）。固定配置のテンプレでも見えるように、iframe内では position を少し補正して表示する。</div>
+            <div className="h2">プレビュー</div>
+            <div className="small">安全のため script は実行しません。固定表示のテンプレートでも見やすいように iframe 内で補正しています。</div>
             <div style={{ height: 10 }} />
 
             <div className="card" style={{ background: 'rgba(255,255,255,.03)' }}>
               <div className="h2">サンプル値</div>
-              <div className="small">この値で <code>{'{{title}}'}</code> などが差し込まれる</div>
+              <div className="small">ここで入力した値を使って、テンプレートの見た目を確認できます。</div>
               <div style={{ height: 10 }} />
-              <div className="h2">title</div>
+              <div className="h2">タイトル</div>
               <input className="input" value={sample.title} onChange={(e) => setSample((s) => ({ ...s, title: e.target.value }))} />
               <div style={{ height: 10 }} />
-              <div className="h2">body</div>
+              <div className="h2">本文</div>
               <textarea className="input" value={sample.body} onChange={(e) => setSample((s) => ({ ...s, body: e.target.value }))} />
               <div style={{ height: 10 }} />
-              <div className="h2">image_url</div>
+              <div className="h2">画像URL</div>
               <input className="input" value={sample.image_url} onChange={(e) => setSample((s) => ({ ...s, image_url: e.target.value }))} />
               <div style={{ height: 10 }} />
               <div className="row">
                 <div style={{ flex: 1 }}>
-                  <div className="h2">cta_text</div>
+                  <div className="h2">CTAボタン文言</div>
                   <input className="input" value={sample.cta_text} onChange={(e) => setSample((s) => ({ ...s, cta_text: e.target.value }))} />
                 </div>
                 <div style={{ flex: 2 }}>
-                  <div className="h2">cta_url</div>
+                  <div className="h2">遷移先URL</div>
                   <input className="input" value={sample.cta_url} onChange={(e) => setSample((s) => ({ ...s, cta_url: e.target.value }))} />
                 </div>
               </div>
               <div style={{ height: 10 }} />
-              <div className="h2">cta_url_text</div>
+              <div className="h2">補助リンク文言</div>
               <input className="input" value={sample.cta_url_text} onChange={(e) => setSample((s) => ({ ...s, cta_url_text: e.target.value }))} />
             </div>
 
@@ -290,7 +308,7 @@ export default function TemplatesPage() {
 
             <div style={{ height: 12 }} />
 
-            <div className="h2">データ（JSON）</div>
+            <div className="h2">確認用JSON（上級者向け）</div>
             <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(payload, null, 2)}</pre>
           </div>
         </div>
@@ -299,23 +317,31 @@ export default function TemplatesPage() {
       <div style={{ height: 14 }} />
 
       <div className="card">
-        <div className="h2">一覧</div>
+        <div className="h2">テンプレート一覧</div>
+        <div className="small" style={{ opacity: 0.72, marginBottom: 8 }}>
+          ワークスペース: <b>{selectedWorkspaceName || workspaceId || '（未選択）'}</b>
+        </div>
         <table className="table">
           <thead>
             <tr>
-              <th>ID</th>
-              <th>workspaceId</th>
-              <th>type</th>
-              <th>name</th>
+              <th>テンプレート</th>
+              <th>ワークスペース</th>
+              <th>表示タイプ</th>
+              <th>テンプレート名</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.id}>
-                <td><code>{r.id}</code></td>
-                <td><code>{r.data.workspaceId}</code></td>
-                <td>{r.data.type}</td>
+                <td>
+                  <div style={{ fontWeight: 700 }}>{r.data.name || '名称未設定'}</div>
+                  <div className="small" style={{ opacity: 0.72 }}>
+                    ID: <code>{r.id}</code>
+                  </div>
+                </td>
+                <td>{workspaceLabel(workspaces, r.data.workspaceId)}</td>
+                <td>{r.data.type === 'modal' ? 'モーダル' : r.data.type === 'banner' ? 'バナー' : 'トースト'}</td>
                 <td>{r.data.name}</td>
                 <td>
                   <button className="btn" onClick={() => {
@@ -325,9 +351,9 @@ export default function TemplatesPage() {
                     setName(r.data.name || 'Template');
                     setHtml(r.data.html || DEFAULTS[r.data.type].html);
                     setCss(r.data.css || DEFAULTS[r.data.type].css);
-                  }}>編集</button>
+                  }}>編集する</button>
                   <span style={{ width: 8, display: 'inline-block' }} />
-                  <button className="btn btn--danger" onClick={() => deleteDoc(doc(db, 'templates', r.id))}>削除</button>
+                  <button className="btn btn--danger" onClick={() => deleteDoc(doc(db, 'templates', r.id))}>削除する</button>
                 </td>
               </tr>
             ))}

@@ -1,11 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useParams } from "react-router-dom";
 import { collection, onSnapshot, orderBy, query, where } from "firebase/firestore";
-import { db } from "../firebase";
+import { db, apiPostJson } from "../firebase";
 import AdminPreviewWithPins from "../components/AdminPreviewWithPins";
 
-const API_BASE =
-  import.meta.env.VITE_API_BASE ||
-  "https://asia-northeast1-cx-platform-v1.cloudfunctions.net/api";
 
 function isoDay(d: Date) {
   const y = d.getFullYear();
@@ -21,11 +19,14 @@ type ScenarioDoc = {
 };
 
 export default function ScenarioAiPage() {
+  const params = useParams();
+  const routeScenarioId = params?.scenarioId as string | undefined;
+
   const [sites, setSites] = useState<Array<{ id: string; data: any }>>([]);
   const [siteId, setSiteId] = useState<string>("");
 
   const [scenarios, setScenarios] = useState<Array<{ id: string; data: ScenarioDoc }>>([]);
-  const [scenarioId, setScenarioId] = useState<string>("");
+  const [scenarioId, setScenarioId] = useState<string>(() => routeScenarioId || "");
 
   const [day, setDay] = useState<string>(() => isoDay(new Date()));
   const [variantId, setVariantId] = useState<string>("na");
@@ -36,7 +37,37 @@ export default function ScenarioAiPage() {
   const [review, setReview] = useState<any | null>(null);
   const [insight, setInsight] = useState<any | null>(null);
 
-  const base = useMemo(() => API_BASE.replace(/\/$/, ""), []);
+
+  function safeNum(n: any) {
+    const v = Number(n);
+    return Number.isFinite(v) ? v : 0;
+  }
+
+  function formatInt(n: any) {
+    return safeNum(n).toLocaleString("ja-JP");
+  }
+
+  function siteLabel(site: { id: string; data: any } | undefined) {
+    if (!site) return "";
+    return String(site.data?.name || site.data?.siteName || site.id || "");
+  }
+
+  function MiniStat({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
+    return (
+      <div
+        className="card"
+        style={{
+          padding: 14,
+          border: "1px solid rgba(255,255,255,0.10)",
+          background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02))",
+        }}
+      >
+        <div className="small" style={{ opacity: 0.7 }}>{label}</div>
+        <div style={{ fontSize: 22, fontWeight: 900, marginTop: 6 }}>{value}</div>
+        {sub ? <div className="small" style={{ opacity: 0.6, marginTop: 6 }}>{sub}</div> : null}
+      </div>
+    );
+  }
 
   // sites
   useEffect(() => {
@@ -66,7 +97,13 @@ export default function ScenarioAiPage() {
       (snap) => {
         const list = snap.docs.map((d) => ({ id: d.id, data: d.data() as any }));
         setScenarios(list);
-        if (!scenarioId && list.length) setScenarioId(list[0].id);
+
+        if (routeScenarioId) {
+          const exists = list.find((s) => s.id === routeScenarioId);
+          if (exists) setScenarioId(routeScenarioId);
+        } else if (!scenarioId && list.length) {
+          setScenarioId(list[0].id);
+        }
       },
       (e) => setErr(`scenarios read failed: ${e?.code || ""} ${e?.message || e}`)
     );
@@ -78,40 +115,38 @@ export default function ScenarioAiPage() {
     return s?.data?.name || scenarioId || "";
   }, [scenarios, scenarioId]);
 
-  async function postJson(path: string, body: any) {
-    const res = await fetch(`${base}${path}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Site-Id": body?.site_id || siteId,
-      },
-      body: JSON.stringify(body),
-    });
-    const text = await res.text();
-    let data: any = null;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = { ok: false, raw: text };
-    }
-    if (!res.ok || !data?.ok) {
-      const msg = data?.message || data?.error || text;
-      throw new Error(`${res.status} ${msg}`);
-    }
-    return data;
-  }
+  const selectedSiteName = useMemo(() => {
+    const s = sites.find((x) => x.id === siteId);
+    return siteLabel(s) || siteId || "";
+  }, [sites, siteId]);
+
+  const stats = useMemo(() => {
+    const counts = insight?.counts || review?.counts || {};
+
+    return {
+      impressions: safeNum(counts?.impressions),
+      clicks: safeNum(counts?.clicks),
+      closes: safeNum(counts?.closes),
+      conversions: safeNum(counts?.conversions),
+    };
+  }, [insight, review]);
+
 
   async function runReview() {
     if (!siteId || !scenarioId || !day) return;
     setErr("");
     setLoading("review");
     try {
-      const data = await postJson("/v1/ai/review", {
-        site_id: siteId,
-        day,
-        scenario_id: scenarioId,
-        variant_id: variantId || "na",
-      });
+      const data = await apiPostJson(
+        "/v1/ai/review",
+        {
+          site_id: siteId,
+          day,
+          scenario_id: scenarioId,
+          variant_id: variantId || "na",
+        },
+        { siteId }
+      );
       setReview(data);
     } catch (e: any) {
       console.error(e);
@@ -127,31 +162,39 @@ export default function ScenarioAiPage() {
     setLoading("insight");
     try {
       // まず stats/summary で counts を取る
-      const sum = await postJson("/v1/stats/summary", {
-        site_id: siteId,
-        day,
-        scope: "scenario",
-        scope_id: scenarioId,
-        variant_id: variantId || "na",
-      });
+      const sum = await apiPostJson(
+        "/v1/stats/summary",
+        {
+          site_id: siteId,
+          day,
+          scope: "scenario",
+          scope_id: scenarioId,
+          variant_id: variantId || "na",
+        },
+        { siteId }
+      );
 
-      const data = await postJson("/v1/ai/insight", {
-        site_id: siteId,
-        day,
-        scope: "scenario",
-        scope_id: scenarioId,
-        variant_id: variantId || "na",
-        metrics: {
-          impressions: sum?.counts?.impressions ?? 0,
-          clicks: sum?.counts?.clicks ?? 0,
-          closes: sum?.counts?.closes ?? 0,
-          conversions: sum?.counts?.conversions ?? 0,
+      const data = await apiPostJson(
+        "/v1/ai/insight",
+        {
+          site_id: siteId,
+          day,
+          scope: "scenario",
+          scope_id: scenarioId,
+          variant_id: variantId || "na",
+          metrics: {
+            impressions: sum?.counts?.impressions ?? 0,
+            clicks: sum?.counts?.clicks ?? 0,
+            closes: sum?.counts?.closes ?? 0,
+            conversions: sum?.counts?.conversions ?? 0,
+          },
+          context: {
+            scenario_name: scenarioName,
+            url_hint: "https://branberyheag.jp/",
+          },
         },
-        context: {
-          scenario_name: scenarioName,
-          url_hint: "https://branberyheag.jp/",
-        },
-      });
+        { siteId }
+      );
 
       setInsight(data);
     } catch (e: any) {
@@ -165,32 +208,51 @@ export default function ScenarioAiPage() {
   return (
     <div className="container">
       <div className="card" style={{ minWidth: 0 }}>
-        <h1 className="h1">AI</h1>
+        <h1 className="h1">AIインサイト</h1>
         <div className="small" style={{ opacity: 0.85 }}>
-          ここは <b>完成形のAI分析パネル</b>（レビュー + 運用アシスタント）をまとめる場所。
+          AIレビューと運用アシスタントをまとめて確認する画面です。
         </div>
 
         <div style={{ height: 10 }} />
 
+        <div className="small" style={{ opacity: 0.72, marginBottom: 8 }}>
+          現在のサイト: <b>{selectedSiteName || "-"}</b>
+        </div>
+
         <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <div className="h2" style={{ margin: 0 }}>site</div>
+          <div className="h2" style={{ margin: 0 }}>サイト</div>
           <select className="input" value={siteId} onChange={(e) => setSiteId(e.target.value)}>
-            {sites.map((s) => (
-              <option key={s.id} value={s.id}>{s.id}</option>
-            ))}
+            {sites.map((s) => {
+              const label = siteLabel(s);
+              return (
+                <option key={s.id} value={s.id}>
+                  {label}{label !== s.id ? ` (${s.id})` : ""}
+                </option>
+              );
+            })}
           </select>
 
-          <div className="h2" style={{ margin: 0 }}>scenario</div>
-          <select className="input" value={scenarioId} onChange={(e) => setScenarioId(e.target.value)}>
+          <div className="h2" style={{ margin: 0 }}>シナリオ</div>
+          <select
+            className="input"
+            value={scenarioId}
+            onChange={(e) => setScenarioId(e.target.value)}
+            disabled={!!routeScenarioId}
+          >
             {scenarios.map((s) => (
               <option key={s.id} value={s.id}>{s.data?.name ? `${s.data.name} (${s.id})` : s.id}</option>
             ))}
           </select>
+          {routeScenarioId ? (
+            <div className="small" style={{ opacity: 0.7 }}>
+              Scenario固定（Scenarioページから開かれました）
+            </div>
+          ) : null}
 
-          <div className="h2" style={{ margin: 0 }}>day</div>
+          <div className="h2" style={{ margin: 0 }}>日付</div>
           <input className="input" type="date" value={day} onChange={(e) => setDay(e.target.value)} />
 
-          <div className="h2" style={{ margin: 0 }}>variant</div>
+          <div className="h2" style={{ margin: 0 }}>バリエーション</div>
           <input
             className="input"
             value={variantId}
@@ -218,9 +280,27 @@ export default function ScenarioAiPage() {
 
       <div style={{ height: 14 }} />
 
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+          gap: 12,
+        }}
+      >
+        <MiniStat label="表示回数" value={formatInt(stats.impressions)} />
+        <MiniStat label="クリック数" value={formatInt(stats.clicks)} />
+        <MiniStat label="閉じる操作" value={formatInt(stats.closes)} />
+        <MiniStat label="コンバージョン" value={formatInt(stats.conversions)} />
+      </div>
+
+      <div style={{ height: 14 }} />
+
       {/* Assistant result */}
       <div className="card" style={{ minWidth: 0 }}>
         <div className="h2">運用アシスタント（AI Insight）</div>
+        <div className="small" style={{ opacity: 0.75 }}>
+          AIがデータを分析し、改善ポイントと次のアクションを提案します。
+        </div>
         {!insight?.ai ? (
           <div className="small" style={{ opacity: 0.8 }}>まだ生成してません。上の「AI運用アシスタント生成」を押してね。</div>
         ) : (
@@ -243,6 +323,9 @@ export default function ScenarioAiPage() {
       {/* Review result */}
       <div className="card" style={{ minWidth: 0 }}>
         <div className="h2">実画面レビュー（AI Review + Pins）</div>
+        <div className="small" style={{ opacity: 0.75 }}>
+          プレビュー上に改善ポイントをピン表示します。
+        </div>
         {!review?.packs ? (
           <div className="small" style={{ opacity: 0.8 }}>まだ生成してません。上の「AIレビュー生成」を押してね。</div>
         ) : (

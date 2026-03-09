@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="480" viewBox="0 0 1400 480">
+  <rect width="1400" height="480" fill="#ffffff"/>
+
+  <!-- ===== Icon ===== -->
+  <g id="icon" transform="translate(150,90)">
+    <circle cx="120" cy="150" r="95"
+            fill="none"
+            stroke="#2b2f36"
+            stroke-width="46"
+            stroke-linecap="round"
+            stroke-dasharray="520 120"
+            transform="rotate(-25 120 150)"/>
+    <circle cx="185" cy="95" r="16" fill="#2b2f36"/>
+    <circle cx="210" cy="70" r="22" fill="#00B8D9"/>
+  </g>
+
+  <!-- ===== Wordmark ===== -->
+  <text x="430" y="235"
+        font-family="Inter, Montserrat, Helvetica, Arial, sans-serif"
+        font-size="132"
+        font-weight="800"
+        letter-spacing="2"
+        fill="#2b2f36">MOKKEDA</text>
+
+  <!-- ===== Tagline (Helvetica, wider tracking) ===== -->
+  <text x="430" y="320"
+        font-family="Helvetica, Arial, sans-serif"
+        font-size="56"
+        font-weight="400"
+        letter-spacing="3"
+        fill="#2b2f36">Make CX Thankable.</text>
+</svg>

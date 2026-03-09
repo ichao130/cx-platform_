@@ -1,13 +1,10 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { onAuthStateChanged, getAuth } from "firebase/auth";
 import { collection, onSnapshot, orderBy, query, where } from "firebase/firestore";
-import { db } from "../firebase";
-import { LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from "recharts";
-import AdminPreviewWithPins from "../components/AdminPreviewWithPins";
+import { db, apiPostJson } from "../firebase";
 
-const API_BASE =
-  import.meta.env.VITE_API_BASE ||
-  "https://asia-northeast1-cx-platform-v1.cloudfunctions.net/api"; 
-// ↑自分のFunctionsのベースURLに合わせて
+
 
 type StatRow = {
   siteId: string;
@@ -20,15 +17,12 @@ type StatRow = {
   updatedAt?: any;
 };
 
-
-
 function badgeColor(grade: string) {
   if (grade === "good") return "#16a34a";
   if (grade === "ok") return "#2563eb";
   if (grade === "bad") return "#dc2626";
   return "#6b7280";
 }
-
 
 function isoDay(d: Date) {
   const y = d.getFullYear();
@@ -42,15 +36,65 @@ function safeNum(n: any) {
   return Number.isFinite(v) ? v : 0;
 }
 
+function formatInt(n: any) {
+  return safeNum(n).toLocaleString("ja-JP");
+}
+
+function workspaceNameFromSites(sites: Array<{ id: string; data: any }>, workspaceId: string) {
+  const hit = sites.find((s) => String(s.data?.workspaceId || "") === String(workspaceId || ""));
+  return String(hit?.data?.workspaceName || hit?.data?.workspace_name || "");
+}
+
+function siteLabel(site: { id: string; data: any } | undefined) {
+  if (!site) return "";
+  return String(site.data?.name || site.data?.siteName || site.id || "");
+}
+
+function scenarioLabel(scenario: { id: string; data: any } | undefined) {
+  if (!scenario) return "";
+  return String(scenario.data?.name || scenario.id || "");
+}
+
+function StatCard({
+  label,
+  value,
+  sub,
+}: {
+  label: string;
+  value: string | number;
+  sub?: string;
+}) {
+  return (
+    <div
+      className="card"
+      style={{
+        minWidth: 0,
+        padding: 14,
+        border: "1px solid rgba(255,255,255,0.10)",
+        background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02))",
+      }}
+    >
+      <div className="small" style={{ opacity: 0.72 }}>{label}</div>
+      <div style={{ fontSize: 26, fontWeight: 900, lineHeight: 1.1, marginTop: 6 }}>{value}</div>
+      {sub ? <div className="small" style={{ opacity: 0.62, marginTop: 6 }}>{sub}</div> : null}
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const [sites, setSites] = useState<Array<{ id: string; data: any }>>([]);
+  const [visibleWorkspaces, setVisibleWorkspaces] = useState<Array<{ id: string; data: any }>>([]);
+  const [scenarios, setScenarios] = useState<Array<{ id: string; data: any }>>([]);
   const [siteId, setSiteId] = useState<string>("");
+  const [currentUid, setCurrentUid] = useState<string>("");
 
+  const [workspaceId, setWorkspaceId] = useState<string>("");
   const [rows, setRows] = useState<StatRow[]>([]);
   const [err, setErr] = useState<string>("");
 
-  // date range (last 30 days)
+  // date range (last N days)
   const [days, setDays] = useState<number>(30);
+
   const [aiMap, setAiMap] = useState<Record<string, any>>({});
   const [loadingAi, setLoadingAi] = useState<string | null>(null);
 
@@ -58,185 +102,43 @@ export default function DashboardPage() {
   const [loadingAb, setLoadingAb] = useState(false);
   const [abErr, setAbErr] = useState<string>("");
 
-  // Phase2: とりあえず固定の scenario_id（後でUI化する）
-  const [abScenarioId, setAbScenarioId] = useState<string>("scn_y3ab6lj2_1772003107750");
-
-
-
-  async function generateAiInsight(payload: any) {
-    try {
-      setLoadingAi(String(payload.variant_id ?? "na"));
-
-      const base = API_BASE.replace(/\/$/, "");
-      const res = await fetch(`${base}/v1/ai/insight`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Site-Id": payload.site_id,
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const text = await res.text();
-      let data: any = null;
-      try { data = JSON.parse(text); } catch { data = { ok: false, raw: text }; }
-
-      if (!res.ok || !data?.ok) {
-        console.error("[ai/insight] failed:", res.status, data);
-        alert(`AI生成失敗: ${res.status}\n${data?.message || data?.error || text}`);
-        return;
-      }
-
-      setAiMap((prev) => ({
-        ...prev,
-        [`${payload.day}__${payload.variant_id ?? "na"}`]: data,
-      }));
-    } catch (e: any) {
-      console.error(e);
-      alert(`AI生成で例外: ${e?.message || String(e)}`);
-    } finally {
-      setLoadingAi(null);
+  // selected scenario (UI selector)
+  const [abScenarioId, setAbScenarioId] = useState<string>("");
+  // load scenarios for selected site
+  useEffect(() => {
+    if (!siteId) {
+      setScenarios([]);
+      setAbScenarioId("");
+      return;
     }
-  }
 
-  async function generateAiReview(payload: any) {
-    try {
-      setLoadingReview(true);
+    const q = query(
+      collection(db, "scenarios"),
+      where("siteId", "==", siteId),
+      orderBy("__name__")
+    );
 
-      const base = API_BASE.replace(/\/$/, "");
-      const res = await fetch(`${base}/v1/ai/review`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Site-Id": payload.site_id,
-        },
-        body: JSON.stringify(payload),
-      });
+    return onSnapshot(q, (snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, data: d.data() }));
+      setScenarios(list);
 
-      const text = await res.text();
-      let data: any = null;
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = { ok: false, raw: text };
+      const exists = !!abScenarioId && list.some((s) => s.id === abScenarioId);
+      if (!exists) {
+        setAbScenarioId(list[0]?.id || "");
       }
-
-      if (!res.ok || !data?.ok) {
-        console.error("[ai/review] failed:", res.status, data);
-        alert(`AIレビュー失敗: ${res.status}\n${data?.message || data?.error || text}`);
-        return;
-      }
-
-      setReviewData(data);
-    } catch (e: any) {
-      console.error(e);
-      alert(`AIレビューで例外: ${e?.message || String(e)}`);
-    } finally {
-      setLoadingReview(false);
-    }
-  }
-
-  async function loadAbSummary() {
-    if (!siteId || !latestDay) return;
-
-    try {
-      setLoadingAb(true);
-      setAbErr("");
-
-      const base = API_BASE.replace(/\/$/, "");
-      const res = await fetch(`${base}/v1/stats/summary`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Site-Id": siteId,
-        },
-        body: JSON.stringify({
-          site_id: siteId,
-          day: latestDay,
-          scope: "scenario",
-          scope_id: abScenarioId,
-          variant_id: null,
-        }),
-      });
-
-      const text = await res.text();
-      let data: any = null;
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = { ok: false, raw: text };
-      }
-
-      if (!res.ok || !data?.ok) {
-        console.error("[stats/summary] failed:", res.status, data);
-        setAbErr(`A/B集計失敗: ${res.status} ${data?.message || data?.error || text}`);
-        setAbSummary(null);
-        return;
-      }
-
-      setAbSummary(data);
-    } catch (e: any) {
-      console.error(e);
-      setAbErr(`A/B集計で例外: ${e?.message || String(e)}`);
-      setAbSummary(null);
-    } finally {
-      setLoadingAb(false);
-    }
-  }
-
+    });
+  }, [siteId, abScenarioId]);
 
   const [reviewData, setReviewData] = useState<any | null>(null);
   const [loadingReview, setLoadingReview] = useState(false);
-  // load sites
-  useEffect(() => {
-    const q = query(collection(db, "sites"), orderBy("__name__"));
-    return onSnapshot(
-      q,
-      (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, data: d.data() }));
-        setSites(list);
-        if (!siteId && list.length) setSiteId(list[0].id);
-      },
-      (e) => setErr(`sites read failed: ${e?.code || ""} ${e?.message || e}`)
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
-  // load stats_daily
-  useEffect(() => {
-    if (!siteId) return;
-
-    setErr("");
-    const end = new Date();
-    const start = new Date();
-    start.setDate(end.getDate() - Math.max(1, days) + 1);
-
-    const startDay = isoDay(start);
-    const endDay = isoDay(end);
-
-    // NOTE:
-    // where(siteId==) + where(day>=) + where(day<=) + orderBy(day)
-    // で composite index が必要になることがある（失敗したら err に出る）
-    const q = query(
-      collection(db, "stats_daily"),
-      where("siteId", "==", siteId),
-      where("day", ">=", startDay),
-      where("day", "<=", endDay),
-      orderBy("day", "asc")
-    );
-
-    return onSnapshot(
-      q,
-      (snap) => {
-        setRows(snap.docs.map((d) => d.data() as any));
-      },
-      (e) => {
-        console.error("[stats_daily] snapshot error:", e);
-        setRows([]);
-        setErr(`stats_daily read failed: ${e?.code || ""} ${e?.message || e}`);
-      }
-    );
-  }, [siteId, days]);
+  // Billing
+  const [billingData, setBillingData] = useState<any | null>(null);
+  const [billingForm, setBillingForm] = useState<{ plan: string; status: string; trial_days: number; billing_email: string }>(
+    { plan: "free", status: "trialing", trial_days: 14, billing_email: "" }
+  );
+  const [billingLoading, setBillingLoading] = useState(false);
+  const [billingErr, setBillingErr] = useState<string>("");
 
   // ---- aggregate (ALL variants merged) ----
   const chartData = useMemo(() => {
@@ -259,16 +161,17 @@ export default function DashboardPage() {
     return out;
   }, [rows]);
 
-  const latestDay = useMemo(() => {
-    return chartData.length ? chartData[chartData.length - 1].day : "";
-  }, [chartData]);
+const latestDay = useMemo(() => {
+  return chartData.length ? chartData[chartData.length - 1].day : "";
+}, [chartData]);
 
-
-  useEffect(() => {
-    // latestDay が取れてから自動取得
-    loadAbSummary();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [siteId, latestDay, abScenarioId]);
+  const selectedSite = useMemo(() => sites.find((s) => s.id === siteId), [sites, siteId]);
+  const selectedSiteName = useMemo(() => siteLabel(selectedSite), [selectedSite]);
+  const selectedWorkspaceName = useMemo(() => workspaceNameFromSites(sites, workspaceId), [sites, workspaceId]);
+  const scenarioName = useMemo(() => {
+    const hit = scenarios.find((s) => s.id === abScenarioId);
+    return scenarioLabel(hit) || abScenarioId || "";
+  }, [scenarios, abScenarioId]);
 
 
   const summaryTable = useMemo(() => {
@@ -290,13 +193,9 @@ export default function DashboardPage() {
       x.ctr = x.imp > 0 ? Math.round((x.clk / x.imp) * 1000) / 10 : 0;
     });
 
-    // 表示回数多い順などにしたいならここでsort
     out.sort((a, b) => b.imp - a.imp);
-
     return out;
   }, [rows]);
-
-
 
   const summary = useMemo(() => {
     let imp = 0, clkLink = 0, clk = 0, close = 0;
@@ -311,24 +210,293 @@ export default function DashboardPage() {
     return { imp, clkLink, clk, close, ctr };
   }, [rows]);
 
-  return (
-    <div className="container">
-      <div className="card" style={{ minWidth: 0 }}>
-        <h1 className="h1">Dashboard</h1>
+  const generateAiInsight = useCallback(async (payload: any) => {
+    try {
+      setLoadingAi(String(payload.variant_id ?? "na"));
 
-        <div className="small">stats_daily（直近N日 / 全variant合算）</div>
+      const data = await apiPostJson("/v1/ai/insight", payload, { siteId: payload.site_id });
+
+      if (!data?.ok) {
+        console.error("[ai/insight] failed:", data);
+        alert(`AI生成失敗:\n${data?.message || data?.error || JSON.stringify(data)}`);
+        return;
+      }
+
+      setAiMap((prev) => ({
+        ...prev,
+        [`${payload.day}__${payload.variant_id ?? "na"}`]: data,
+      }));
+    } catch (e: any) {
+      console.error(e);
+      alert(`AI生成で例外: ${e?.message || String(e)}`);
+    } finally {
+      setLoadingAi(null);
+    }
+  }, []);
+
+  const generateAiReview = useCallback(async (payload: any) => {
+    try {
+      setLoadingReview(true);
+
+      const data = await apiPostJson("/v1/ai/review", payload, { siteId: payload.site_id });
+
+      if (!data?.ok) {
+        console.error("[ai/review] failed:", data);
+        alert(`AIレビュー失敗:\n${data?.message || data?.error || JSON.stringify(data)}`);
+        return;
+      }
+
+      setReviewData(data);
+    } catch (e: any) {
+      console.error(e);
+      alert(`AIレビューで例外: ${e?.message || String(e)}`);
+    } finally {
+      setLoadingReview(false);
+    }
+  }, []);
+
+  const loadAbSummary = useCallback(async () => {
+    if (!siteId || !latestDay) return;
+
+    try {
+      setLoadingAb(true);
+      setAbErr("");
+
+      const data = await apiPostJson(
+        "/v1/stats/summary",
+        {
+          site_id: siteId,
+          day: latestDay,
+          scope: "scenario",
+          scope_id: abScenarioId,
+          variant_id: null,
+        },
+        { siteId }
+      );
+
+      if (!data?.ok) {
+        console.error("[stats/summary] failed:", data);
+        setAbErr(`A/B集計失敗: ${data?.message || data?.error || JSON.stringify(data)}`);
+        setAbSummary(null);
+        return;
+      }
+
+      setAbSummary(data);
+    } catch (e: any) {
+      console.error(e);
+      setAbErr(`A/B集計で例外: ${e?.message || String(e)}`);
+      setAbSummary(null);
+    } finally {
+      setLoadingAb(false);
+    }
+  }, [siteId, latestDay, abScenarioId]);
+
+  const loadBilling = useCallback(async () => {
+    if (!workspaceId) return;
+    try {
+      setBillingLoading(true);
+      setBillingErr("");
+
+      const data = await apiPostJson(
+        "/v1/workspaces/billing/get",
+        { workspace_id: workspaceId },
+        { siteId }
+      );
+
+      if (!data?.ok) {
+        setBillingErr(String(data?.message || data?.error || "billing get failed"));
+        setBillingData(null);
+        return;
+      }
+
+      setBillingData(data);
+      const b = data?.billing || data;
+
+      setBillingForm((prev) => ({
+        plan: String(b?.plan ?? prev.plan),
+        status: String(b?.status ?? prev.status),
+        trial_days: Number.isFinite(Number(b?.trial_days)) ? Number(b?.trial_days) : prev.trial_days,
+        billing_email: String(b?.billing_email ?? prev.billing_email),
+      }));
+    } catch (e: any) {
+      setBillingErr(String(e?.message || e));
+      setBillingData(null);
+    } finally {
+      setBillingLoading(false);
+    }
+  }, [workspaceId, siteId]);
+
+  useEffect(() => {
+    return onAuthStateChanged(getAuth(), (user) => {
+      const uid = user?.uid || "";
+      setCurrentUid(uid);
+      setSiteId("");
+      setWorkspaceId("");
+      setScenarios([]);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!currentUid) {
+      setVisibleWorkspaces([]);
+      return;
+    }
+
+    const q = query(
+      collection(db, "workspaces"),
+      where(`members.${currentUid}`, "in", ["owner", "admin", "member", "viewer"])
+    );
+
+    return onSnapshot(q, (snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, data: d.data() }));
+      setVisibleWorkspaces(list);
+    });
+  }, [currentUid]);
+
+  const visibleWorkspaceIds = useMemo(() => {
+    return new Set(visibleWorkspaces.map((w) => String(w.id || "")).filter(Boolean));
+  }, [visibleWorkspaces]);
+
+
+  const updateBilling = useCallback(async () => {
+    if (!workspaceId) return;
+    try {
+      setBillingLoading(true);
+      setBillingErr("");
+
+      const data = await apiPostJson(
+        "/v1/workspaces/billing/update",
+        {
+          workspace_id: workspaceId,
+          plan: billingForm.plan,
+          status: billingForm.status,
+          trial_days: Number(billingForm.trial_days || 0),
+          billing_email: billingForm.billing_email,
+        },
+        { siteId }
+      );
+
+      if (!data?.ok) {
+        setBillingErr(String(data?.message || data?.error || "billing update failed"));
+        return;
+      }
+
+      setBillingData(data);
+    } catch (e: any) {
+      setBillingErr(String(e?.message || e));
+    } finally {
+      setBillingLoading(false);
+    }
+  }, [workspaceId, billingForm, siteId]);
+
+  // load sites
+  useEffect(() => {
+    if (!currentUid) {
+      setSites([]);
+      return;
+    }
+
+    const q = query(collection(db, "sites"), orderBy("__name__"));
+    return onSnapshot(
+      q,
+      (snap) => {
+        const list = snap.docs
+          .map((d) => ({ id: d.id, data: d.data() }))
+          .filter((row) => {
+            const ws = String((row.data as any)?.workspaceId || "");
+            return !!ws && visibleWorkspaceIds.has(ws);
+          });
+
+        setSites(list);
+
+        const exists = !!siteId && list.some((s) => s.id === siteId);
+        if (!exists) {
+          const nextSiteId = list[0]?.id || "";
+          setSiteId(nextSiteId);
+          const ws = (list[0]?.data as any)?.workspaceId;
+          setWorkspaceId(typeof ws === "string" ? ws : "");
+        }
+      },
+      (e) => setErr(`sites read failed: ${e?.code || ""} ${e?.message || e}`)
+    );
+  }, [currentUid, siteId, visibleWorkspaceIds]);
+
+  useEffect(() => {
+    if (!sites.length) {
+      setSiteId("");
+      setWorkspaceId("");
+      return;
+    }
+
+    const hit = siteId ? sites.find((s) => s.id === siteId) : null;
+
+    if (!hit) {
+      setSiteId(sites[0].id);
+      const firstWs = (sites[0].data as any)?.workspaceId;
+      if (typeof firstWs === "string" && firstWs) setWorkspaceId(firstWs);
+      return;
+    }
+
+    const ws = (hit.data as any)?.workspaceId;
+    if (typeof ws === "string" && ws) setWorkspaceId(ws);
+  }, [siteId, sites]);
+
+  // load stats_daily
+  useEffect(() => {
+    if (!siteId) return;
+
+    setErr("");
+    const end = new Date();
+    const start = new Date();
+    start.setDate(end.getDate() - Math.max(1, days) + 1);
+
+    const startDay = isoDay(start);
+    const endDay = isoDay(end);
+
+    const q = query(
+      collection(db, "stats_daily"),
+      where("siteId", "==", siteId),
+      where("day", ">=", startDay),
+      where("day", "<=", endDay),
+      orderBy("day", "asc")
+    );
+
+    return onSnapshot(
+      q,
+      (snap) => setRows(snap.docs.map((d) => d.data() as any)),
+      (e) => {
+        console.error("[stats_daily] snapshot error:", e);
+        setRows([]);
+        setErr(`stats_daily read failed: ${e?.code || ""} ${e?.message || e}`);
+      }
+    );
+  }, [siteId, days]);
+
+  useEffect(() => {
+    if (!siteId || !latestDay || !abScenarioId) return;
+    loadAbSummary();
+  }, [siteId, latestDay, abScenarioId, loadAbSummary]);
+
+  return (
+    <div className="container" style={{ minWidth: 0 }}>
+      <div className="card" style={{ minWidth: 0 }}>
+        <h1 className="h1">ダッシュボード</h1>
+        <div className="small">選択中のサイトの反応状況、A/B結果、AIレビューをまとめて確認できます。</div>
+        <div className="small" style={{ opacity: 0.72 }}>直近の推移と主要KPIを、サイト名ベースで分かりやすく確認できます。</div>
 
         <div style={{ height: 12 }} />
 
-        <div className="row" style={{ gap: 10, alignItems: "center" }}>
-          <div className="h2" style={{ margin: 0 }}>site</div>
+        <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <div className="h2" style={{ margin: 0 }}>サイト</div>
           <select className="input" value={siteId} onChange={(e) => setSiteId(e.target.value)}>
             {sites.map((s) => (
-              <option key={s.id} value={s.id}>{s.id}</option>
+              <option key={s.id} value={s.id}>
+                {siteLabel(s)}{siteLabel(s) !== s.id ? ` (${s.id})` : ""}
+              </option>
             ))}
           </select>
 
-          <div className="h2" style={{ margin: 0 }}>days</div>
+          <div className="h2" style={{ margin: 0 }}>集計日数</div>
           <input
             className="input"
             type="number"
@@ -338,20 +506,205 @@ export default function DashboardPage() {
             max={365}
             onChange={(e) => setDays(Number(e.target.value || 30))}
           />
+
+          <div style={{ flex: 1 }} />
+
+          <div className="small" style={{ opacity: 0.75 }}>
+            ワークスペース: <b>{selectedWorkspaceName || workspaceId || "-"}</b>
+          </div>
+          <div className="small" style={{ opacity: 0.75 }}>
+            最新日: <b>{latestDay || "-"}</b>
+          </div>
+        </div>
+        <div style={{ height: 12 }} />
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: 12,
+          }}
+        >
+          <StatCard label="表示回数" value={formatInt(summary.imp)} sub={`${days}日集計`} />
+          <StatCard label="主要クリック" value={formatInt(summary.clkLink)} sub="主要KPI" />
+          <StatCard label="CTR" value={`${summary.ctr}%`} sub="クリック率" />
+          <StatCard label="閉じる操作" value={formatInt(summary.close)} sub="dismiss / close" />
         </div>
 
         <div style={{ height: 12 }} />
 
+          <div
+            className="card"
+            style={{
+              minWidth: 0,
+              border: "1px solid rgba(255,255,255,0.10)",
+              background: "rgba(255,255,255,0.03)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+              <div>
+                <div className="small" style={{ opacity: 0.68 }}>選択中のサイト</div>
+                <div style={{ fontWeight: 800, marginTop: 4 }}>{selectedSiteName || "-"}</div>
+                {selectedSiteName && siteId && selectedSiteName !== siteId ? (
+                  <div className="small" style={{ opacity: 0.58, marginTop: 2 }}>
+                    ID: {siteId}
+                  </div>
+                ) : null}
+              </div>
+              <div>
+                <div className="small" style={{ opacity: 0.68 }}>選択中のシナリオ</div>
+                <div style={{ fontWeight: 800, marginTop: 4 }}>{scenarioName || "-"}</div>
+                {scenarioName && abScenarioId && scenarioName !== abScenarioId ? (
+                  <div className="small" style={{ opacity: 0.58, marginTop: 2 }}>
+                    ID: {abScenarioId}
+                  </div>
+                ) : null}
+              </div>
+              <div>
+                <div className="small" style={{ opacity: 0.68 }}>ワークスペース</div>
+                <div style={{ fontWeight: 800, marginTop: 4 }}>{selectedWorkspaceName || workspaceId || "-"}</div>
+              </div>
+              <div>
+                <div className="small" style={{ opacity: 0.68 }}>読み込み件数 / 日数</div>
+                <div style={{ fontWeight: 800, marginTop: 4 }}>{rows.length} / {chartData.length}</div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ height: 12 }} />
+
+        <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+          <button
+            className="btn"
+            onClick={() => abScenarioId && navigate(`/scenarios/${abScenarioId}/review`)}
+            disabled={!abScenarioId}
+          >
+            AIレビューを見る
+          </button>
+          <button
+            className="btn"
+            onClick={() => abScenarioId && navigate(`/scenarios/${abScenarioId}/ai`)}
+            disabled={!abScenarioId}
+          >
+            AI分析を見る
+          </button>
+          <button
+            className="btn"
+            onClick={() => navigate("/workspace/members")}
+          >
+            メンバー管理
+          </button>
+          <button
+            className="btn"
+            onClick={() => navigate("/workspace/billing")}
+          >
+            契約 / Billing
+          </button>
+          <button
+            className="btn"
+            onClick={() => navigate("/scenarios")}
+          >
+            シナリオ一覧
+          </button>
+        </div>
+
+        <div style={{ height: 12 }} />
+
+        {/* Workspace / Billing */}
         <div
           className="card"
           style={{
             marginTop: 8,
             border: "1px solid rgba(255,255,255,0.10)",
             background: "rgba(0,0,0,0.20)",
+            minWidth: 0,
           }}
         >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div className="h2" style={{ margin: 0 }}>契約 / Billing</div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <button onClick={loadBilling} disabled={!workspaceId || billingLoading}>
+                {billingLoading ? "読込中..." : "現在の契約情報を取得"}
+              </button>
+              <button onClick={updateBilling} disabled={!workspaceId || billingLoading}>
+                {billingLoading ? "更新中..." : "契約情報を更新"}
+              </button>
+            </div>
+          </div>
+          <div className="small" style={{ opacity: 0.8 }}>workspace</div>
+          <div style={{ height: 10 }} />
+
+          <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <div className="small" style={{ opacity: 0.8 }}>workspace</div>
+            <input
+              className="input"
+              value={workspaceId}
+              onChange={(e) => setWorkspaceId(e.target.value)}
+              style={{ minWidth: 320, flex: "1 1 320px" }}
+              placeholder="workspace ID"
+            />
+          </div>
+
+          <div style={{ height: 10 }} />
+
+          <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <div className="small" style={{ opacity: 0.8 }}>plan</div>
+            <select className="input" value={billingForm.plan} onChange={(e) => setBillingForm((p) => ({ ...p, plan: e.target.value }))}>
+              <option value="free">free</option>
+              <option value="pro">pro</option>
+              <option value="enterprise">enterprise</option>
+            </select>
+
+            <div className="small" style={{ opacity: 0.8 }}>status</div>
+            <select className="input" value={billingForm.status} onChange={(e) => setBillingForm((p) => ({ ...p, status: e.target.value }))}>
+              <option value="trialing">trialing</option>
+              <option value="active">active</option>
+              <option value="past_due">past_due</option>
+              <option value="canceled">canceled</option>
+            </select>
+
+            <div className="small" style={{ opacity: 0.8 }}>trial_days</div>
+            <input
+              className="input"
+              type="number"
+              value={billingForm.trial_days}
+              min={0}
+              max={365}
+              style={{ width: 110 }}
+              onChange={(e) => setBillingForm((p) => ({ ...p, trial_days: Number(e.target.value || 0) }))}
+            />
+
+            <div className="small" style={{ opacity: 0.8 }}>billing_email</div>
+            <input
+              className="input"
+              value={billingForm.billing_email}
+              onChange={(e) => setBillingForm((p) => ({ ...p, billing_email: e.target.value }))}
+              style={{ minWidth: 220, flex: "1 1 220px" }}
+              placeholder="billing@example.com"
+            />
+          </div>
+
+          {billingErr ? (
+            <div className="small" style={{ marginTop: 10, color: "#ff6b6b", whiteSpace: "pre-wrap" }}>{billingErr}</div>
+          ) : null}
+
+          {billingData ? (
+            <div className="small" style={{ marginTop: 10, opacity: 0.9, whiteSpace: "pre-wrap" }}>
+              {JSON.stringify(billingData, null, 2)}
+            </div>
+          ) : (
+            <div className="small" style={{ marginTop: 10, opacity: 0.75 }}>
+              まだ契約情報を読み込んでいません（workspace を確認して「現在の契約情報を取得」を押してください）。
+            </div>
+          )}
+        </div>
+
+        <div style={{ height: 12 }} />
+
+        {/* AIレビュー */}
+        <div className="card" style={{ marginTop: 8, border: "1px solid rgba(255,255,255,0.10)", background: "rgba(0,0,0,0.20)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-            <div className="h2" style={{ margin: 0 }}>AIレビュー（画面プレビュー）</div>
+            <div className="h2" style={{ margin: 0 }}>AIレビュー（画面プレビュー付き）</div>
             <button
               onClick={() =>
                 generateAiReview({
@@ -373,11 +726,12 @@ export default function DashboardPage() {
 
           <div style={{ height: 12 }} />
 
+          <div className="small" style={{ opacity: 0.72, marginBottom: 10 }}>
+            プレビュー＋注釈ピンで、どこを改善すべきかを視覚的に確認できます。
+          </div>
+
           {reviewData?.packs?.length ? (
-            <AdminPreviewWithPins
-              packs={reviewData.packs}
-              initialVariantId={reviewData.packs?.[0]?.variantId || "na"}
-            />
+            <AdminPreviewWithPins packs={reviewData.packs} initialVariantId={reviewData.packs?.[0]?.variantId || "na"} />
           ) : (
             <div className="small" style={{ opacity: 0.8 }}>
               まだAIレビュー結果がありません（右上のボタンで生成）
@@ -385,36 +739,50 @@ export default function DashboardPage() {
           )}
         </div>
 
-        <div
-          className="card"
-          style={{
-            marginTop: 12,
-            border: "1px solid rgba(255,255,255,0.10)",
-            background: "rgba(0,0,0,0.20)",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-            <div className="h2" style={{ margin: 0 }}>A/B 統計（stats/summary）</div>
-            <button onClick={() => loadAbSummary()} disabled={!latestDay || !abScenarioId || loadingAb}>
-              {loadingAb ? "更新中..." : "更新"}
-            </button>
+        {/* A/B */}
+        <div className="card" style={{ marginTop: 12, border: "1px solid rgba(255,255,255,0.10)", background: "rgba(0,0,0,0.20)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div className="h2" style={{ margin: 0 }}>A/B 結果サマリー</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button onClick={() => abScenarioId && navigate(`/scenarios/${abScenarioId}/review`)} disabled={!abScenarioId}>
+                AIレビューを見る
+              </button>
+              <button onClick={() => abScenarioId && navigate(`/scenarios/${abScenarioId}/ai`)} disabled={!abScenarioId}>
+                AI分析を見る
+              </button>
+              <button onClick={() => navigate("/scenarios")}>
+                シナリオ一覧
+              </button>
+              <button onClick={() => loadAbSummary()} disabled={!latestDay || !abScenarioId || loadingAb}>
+                {loadingAb ? "更新中..." : "集計を更新"}
+              </button>
+            </div>
           </div>
 
           <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
-            ※ variant_id:null でAPIを叩いて、variants / ab（あれば）をそのまま表示する。
+            ※ 選択中 scenario を対象に variant_id:null でAPIを叩き、variants / ab（あれば）をそのまま表示します。scenario が無い場合は先に Scenario を作成してください。
           </div>
 
           <div style={{ height: 10 }} />
 
           <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <div className="small" style={{ opacity: 0.8 }}>scenario_id</div>
-            <input
+            <div className="small" style={{ opacity: 0.8 }}>scenario</div>
+            <select
               className="input"
               value={abScenarioId}
               onChange={(e) => setAbScenarioId(e.target.value)}
               style={{ minWidth: 320, flex: "1 1 320px" }}
-              placeholder="scn_..."
-            />
+              disabled={!scenarios.length}
+            >
+              {!scenarios.length ? (
+                <option value="">scenario がありません</option>
+              ) : null}
+              {scenarios.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {scenarioLabel(s)}{scenarioLabel(s) !== s.id ? ` (${s.id})` : ""}
+                </option>
+              ))}
+            </select>
             <div className="small" style={{ opacity: 0.8 }}>day</div>
             <input className="input" value={latestDay || ""} readOnly style={{ width: 140, opacity: 0.9 }} />
           </div>
@@ -430,6 +798,60 @@ export default function DashboardPage() {
               </div>
 
               <div style={{ height: 8 }} />
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                  gap: 10,
+                  marginBottom: 10,
+                }}
+              >
+                <StatCard label="TOTAL Imp" value={formatInt(abSummary?.counts?.impressions)} />
+                <StatCard label="TOTAL Click" value={formatInt(abSummary?.counts?.click_links)} />
+                <StatCard label="TOTAL CTR" value={`${safeNum(abSummary?.metrics?.link_ctr ?? abSummary?.metrics?.ctr)}%`} />
+                <StatCard label="Winner" value={String(abSummary?.ab?.winner ?? "-")} />
+              </div>
+
+              <div
+                className="card"
+                style={{
+                  minWidth: 0,
+                  marginBottom: 10,
+                  border: "1px solid rgba(255,255,255,0.10)",
+                  background: "rgba(255,255,255,0.03)",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+                  <div>
+                    <div className="small" style={{ opacity: 0.68 }}>A/B判定サマリー</div>
+                    <div style={{ fontSize: 22, fontWeight: 900, marginTop: 4 }}>
+                      {String(abSummary?.ab?.winner ?? "-")}
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <div className="small" style={{ opacity: 0.78 }}>
+                      significant: <b>{String(abSummary?.ab?.significant ?? "-")}</b>
+                    </div>
+                    <div className="small" style={{ opacity: 0.78 }}>
+                      p-value: <b>{String(abSummary?.ab?.p_value ?? abSummary?.ab?.pValue ?? "-")}</b>
+                    </div>
+                    <div className="small" style={{ opacity: 0.78 }}>
+                      lift_abs: <b>{String(abSummary?.ab?.lift_abs ?? abSummary?.ab?.liftAbs ?? "-")}</b>
+                    </div>
+                    <div className="small" style={{ opacity: 0.78 }}>
+                      lift_rel: <b>{String(abSummary?.ab?.lift_rel ?? abSummary?.ab?.liftRel ?? "-")}</b>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="small" style={{ opacity: 0.68, marginTop: 10, lineHeight: 1.8 }}>
+                  {abSummary?.ab?.winner
+                    ? `現在の暫定勝者は ${String(abSummary?.ab?.winner)} です。significant と p-value を見ながら切替判断します。`
+                    : "まだ winner は判定されていません。十分な impressions と click が集まるまで継続観測します。"}
+                </div>
+              </div>
 
               <table className="table">
                 <thead>
@@ -457,7 +879,7 @@ export default function DashboardPage() {
               {Array.isArray(abSummary?.variants) && abSummary.variants.length ? (
                 <>
                   <div style={{ height: 10 }} />
-                  <div className="h2" style={{ margin: 0, fontSize: 14 }}>Variants</div>
+                  <div className="h2" style={{ margin: 0, fontSize: 14 }}>バリエーション別結果</div>
                   <div style={{ height: 6 }} />
                   <table className="table">
                     <thead>
@@ -493,20 +915,13 @@ export default function DashboardPage() {
               {abSummary?.ab ? (
                 <>
                   <div style={{ height: 10 }} />
-                  <div className="h2" style={{ margin: 0, fontSize: 14 }}>A/B z検定</div>
+                  <div className="h2" style={{ margin: 0, fontSize: 14 }}>A/B判定（統計）</div>
                   <div style={{ height: 6 }} />
                   <div className="small" style={{ opacity: 0.9, lineHeight: 1.7 }}>
                     p-value: <b>{String(abSummary.ab.p_value ?? abSummary.ab.pValue ?? "-")}</b> / significant: <b>{String(abSummary.ab.significant)}</b> / winner: <b>{String(abSummary.ab.winner ?? "-")}</b>
                     <br />
                     lift_abs: <b>{String(abSummary.ab.lift_abs ?? abSummary.ab.liftAbs ?? "-")}</b> / lift_rel: <b>{String(abSummary.ab.lift_rel ?? abSummary.ab.liftRel ?? "-")}</b>
                   </div>
-                  {Array.isArray(abSummary.ab.reasons) && abSummary.ab.reasons.length ? (
-                    <ul>
-                      {abSummary.ab.reasons.map((t: string, i: number) => (
-                        <li key={i}>{t}</li>
-                      ))}
-                    </ul>
-                  ) : null}
                 </>
               ) : null}
 
@@ -552,20 +967,22 @@ export default function DashboardPage() {
       <div style={{ height: 14 }} />
 
       <div className="card" style={{ minWidth: 0 }}>
-        <div className="h2">Impression / Click_link</div>
+        <div className="h2">表示回数 / 主要クリック</div>
+        <div className="small" style={{ opacity: 0.68, marginBottom: 8 }}>
+          日別の表示回数と主要クリックを重ねて確認します。
+        </div>
         <div style={{ height: 320, minHeight: 320, width: "100%", minWidth: 0 }}>
           {chartData.length ? (
-
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData}>
-              <XAxis dataKey="day" />
-              <YAxis />
-              <Tooltip />
-              <Legend />
-              <Line type="monotone" dataKey="impression" name="impression" dot={false} />
-              <Line type="monotone" dataKey="click_link" name="click_link" dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData}>
+                <XAxis dataKey="day" />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Line type="monotone" dataKey="impression" name="impression" dot={false} />
+                <Line type="monotone" dataKey="click_link" name="click_link" dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
           ) : (
             <div className="small">データがありません</div>
           )}
@@ -575,18 +992,21 @@ export default function DashboardPage() {
       <div style={{ height: 14 }} />
 
       <div className="card" style={{ minWidth: 0 }}>
-        <div className="h2">CTR（click_link / impression）%</div>
-          <div style={{ height: 320, minHeight: 320, width: "100%", minWidth: 0 }}>
+        <div className="h2">CTR（クリック率）</div>
+        <div className="small" style={{ opacity: 0.68, marginBottom: 8 }}>
+          クリック率の推移。A/Bや改善後の変化を確認するための指標です。
+        </div>
+        <div style={{ height: 320, minHeight: 320, width: "100%", minWidth: 0 }}>
           {chartData.length ? (
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData}>
-              <XAxis dataKey="day" />
-              <YAxis />
-              <Tooltip />
-              <Legend />
-              <Line type="monotone" dataKey="ctr" name="CTR%" dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData}>
+                <XAxis dataKey="day" />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Line type="monotone" dataKey="ctr" name="CTR%" dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
           ) : (
             <div className="small">データがありません</div>
           )}
@@ -596,7 +1016,22 @@ export default function DashboardPage() {
       <div style={{ height: 14 }} />
 
       <div className="card">
-        <div className="h2">{days}日まとめ</div>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <div>
+            <div className="h2">{days}日まとめ / バリエーション別インサイト</div>
+            <div className="small" style={{ opacity: 0.68, marginBottom: 8 }}>
+              期間集計と、variantごとのAI所見をまとめて確認できます。
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="btn" onClick={() => abScenarioId && navigate(`/scenarios/${abScenarioId}/ai`)} disabled={!abScenarioId}>
+              AI分析を見る
+            </button>
+            <button className="btn" onClick={() => abScenarioId && navigate(`/scenarios/${abScenarioId}/review`)} disabled={!abScenarioId}>
+              AIレビューを見る
+            </button>
+          </div>
+        </div>
         <table className="table">
           <thead>
             <tr>
@@ -617,7 +1052,6 @@ export default function DashboardPage() {
             </tr>
           </tbody>
         </table>
-
 
         {summaryTable.map((r) => {
           const day = latestDay; // 最新日
@@ -665,7 +1099,7 @@ export default function DashboardPage() {
                       },
                     })
                   }
-                  disabled={!day || loadingAi === String(r.v ?? "na")} // ★ dayが空なら押せない
+                  disabled={!day || loadingAi === String(r.v ?? "na")}
                 >
                   {loadingAi === String(r.v ?? "na") ? "生成中..." : "AI分析を生成"}
                 </button>
@@ -687,21 +1121,6 @@ export default function DashboardPage() {
             </div>
           );
         })}
-
-
-
-
-        {!rows.length && !err ? (
-          <div className="small" style={{ marginTop: 10, opacity: 0.8 }}>
-            データが0件。原因候補：
-            <ul>
-              <li>siteId が違う（sites の先頭が別siteになってる）</li>
-              <li>stats_daily の day が範囲外（days を増やしてみて）</li>
-              <li>Firestore rules で読めてない（本来は err が出る）</li>
-              <li>index が未作成（err に出る）</li>
-            </ul>
-          </div>
-        ) : null}
       </div>
     </div>
   );

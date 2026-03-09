@@ -42,3 +42,55 @@ export async function requireAuthUid(req: Request): Promise<string> {
   if (!decoded?.uid) throw new Error("invalid_token");
   return decoded.uid;
 }
+
+/**
+ * Extract workspaceId from header.
+ * We standardize on: x-workspace-id
+ */
+export function extractWorkspaceId(req: Request): string {
+  const wid = req.header("x-workspace-id");
+  if (!wid) throw new Error("missing_workspace_id");
+  return wid;
+}
+
+/**
+ * Require both authenticated user and workspaceId.
+ * Returns { uid, workspaceId }
+ */
+export async function requireAuthWithWorkspace(
+  req: Request
+): Promise<{ uid: string; workspaceId: string }> {
+  const uid = await requireAuthUid(req);
+  const workspaceId = extractWorkspaceId(req);
+  return { uid, workspaceId };
+}
+
+/**
+ * Simple CORS handler for admin APIs.
+ * Call at the top of route handler.
+ */
+export function corsForAdmin(req: Request, res: any) {
+  const origin = req.header("Origin");
+  if (origin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  }
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-workspace-id, x-site-id");
+  res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS");
+
+  if (req.method === "OPTIONS") {
+    res.status(204).end();
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Standard error → HTTP status mapping.
+ */
+export function resolveHttpStatusFromError(e: any): number {
+  const msg = e?.message || "";
+  if (msg === "missing_authorization" || msg === "invalid_token") return 401;
+  if (msg === "missing_workspace_id") return 400;
+  return 400;
+}
