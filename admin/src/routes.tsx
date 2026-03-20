@@ -15,9 +15,11 @@ import WorkspaceMembersPage from "./pages/WorkspaceMembersPage";
 import WorkspaceBillingPage from "./pages/WorkspaceBillingPage";
 import AcceptInvitePage from "./pages/AcceptInvitePage";
 import PlansPage from "./pages/PlansPage";
+import AnalyticsPage from "./pages/AnalyticsPage";
 
 type AccessKey =
   | "dashboard"
+  | "analytics"
   | "workspaces"
   | "sites"
   | "scenarios"
@@ -65,6 +67,7 @@ export default function AppRoutes({ canAccess, workspaceRole }: AppRoutesProps) 
         <Route path="/invite" element={<AcceptInvitePage />} />
 
         <Route path="/dashboard" element={<Guard allow={canShow(canAccess, "dashboard")} title="ダッシュボード"><DashboardPage /></Guard>} />
+        <Route path="/analytics" element={<Guard allow={canShow(canAccess, "analytics")} title="流入計測"><AnalyticsPage /></Guard>} />
         <Route path="/workspaces" element={<Guard allow={canShow(canAccess, "workspaces")} title="ワークスペース"><WorkspacesPage /></Guard>} />
         <Route path="/sites" element={<Guard allow={canShow(canAccess, "sites")} title="サイト"><SitesPage /></Guard>} />
         <Route path="/scenarios" element={<Guard allow={canShow(canAccess, "scenarios")} title="シナリオ"><ScenariosPage /></Guard>} />

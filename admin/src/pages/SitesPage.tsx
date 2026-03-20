@@ -168,7 +168,7 @@ export default function SitesPage() {
   const embedTag = useMemo(() => {
     const safeSiteId = String(id || '').trim();
     const safePublicKey = String(publicKey || '').trim();
-    return `<script\n  src="https://YOUR_HOSTING_DOMAIN/sdk.js"\n  data-site-id="${safeSiteId}"\n  data-site-key="${safePublicKey}"\n  data-api-base="https://asia-northeast1-YOUR_PROJECT.cloudfunctions.net/api/v1/serve"\n  defer\n></script>`;
+    return `<script\n  src="https://cx-platform-v1.web.app/sdk.js"\n  data-site-id="${safeSiteId}"\n  data-site-key="${safePublicKey}"\n  defer\n></script>`;
   }, [id, publicKey]);
 
   function resetEditor() {
@@ -480,17 +480,55 @@ export default function SitesPage() {
                   </button>
                 </div>
 
-                <div className="card" style={{ background: 'linear-gradient(180deg,#ffffff,#f8fbff)' }}>
-                  <div className="h2">埋め込みタグ</div>
-                  <div className="small" style={{ marginBottom: 8, opacity: 0.72 }}>
-                    このタグをサイトに貼り付けて SDK を読み込みます。公開キーも含めてコピーできます。
+                <div className="card" style={{ background: 'var(--panel2)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                    <div>
+                      <div className="h2" style={{ marginBottom: 2 }}>埋め込みタグ</div>
+                      <div className="small">サイトの {'<head>'} 内にこのタグを貼り付けてください</div>
+                    </div>
+                    <button
+                      className="btn btn--primary"
+                      onClick={copyEmbedTag}
+                      style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6 }}
+                    >
+                      {copyMessage === '埋め込みタグをコピーしました' ? (
+                        <>✓ コピーしました</>
+                      ) : (
+                        <>
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                          </svg>
+                          コピー
+                        </>
+                      )}
+                    </button>
                   </div>
-                  <textarea className="input" readOnly value={embedTag} style={{ minHeight: 140 }} />
-                  <div style={{ height: 8 }} />
-                  <button className="btn" onClick={copyEmbedTag}>埋め込みタグをコピー</button>
-                  {copyMessage ? (
-                    <div className="small" style={{ marginTop: 8, opacity: 0.85 }}>{copyMessage}</div>
-                  ) : null}
+                  <pre style={{
+                    margin: 0,
+                    padding: '16px',
+                    background: '#1a2a3a',
+                    color: '#e2f0f5',
+                    borderRadius: 10,
+                    fontSize: 12,
+                    lineHeight: 1.75,
+                    overflowX: 'auto',
+                    whiteSpace: 'pre',
+                    userSelect: 'all',
+                    cursor: 'text',
+                    border: '1px solid rgba(255,255,255,.06)',
+                  }}>
+                    <span style={{ color: '#7ec8e3' }}>&lt;script</span>{'\n'}
+                    {'  '}<span style={{ color: '#a8d8a8' }}>src</span><span style={{ color: '#e2f0f5' }}>="</span><span style={{ color: '#ffd580' }}>https://cx-platform-v1.web.app/sdk.js</span><span style={{ color: '#e2f0f5' }}>"</span>{'\n'}
+                    {'  '}<span style={{ color: '#a8d8a8' }}>data-site-id</span><span style={{ color: '#e2f0f5' }}>="</span><span style={{ color: '#ffd580' }}>{String(id || '').trim()}</span><span style={{ color: '#e2f0f5' }}>"</span>{'\n'}
+                    {'  '}<span style={{ color: '#a8d8a8' }}>data-site-key</span><span style={{ color: '#e2f0f5' }}>="</span><span style={{ color: '#ffd580' }}>{String(publicKey || '').trim()}</span><span style={{ color: '#e2f0f5' }}>"</span>{'\n'}
+                    {'  '}<span style={{ color: '#a8d8a8' }}>defer</span>{'\n'}
+                    <span style={{ color: '#7ec8e3' }}>&gt;&lt;/script&gt;</span>
+                  </pre>
+                  {copyMessage === 'コピーに失敗しました' && (
+                    <div className="small" style={{ marginTop: 8, color: 'var(--danger)' }}>
+                      クリップボードへのコピーに失敗しました。上のコードを直接選択してコピーしてください。
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

@@ -293,19 +293,6 @@ export default function ScenarioReviewPage() {
         )}
       </div>
 
-      <div className="card" style={{ minWidth: 0 }}>
-        <div className="h2" style={{ marginTop: 0 }}>Raw response / debug</div>
-        <pre
-          style={{
-            margin: 0,
-            whiteSpace: "pre-wrap",
-            overflow: "auto",
-            maxHeight: 360,
-          }}
-        >
-          {JSON.stringify(data, null, 2)}
-        </pre>
-      </div>
     </div>
   );
 }

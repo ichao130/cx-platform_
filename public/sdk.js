@@ -922,6 +922,27 @@
       apiBase: apiBase
     });
 
+    // UTM パラメータをキャプチャ（セッション中は sessionStorage で保持）
+    function getOrStoreUtm() {
+      var params = new URLSearchParams(window.location.search);
+      var source = params.get("utm_source") || "";
+      var medium = params.get("utm_medium") || "";
+      var campaign = params.get("utm_campaign") || "";
+      var storageKey = "cx_utm_" + siteId;
+      if (source || medium || campaign) {
+        try {
+          sessionStorage.setItem(storageKey, JSON.stringify({ utm_source: source, utm_medium: medium, utm_campaign: campaign }));
+        } catch (e) {}
+        return { utm_source: source, utm_medium: medium, utm_campaign: campaign };
+      }
+      try {
+        var stored = sessionStorage.getItem(storageKey);
+        if (stored) return JSON.parse(stored);
+      } catch (e) {}
+      return { utm_source: "", utm_medium: "", utm_campaign: "" };
+    }
+    var utm = getOrStoreUtm();
+
     var ctx = {
       site_id: siteId,
       site_key: siteKey,
@@ -933,6 +954,20 @@
       sid: getOrCreateId("cx_sid_" + siteId),
       variant_id: null
     };
+
+    // pageview ログを送信
+    postLog(apiBase, {
+      site_id: siteId,
+      event: "pageview",
+      url: window.location.href,
+      path: window.location.pathname,
+      ref: document.referrer || "",
+      vid: ctx.vid,
+      sid: ctx.sid,
+      utm_source: utm.utm_source || null,
+      utm_medium: utm.utm_medium || null,
+      utm_campaign: utm.utm_campaign || null,
+    }, siteId, siteKey);
 
     fetch(apiBase + (apiBase.indexOf("?") >= 0 ? "&" : "?") + qs(ctx), {
       headers: {

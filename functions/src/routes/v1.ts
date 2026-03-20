@@ -57,12 +57,15 @@ const LogReqSchema = z.object({
   action_id: z.string().nullable().optional(),
   template_id: z.string().nullable().optional(),
   variant_id: z.string().nullable().optional(),
-  event: z.enum(["impression", "click", "click_link", "close", "conversion"]),
+  event: z.enum(["impression", "click", "click_link", "close", "conversion", "pageview"]),
   url: z.string().nullable().optional(),
   path: z.string().nullable().optional(),
   ref: z.string().nullable().optional(),
   vid: z.string().nullable().optional(),
   sid: z.string().nullable().optional(),
+  utm_source: z.string().nullable().optional(),
+  utm_medium: z.string().nullable().optional(),
+  utm_campaign: z.string().nullable().optional(),
 });
 
 const AiInsightReqSchema = z.object({
@@ -2831,6 +2834,9 @@ export function registerV1Routes(app: Express) {
         ref: body.ref ?? null,
         vid: body.vid ?? null,
         sid: body.sid ?? null,
+        utm_source: body.utm_source ?? null,
+        utm_medium: body.utm_medium ?? null,
+        utm_campaign: body.utm_campaign ?? null,
         createdAt: nowIso,
         updatedAt: nowIso,
       };

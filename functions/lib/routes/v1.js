@@ -49,12 +49,15 @@ const LogReqSchema = zod_1.z.object({
     action_id: zod_1.z.string().nullable().optional(),
     template_id: zod_1.z.string().nullable().optional(),
     variant_id: zod_1.z.string().nullable().optional(),
-    event: zod_1.z.enum(["impression", "click", "click_link", "close", "conversion"]),
+    event: zod_1.z.enum(["impression", "click", "click_link", "close", "conversion", "pageview"]),
     url: zod_1.z.string().nullable().optional(),
     path: zod_1.z.string().nullable().optional(),
     ref: zod_1.z.string().nullable().optional(),
     vid: zod_1.z.string().nullable().optional(),
     sid: zod_1.z.string().nullable().optional(),
+    utm_source: zod_1.z.string().nullable().optional(),
+    utm_medium: zod_1.z.string().nullable().optional(),
+    utm_campaign: zod_1.z.string().nullable().optional(),
 });
 const AiInsightReqSchema = zod_1.z.object({
     site_id: zod_1.z.string().min(1),
@@ -2426,6 +2429,9 @@ function registerV1Routes(app) {
                 ref: body.ref ?? null,
                 vid: body.vid ?? null,
                 sid: body.sid ?? null,
+                utm_source: body.utm_source ?? null,
+                utm_medium: body.utm_medium ?? null,
+                utm_campaign: body.utm_campaign ?? null,
                 createdAt: nowIso,
                 updatedAt: nowIso,
             };

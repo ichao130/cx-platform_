@@ -152,6 +152,8 @@ export default function MediaPage() {
 
   const [qText, setQText] = useState("");
   const [selected, setSelected] = useState<Row<MediaDoc> | null>(null);
+  const [mediaError, setMediaError] = useState<string | null>(null);
+  const [deleteMediaTarget, setDeleteMediaTarget] = useState<string | null>(null);
 
   // upload state
   const [uploading, setUploading] = useState(false);
@@ -344,7 +346,6 @@ export default function MediaPage() {
 
   async function onDelete(mediaId: string) {
     if (!workspaceId) return;
-    if (!confirm("このメディアを削除します。よろしいですか？")) return;
 
     const targetRow =
       mediaRows.find((row) => String(row.id) === String(mediaId)) ||
@@ -371,10 +372,8 @@ export default function MediaPage() {
 
       if (!result?.ok) {
         if (result?.usedIn?.length) {
-          const lines = result.usedIn
-            .map((x: any) => `- ${x.actionId}${x.title ? `（${x.title}）` : ""}`)
-            .join("\n");
-          alert(`このメディアは使用中なので削除できません。\n\n${lines}`);
+          setMediaError(`このメディアは使用中のため削除できません。\n使用アクション: ${result.usedIn.map((x: any) => x.actionId).join(", ")}`);
+          setTimeout(() => setMediaError(null), 5000);
           return;
         }
 
@@ -402,7 +401,8 @@ export default function MediaPage() {
         return;
       }
 
-      alert(`削除に失敗: ${e?.message || String(e)}`);
+      setMediaError(`削除に失敗: ${e?.message || String(e)}`);
+      setTimeout(() => setMediaError(null), 5000);
     }
   }
 
@@ -791,7 +791,10 @@ export default function MediaPage() {
                     <td>
                       <button className="btn" onClick={() => setSelected(r)}>詳細を見る</button>
                       <span style={{ width: 8, display: 'inline-block' }} />
-                      <button className="btn btn--danger" onClick={() => onDelete(r.id)}>
+                      <button className="btn btn--danger" onClick={() => {
+                        if (isLocalOnlyOptimisticMediaRow(r)) { onDelete(r.id); return; }
+                        setDeleteMediaTarget(r.id);
+                      }}>
                         {isLocalOnlyOptimisticMediaRow(r) ? "一覧から外す" : "削除"}
                       </button>
                     </td>
@@ -927,7 +930,10 @@ export default function MediaPage() {
                   <div className="small" style={{ opacity: 0.7 }}>（まだ使われていません）</div>
                 )}
 
-                <button className="btn btn--danger" onClick={() => onDelete(selected.id)}>
+                <button className="btn btn--danger" onClick={() => {
+                  if (isLocalOnlyOptimisticMediaRow(selected)) { onDelete(selected.id); return; }
+                  setDeleteMediaTarget(selected.id);
+                }}>
                   {isLocalOnlyOptimisticMediaRow(selected) ? "この項目を一覧から外す" : "このメディアを削除する"}
                 </button>
               </div>
@@ -935,6 +941,37 @@ export default function MediaPage() {
           </div>
         </div>
       ) : null}
+
+      {mediaError && (
+        <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: "#dc2626", color: "#fff", padding: "12px 24px", borderRadius: 12, fontWeight: 600, fontSize: 13, zIndex: 9999, maxWidth: "80vw", textAlign: "center", whiteSpace: "pre-line", boxShadow: "0 8px 24px rgba(0,0,0,.18)" }}>
+          {mediaError}
+        </div>
+      )}
+
+      {deleteMediaTarget && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div className="card" style={{ padding: 28, maxWidth: 400, width: "92vw", background: "#fff" }}>
+            <div className="h2" style={{ marginBottom: 12 }}>メディアを削除しますか？</div>
+            <div className="small" style={{ marginBottom: 20 }}>
+              このメディアを削除します。この操作は元に戻せません。
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button className="btn" onClick={() => setDeleteMediaTarget(null)}>キャンセル</button>
+              <button
+                className="btn"
+                style={{ background: "#dc2626", color: "#fff" }}
+                onClick={async () => {
+                  const id = deleteMediaTarget;
+                  setDeleteMediaTarget(null);
+                  await onDelete(id);
+                }}
+              >
+                削除する
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

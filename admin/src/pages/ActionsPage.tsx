@@ -475,6 +475,10 @@ export default function ActionsPage() {
   const [showJsonId, setShowJsonId] = useState('');
   const [showModalJson, setShowModalJson] = useState(false);
 
+  // toast / delete confirm
+  const [toast, setToast] = useState<{ msg: string; type: "success" | "error" } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+
   useEffect(() => {
     return onAuthStateChanged(getAuth(), (user) => {
       const uid = user?.uid || "";
@@ -731,14 +735,23 @@ export default function ActionsPage() {
     mediaIds,
   ]);
 
-  async function saveToFirestore() {
-    if (!workspaceId) throw new Error("workspaceId required");
-    const actionId = id.trim();
-    if (!actionId) throw new Error("actionId required");
+  function showToast(msg: string, type: "success" | "error" = "success") {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3000);
+  }
 
-    await setDoc(doc(db, "actions", actionId), payload, { merge: true });
-    resetEditor();
-    setIsModalOpen(false);
+  async function saveToFirestore() {
+    if (!workspaceId) { showToast("ワークスペースが未設定です", "error"); return; }
+    const actionId = id.trim();
+    if (!actionId) { showToast("アクションIDが未設定です", "error"); return; }
+    try {
+      await setDoc(doc(db, "actions", actionId), payload, { merge: true });
+      showToast("アクションを保存しました ✓");
+      resetEditor();
+      setIsModalOpen(false);
+    } catch (e: any) {
+      showToast(`保存に失敗しました: ${e?.message || String(e)}`, "error");
+    }
   }
 
   async function onDeleteMedia(workspaceId_: string, mediaId_: string) {
@@ -961,19 +974,17 @@ export default function ActionsPage() {
                       <span style={{ width: 8, display: 'inline-block' }} />
                       <button
                         className="btn btn--danger"
-                        onClick={async () => {
+                        onClick={() => {
                           const used = actionUsageMap[r.id] || [];
                           if (used.length) {
                             const lines = used
                               .slice(0, 30)
                               .map((x) => `- ${x.scenarioId}${x.name ? `（${x.name}）` : ""}`)
-                              .join("\n");
-                            alert(`このActionはScenarioで使用中なので削除できません。\n\n${lines}${used.length > 30 ? "\n...(more)" : ""}`);
+                              .join(", ");
+                            showToast(`このActionはScenarioで使用中なので削除できません: ${lines}${used.length > 30 ? "..." : ""}`, "error");
                             return;
                           }
-                          const ok = confirm(`Actionを削除します。\n\n${r.id}\n\n本当に削除する？`);
-                          if (!ok) return;
-                          await deleteDoc(doc(db, "actions", r.id));
+                          setDeleteTarget({ id: r.id, name: String(r.data?.creative?.title || r.id) });
                         }}
                       >
                         削除
@@ -1426,6 +1437,57 @@ export default function ActionsPage() {
           setImageUrl(row.data.downloadURL);
         }}
       />
+
+      {/* トースト通知 */}
+      {toast && (
+        <div style={{
+          position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)",
+          background: toast.type === "success" ? "#16a34a" : "#dc2626",
+          color: "#fff", padding: "12px 24px", borderRadius: 12,
+          fontWeight: 700, fontSize: 14, zIndex: 9999,
+          boxShadow: "0 8px 24px rgba(0,0,0,.18)",
+          animation: "fadeInUp .2s ease",
+        }}>
+          {toast.msg}
+        </div>
+      )}
+
+      {/* 削除確認ダイアログ */}
+      {deleteTarget && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div className="card" style={{ padding: 28, maxWidth: 400, width: "92vw", background: "#fff" }}>
+            <div className="h2" style={{ marginBottom: 12 }}>アクションを削除しますか？</div>
+            <div className="small" style={{ marginBottom: 20 }}>
+              「<b>{deleteTarget.name}</b>」を削除します。この操作は元に戻せません。
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button className="btn" onClick={() => setDeleteTarget(null)}>キャンセル</button>
+              <button
+                className="btn"
+                style={{ background: "#dc2626", color: "#fff" }}
+                onClick={async () => {
+                  try {
+                    await deleteDoc(doc(db, "actions", deleteTarget.id));
+                    showToast("アクションを削除しました");
+                  } catch (e: any) {
+                    showToast(`削除に失敗: ${e?.message || String(e)}`, "error");
+                  }
+                  setDeleteTarget(null);
+                }}
+              >
+                削除する
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        @keyframes fadeInUp {
+          from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+          to { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
+      `}</style>
     </div>
   );
 }

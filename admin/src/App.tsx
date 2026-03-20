@@ -29,6 +29,7 @@ const API_BASE =
 type RoleKey = "owner" | "admin" | "member" | "viewer";
 type AccessKey =
   | "dashboard"
+  | "analytics"
   | "workspaces"
   | "sites"
   | "scenarios"
@@ -49,6 +50,7 @@ type WorkspaceRoleInfo = {
 
 const ACCESS_KEYS: AccessKey[] = [
   "dashboard",
+  "analytics",
   "workspaces",
   "sites",
   "scenarios",
@@ -64,6 +66,7 @@ function defaultAccessMatrix(): AccessMatrix {
   return {
     owner: {
       dashboard: true,
+      analytics: true,
       workspaces: true,
       sites: true,
       scenarios: true,
@@ -76,6 +79,7 @@ function defaultAccessMatrix(): AccessMatrix {
     },
     admin: {
       dashboard: true,
+      analytics: true,
       workspaces: false,
       sites: true,
       scenarios: true,
@@ -88,6 +92,7 @@ function defaultAccessMatrix(): AccessMatrix {
     },
     member: {
       dashboard: true,
+      analytics: true,
       workspaces: false,
       sites: true,
       scenarios: true,
@@ -100,6 +105,7 @@ function defaultAccessMatrix(): AccessMatrix {
     },
     viewer: {
       dashboard: true,
+      analytics: false,
       workspaces: false,
       sites: true,
       scenarios: true,
@@ -198,13 +204,16 @@ function SidebarLink({
     <NavLink
       to={to}
       style={({ isActive }) => ({
-        display: "block",
+        display: "flex",
+        alignItems: "center",
         textDecoration: "none",
-        padding: "10px 12px",
-        borderRadius: 10,
+        padding: "9px 12px",
+        borderRadius: 9,
         fontWeight: isActive ? 700 : 500,
+        fontSize: 13,
         background: isActive ? "rgba(89,183,198,.18)" : "transparent",
-        color: isActive ? "#1f6573" : "inherit",
+        color: isActive ? "#59cfe0" : "rgba(255,255,255,.72)",
+        transition: "background .15s, color .15s",
       })}
     >
       {children}
@@ -395,7 +404,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
       <aside
         style={{
           borderRight: "1px solid rgba(15,23,42,.08)",
-          background: "rgba(255,255,255,.82)",
+          background: "rgba(22,44,64,.96)",
           backdropFilter: "blur(12px)",
           padding: 18,
           position: "sticky",
@@ -429,21 +438,22 @@ function AppShell({ children }: { children: React.ReactNode }) {
             )}
           </div>
           <div style={{ minWidth: 0 }}>
-            <Link to="/dashboard" className="h2" style={{ margin: 0, textDecoration: "none", display: "block", color: "inherit" }}>
+            <Link to="/dashboard" className="h2" style={{ margin: 0, textDecoration: "none", display: "block", color: "rgba(255,255,255,.9)" }}>
               {selectedWorkspaceName}
             </Link>
-            <div className="small" style={{ marginTop: 4 }}>
+            <div className="small" style={{ marginTop: 4, color: "rgba(255,255,255,.45)" }}>
               {selectedWorkspaceDescription || "ワークスペース設定でロゴ・説明文を登録できます"}
             </div>
           </div>
         </div>
 
         <div style={{ marginBottom: 18 }}>
-          <div className="small" style={{ opacity: 0.62, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase", marginBottom: 8 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "rgba(255,255,255,.38)", marginBottom: 8, paddingLeft: 12 }}>
             メインメニュー
           </div>
           <div style={{ display: "grid", gap: 4 }}>
             {canShow(canAccess, "dashboard") && <SidebarLink to="/dashboard">ダッシュボード</SidebarLink>}
+            {canShow(canAccess, "analytics") && <SidebarLink to="/analytics">流入計測</SidebarLink>}
             {canShow(canAccess, "sites") && <SidebarLink to="/sites">サイト</SidebarLink>}
             {canShow(canAccess, "scenarios") && <SidebarLink to="/scenarios">シナリオ</SidebarLink>}
             {canShow(canAccess, "actions") && <SidebarLink to="/actions">アクション</SidebarLink>}
@@ -454,7 +464,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
         </div>
 
         <div>
-          <div className="small" style={{ opacity: 0.62, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase", marginBottom: 8 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "rgba(255,255,255,.38)", marginBottom: 8, paddingLeft: 12 }}>
             設定
           </div>
           <div style={{ display: "grid", gap: 4 }}>
@@ -466,7 +476,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
         </div>
 
         <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid rgba(15,23,42,.08)" }}>
-          <div className="small" style={{ opacity: 0.62, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase", marginBottom: 8 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "rgba(255,255,255,.38)", marginBottom: 8, paddingLeft: 12 }}>
             Signed in
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -491,10 +501,10 @@ function AppShell({ children }: { children: React.ReactNode }) {
               )}
             </div>
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontWeight: 700, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              <div style={{ fontWeight: 700, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: "rgba(255,255,255,.9)" }}>
                 {user.displayName || "Google User"}
               </div>
-              <div className="small" style={{ opacity: 0.72, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              <div className="small" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: "rgba(255,255,255,.45)" }}>
                 {user.email || ""}
               </div>
             </div>
