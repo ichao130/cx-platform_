@@ -1813,6 +1813,7 @@ export function registerV1Routes(app: Express) {
           status: s.status,
           priority: s.priority ?? 0,
           entry_rules: s.entry_rules || {},
+          schedule: s.schedule || null,
           actions,
           experiment: s.experiment || null,
         });

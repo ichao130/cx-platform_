@@ -841,6 +841,20 @@
     // url rule（追加）
     if (!shouldRunUrlRule(er, ctx)) return false;
 
+    // schedule（訪問者のローカル時間で判定）
+    var schedule = s.schedule;
+    if (schedule) {
+      var now = new Date();
+      if (schedule.startAt) {
+        var start = new Date(schedule.startAt);
+        if (now < start) return false;
+      }
+      if (schedule.endAt) {
+        var end = new Date(schedule.endAt);
+        if (now > end) return false;
+      }
+    }
+
     return true;
   }
 

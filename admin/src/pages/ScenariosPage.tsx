@@ -50,6 +50,11 @@ type Scenario = {
 
   memo?: string;
 
+  schedule?: {
+    startAt?: string; // "YYYY-MM-DDTHH:mm"
+    endAt?: string;   // "YYYY-MM-DDTHH:mm"
+  };
+
   // conversion goal（Phase1）
   goal?: Goal | null;
 
@@ -186,6 +191,11 @@ export default function ScenariosPage() {
   // UI helpers
   const [actionIdToAdd, setActionIdToAdd] = useState("");
   const [variantIdToEdit, setVariantIdToEdit] = useState<string>("A");
+
+  // schedule
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
+  const [scheduleStart, setScheduleStart] = useState("");
+  const [scheduleEnd, setScheduleEnd] = useState("");
 
   // entry rules (URL)
   const [urlEnabled, setUrlEnabled] = useState(false);
@@ -328,6 +338,14 @@ export default function ScenariosPage() {
     };
   }, [expEnabled, expSticky, variants]);
 
+  const schedule = useMemo(() => {
+    if (!scheduleEnabled) return undefined;
+    const s: { startAt?: string; endAt?: string } = {};
+    if (scheduleStart) s.startAt = scheduleStart;
+    if (scheduleEnd) s.endAt = scheduleEnd;
+    return Object.keys(s).length ? s : undefined;
+  }, [scheduleEnabled, scheduleStart, scheduleEnd]);
+
   const payload: Scenario = useMemo(
     () => ({
       workspaceId,
@@ -336,6 +354,7 @@ export default function ScenariosPage() {
       status,
       priority: Number(priority),
       memo: memo || "",
+      schedule: schedule || undefined,
       goal: goal || null,
       entry_rules,
 
@@ -344,7 +363,7 @@ export default function ScenariosPage() {
 
       experiment: experiment || undefined,
     }),
-    [workspaceId, siteId, name, status, priority, memo, goal, entry_rules, actionRefs, experiment]
+    [workspaceId, siteId, name, status, priority, memo, schedule, goal, entry_rules, actionRefs, experiment]
   );
 
   function togglePageType(pt: (typeof PAGE_TYPES)[number]) {
@@ -498,7 +517,9 @@ export default function ScenariosPage() {
     setUrlValue("/products/");
     setUrlTarget("path");
 
-
+    setScheduleEnabled(false);
+    setScheduleStart("");
+    setScheduleEnd("");
   }
 
   async function createOrUpdate() {
@@ -538,7 +559,16 @@ export default function ScenariosPage() {
       setUrlTarget("path");
     }
 
-
+    // schedule
+    if (s.schedule && (s.schedule.startAt || s.schedule.endAt)) {
+      setScheduleEnabled(true);
+      setScheduleStart(s.schedule.startAt || "");
+      setScheduleEnd(s.schedule.endAt || "");
+    } else {
+      setScheduleEnabled(false);
+      setScheduleStart("");
+      setScheduleEnd("");
+    }
 
     // goal
     if (s.goal && (s.goal as any).type && (s.goal as any).value) {
@@ -738,6 +768,66 @@ export default function ScenariosPage() {
             <div className="small" style={{ marginTop: 6 }}>
               例：<code>path + prefix = /products/</code>（商品ページ） / <code>regex = ^/lp/</code>
             </div>
+
+            <div style={{ height: 12 }} />
+            <div className="h2">配信スケジュール</div>
+            <div className="row" style={{ alignItems: "center", gap: 10 }}>
+              <label className="badge" style={{ cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={scheduleEnabled}
+                  onChange={(e) => setScheduleEnabled(e.target.checked)}
+                />
+                日時を指定する
+              </label>
+            </div>
+            {scheduleEnabled && (
+              <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+                <div className="row" style={{ alignItems: "center", gap: 10 }}>
+                  <span className="small" style={{ minWidth: 80 }}>開始日時</span>
+                  <input
+                    className="input"
+                    type="datetime-local"
+                    value={scheduleStart}
+                    onChange={(e) => setScheduleStart(e.target.value)}
+                    style={{ flex: 1 }}
+                  />
+                  {scheduleStart && (
+                    <button
+                      type="button"
+                      className="badge"
+                      style={{ cursor: "pointer" }}
+                      onClick={() => setScheduleStart("")}
+                    >
+                      クリア
+                    </button>
+                  )}
+                </div>
+                <div className="row" style={{ alignItems: "center", gap: 10 }}>
+                  <span className="small" style={{ minWidth: 80 }}>終了日時</span>
+                  <input
+                    className="input"
+                    type="datetime-local"
+                    value={scheduleEnd}
+                    onChange={(e) => setScheduleEnd(e.target.value)}
+                    style={{ flex: 1 }}
+                  />
+                  {scheduleEnd && (
+                    <button
+                      type="button"
+                      className="badge"
+                      style={{ cursor: "pointer" }}
+                      onClick={() => setScheduleEnd("")}
+                    >
+                      クリア
+                    </button>
+                  )}
+                </div>
+                <div className="small" style={{ opacity: 0.72 }}>
+                  ※ 訪問者のブラウザ時間を基準に判定します。開始・終了はどちらか一方だけでも設定できます。
+                </div>
+              </div>
+            )}
 
             <div style={{ height: 12 }} />
             <div className="h2">コンバージョン条件</div>
