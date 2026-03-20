@@ -591,7 +591,7 @@ function AuthScreen({
                 MOKKEDA
               </div>
               <div className="small" style={{ color: "#1f6573", opacity: 0.82, marginTop: 2 }}>
-                Make CX feel native.
+                AI for “Thank You” Moments
               </div>
             </div>
           </div>
@@ -624,7 +624,7 @@ function AuthScreen({
         <div style={{ position: "relative", width: "100%", maxWidth: 680 }}>
           <div className="card" style={{ padding: 24, background: "rgba(255,255,255,.72)", backdropFilter: "blur(14px)" }}>
             <div className="small" style={{ opacity: 0.72, textTransform: "uppercase", letterSpacing: ".08em" }}>Product concept</div>
-            <div className="h1" style={{ marginTop: 10, marginBottom: 10 }}>Make CX feel native.</div>
+            <div className="h1" style={{ marginTop: 10, marginBottom: 10 }}>AI for “Thank You” Moments</div>
             <div className="small" style={{ lineHeight: 1.8 }}>
               MOKKEDA は、サイトごとの接客シナリオ、アクション、メディア、AIインサイトを一つの管理画面で扱うための CX プラットフォームです。
               ワークスペースごとに切り替えながら、運用と改善を一気通貫で回せます。
@@ -1007,7 +1007,14 @@ function AuthGate({ children }: { children: React.ReactNode }) {
         title="MOKKEDA にログイン"
         description="管理画面を利用するには Google ログインが必要です。初回ログイン時は、そのアカウント用のワークスペースが自動作成され、作成者はオーナーとして登録されます。"
       >
-        <button className="btn btn--primary" onClick={login}>
+        <button
+          className="btn btn--primary"
+          onClick={login}
+          style={{
+            background: "#1f7a8c",
+            boxShadow: "0 10px 24px rgba(31,122,140,.18)",
+          }}
+        >
           Googleでログイン
         </button>
         <div className="small" style={{ marginTop: 12, opacity: 0.72 }}>
