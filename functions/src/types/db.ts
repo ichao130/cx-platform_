@@ -32,6 +32,10 @@ export type Scenario = {
   name: string;
   status: "active" | "paused";
   priority?: number;
+  schedule?: {
+    startAt?: string; // "YYYY-MM-DDTHH:mm" (ユーザーのローカル時間)
+    endAt?: string;   // "YYYY-MM-DDTHH:mm" (ユーザーのローカル時間)
+  };
   entry_rules?: any;
   actionRefs?: Array<{
     actionId: string;
