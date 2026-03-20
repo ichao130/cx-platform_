@@ -1,11 +1,12 @@
+import { addDoc, collection, serverTimestamp } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { storage } from "../firebase";
+import { db, storage } from "../firebase";
 
 export async function uploadImageToWorkspace(opts: {
   workspaceId: string;
   siteId?: string;
   file: File;
-}): Promise<{ path: string; downloadURL: string }> {
+}): Promise<{ mediaId: string; storagePath: string; downloadURL: string }> {
   const { workspaceId, siteId, file } = opts;
   if (!workspaceId) throw new Error("workspaceId required");
 
@@ -21,5 +22,21 @@ export async function uploadImageToWorkspace(opts: {
   const r = ref(storage, path);
   await uploadBytes(r, file, { contentType: file.type || "image/*" });
   const downloadURL = await getDownloadURL(r);
-  return { path, downloadURL };
+
+  const mediaRef = await addDoc(collection(db, "media"), {
+    workspaceId,
+    siteId: siteId || "",
+    storagePath: path,
+    downloadURL,
+    originalName: file.name || safeName,
+    contentType: file.type || "image/*",
+    size: Number(file.size || 0),
+    createdAt: serverTimestamp(),
+  });
+
+  return {
+    mediaId: mediaRef.id,
+    storagePath: path,
+    downloadURL,
+  };
 }

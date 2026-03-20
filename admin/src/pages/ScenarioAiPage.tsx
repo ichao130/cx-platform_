@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { useParams } from "react-router-dom";
 import { collection, onSnapshot, orderBy, query, where } from "firebase/firestore";
 import { db, apiPostJson } from "../firebase";
@@ -10,6 +11,19 @@ function isoDay(d: Date) {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${dd}`;
+}
+
+function workspaceKeyForUid(uid: string) {
+  return `cx_admin_workspace_id:${uid}`;
+}
+
+function readSelectedWorkspaceId(uid?: string) {
+  if (!uid) return "";
+  try {
+    return localStorage.getItem(workspaceKeyForUid(uid)) || "";
+  } catch {
+    return "";
+  }
 }
 
 type ScenarioDoc = {
@@ -24,6 +38,8 @@ export default function ScenarioAiPage() {
 
   const [sites, setSites] = useState<Array<{ id: string; data: any }>>([]);
   const [siteId, setSiteId] = useState<string>("");
+  const [workspaceId, setWorkspaceId] = useState<string>("");
+  const [currentUid, setCurrentUid] = useState<string>("");
 
   const [scenarios, setScenarios] = useState<Array<{ id: string; data: ScenarioDoc }>>([]);
   const [scenarioId, setScenarioId] = useState<string>(() => routeScenarioId || "");
@@ -69,20 +85,65 @@ export default function ScenarioAiPage() {
     );
   }
 
+  useEffect(() => {
+    return onAuthStateChanged(getAuth(), (user) => {
+      const uid = user?.uid || "";
+      setCurrentUid(uid);
+      setWorkspaceId(readSelectedWorkspaceId(uid));
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!currentUid) {
+      setWorkspaceId("");
+      return;
+    }
+
+    const applySelectedWorkspace = () => {
+      setWorkspaceId(readSelectedWorkspaceId(currentUid));
+    };
+
+    applySelectedWorkspace();
+
+    const onWorkspaceChanged = (e?: Event) => {
+      const next = (e as CustomEvent | undefined)?.detail?.workspaceId;
+      if (typeof next === "string") {
+        setWorkspaceId(next);
+        return;
+      }
+      applySelectedWorkspace();
+    };
+
+    const onStorageChanged = () => applySelectedWorkspace();
+
+    window.addEventListener("cx_admin_workspace_changed", onWorkspaceChanged as EventListener);
+    window.addEventListener("storage", onStorageChanged);
+    return () => {
+      window.removeEventListener("cx_admin_workspace_changed", onWorkspaceChanged as EventListener);
+      window.removeEventListener("storage", onStorageChanged);
+    };
+  }, [currentUid]);
+
   // sites
   useEffect(() => {
     const q = query(collection(db, "sites"), orderBy("__name__"));
     return onSnapshot(
       q,
       (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, data: d.data() }));
+        const list = snap.docs
+          .map((d) => ({ id: d.id, data: d.data() }))
+          .filter((row) => {
+            const ws = String((row.data as any)?.workspaceId || "");
+            if (!workspaceId) return true;
+            return ws === String(workspaceId);
+          });
         setSites(list);
-        if (!siteId && list.length) setSiteId(list[0].id);
+        const exists = !!siteId && list.some((s) => s.id === siteId);
+        if (!exists) setSiteId(list[0]?.id || "");
       },
       (e) => setErr(`sites read failed: ${e?.code || ""} ${e?.message || e}`)
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [siteId, workspaceId]);
 
   // scenarios for site
   useEffect(() => {
@@ -119,6 +180,11 @@ export default function ScenarioAiPage() {
     const s = sites.find((x) => x.id === siteId);
     return siteLabel(s) || siteId || "";
   }, [sites, siteId]);
+
+  const selectedWorkspaceName = useMemo(() => {
+    const s = sites.find((x) => String(x.data?.workspaceId || "") === String(workspaceId || ""));
+    return String(s?.data?.workspaceName || s?.data?.workspace_name || workspaceId || "");
+  }, [sites, workspaceId]);
 
   const stats = useMemo(() => {
     const counts = insight?.counts || review?.counts || {};
@@ -217,6 +283,8 @@ export default function ScenarioAiPage() {
 
         <div className="small" style={{ opacity: 0.72, marginBottom: 8 }}>
           現在のサイト: <b>{selectedSiteName || "-"}</b>
+          <span style={{ opacity: 0.52 }}> / </span>
+          ワークスペース: <b>{selectedWorkspaceName || workspaceId || "-"}</b>
         </div>
 
         <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>

@@ -15,6 +15,7 @@ const admin_1 = require("./services/admin");
 // ★ ここ超重要：君のURLは asia-northeast1 なので揃える
 (0, v2_1.setGlobalOptions)({ region: "asia-northeast1" });
 const OPENAI_API_KEY = (0, params_1.defineSecret)("OPENAI_API_KEY");
+const POSTMARK_SERVER_TOKEN = (0, params_1.defineSecret)("POSTMARK_SERVER_TOKEN");
 /**
  * ==========================
  * HTTP API: /api/v1/...
@@ -30,14 +31,14 @@ app.get("/", (_req, res) => res.status(200).send("ok"));
 (0, v1_1.registerV1Routes)(app);
 exports.api = (0, https_1.onRequest)({
     region: "asia-northeast1",
-    secrets: [OPENAI_API_KEY],
+    secrets: [OPENAI_API_KEY, POSTMARK_SERVER_TOKEN],
 }, app);
 /**
  * ==========================
  * Callable: deleteMedia
  * ==========================
  */
-exports.deleteMedia = (0, https_1.onCall)(async (req) => {
+exports.deleteMedia = (0, https_1.onCall)({ region: "asia-northeast1" }, async (req) => {
     const uid = req.auth?.uid;
     if (!uid)
         throw new https_1.HttpsError("unauthenticated", "sign in required");

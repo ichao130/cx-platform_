@@ -40,9 +40,32 @@ function formatInt(n: any) {
   return safeNum(n).toLocaleString("ja-JP");
 }
 
-function workspaceNameFromSites(sites: Array<{ id: string; data: any }>, workspaceId: string) {
-  const hit = sites.find((s) => String(s.data?.workspaceId || "") === String(workspaceId || ""));
-  return String(hit?.data?.workspaceName || hit?.data?.workspace_name || "");
+function workspaceKeyForUid(uid: string) {
+  return `cx_admin_workspace_id:${uid}`;
+}
+
+function readSelectedWorkspaceId(uid?: string) {
+  if (!uid) return "";
+  try {
+    return localStorage.getItem(workspaceKeyForUid(uid)) || "";
+  } catch {
+    return "";
+  }
+}
+
+function writeSelectedWorkspaceId(workspaceId: string, uid?: string) {
+  if (!uid) return;
+  try {
+    localStorage.setItem(workspaceKeyForUid(uid), workspaceId);
+    window.dispatchEvent(new CustomEvent("cx_admin_workspace_changed", { detail: { workspaceId } }));
+  } catch {
+    // ignore
+  }
+}
+
+function workspaceNameFromRows(workspaces: Array<{ id: string; data: any }>, workspaceId: string) {
+  const hit = workspaces.find((w) => String(w.id || "") === String(workspaceId || ""));
+  return String(hit?.data?.name || workspaceId || "");
 }
 
 function siteLabel(site: { id: string; data: any } | undefined) {
@@ -69,14 +92,24 @@ function StatCard({
       className="card"
       style={{
         minWidth: 0,
-        padding: 14,
-        border: "1px solid rgba(255,255,255,0.10)",
-        background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02))",
+        padding: 18,
+        background: "#fff",
+        border: "1px solid rgba(15,23,42,0.08)",
       }}
     >
-      <div className="small" style={{ opacity: 0.72 }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 900, lineHeight: 1.1, marginTop: 6 }}>{value}</div>
-      {sub ? <div className="small" style={{ opacity: 0.62, marginTop: 6 }}>{sub}</div> : null}
+      <div className="small" style={{ opacity: 0.74 }}>{label}</div>
+      <div
+        style={{
+          fontSize: 30,
+          fontWeight: 800,
+          lineHeight: 1.08,
+          marginTop: 8,
+          letterSpacing: "-.02em",
+        }}
+      >
+        {value}
+      </div>
+      {sub ? <div className="small" style={{ opacity: 0.66, marginTop: 8 }}>{sub}</div> : null}
     </div>
   );
 }
@@ -167,7 +200,7 @@ const latestDay = useMemo(() => {
 
   const selectedSite = useMemo(() => sites.find((s) => s.id === siteId), [sites, siteId]);
   const selectedSiteName = useMemo(() => siteLabel(selectedSite), [selectedSite]);
-  const selectedWorkspaceName = useMemo(() => workspaceNameFromSites(sites, workspaceId), [sites, workspaceId]);
+  const selectedWorkspaceName = useMemo(() => workspaceNameFromRows(visibleWorkspaces, workspaceId), [visibleWorkspaces, workspaceId]);
   const scenarioName = useMemo(() => {
     const hit = scenarios.find((s) => s.id === abScenarioId);
     return scenarioLabel(hit) || abScenarioId || "";
@@ -331,10 +364,41 @@ const latestDay = useMemo(() => {
       const uid = user?.uid || "";
       setCurrentUid(uid);
       setSiteId("");
-      setWorkspaceId("");
+      setWorkspaceId(readSelectedWorkspaceId(uid));
       setScenarios([]);
     });
   }, []);
+
+  useEffect(() => {
+    if (!currentUid) {
+      setWorkspaceId("");
+      return;
+    }
+
+    const applySelectedWorkspace = () => {
+      setWorkspaceId(readSelectedWorkspaceId(currentUid));
+    };
+
+    applySelectedWorkspace();
+
+    const onWorkspaceChanged = (e?: Event) => {
+      const next = (e as CustomEvent | undefined)?.detail?.workspaceId;
+      if (typeof next === "string") {
+        setWorkspaceId(next);
+        return;
+      }
+      applySelectedWorkspace();
+    };
+
+    const onStorageChanged = () => applySelectedWorkspace();
+
+    window.addEventListener("cx_admin_workspace_changed", onWorkspaceChanged as EventListener);
+    window.addEventListener("storage", onStorageChanged);
+    return () => {
+      window.removeEventListener("cx_admin_workspace_changed", onWorkspaceChanged as EventListener);
+      window.removeEventListener("storage", onStorageChanged);
+    };
+  }, [currentUid]);
 
   useEffect(() => {
     if (!currentUid) {
@@ -357,6 +421,17 @@ const latestDay = useMemo(() => {
     return new Set(visibleWorkspaces.map((w) => String(w.id || "")).filter(Boolean));
   }, [visibleWorkspaces]);
 
+  useEffect(() => {
+    if (!currentUid) return;
+    if (!visibleWorkspaces.length) return;
+
+    const exists = !!workspaceId && visibleWorkspaces.some((w) => w.id === workspaceId);
+    if (!exists) {
+      const nextWorkspaceId = visibleWorkspaces[0]?.id || "";
+      setWorkspaceId(nextWorkspaceId);
+      if (nextWorkspaceId) writeSelectedWorkspaceId(nextWorkspaceId, currentUid);
+    }
+  }, [currentUid, visibleWorkspaces, workspaceId]);
 
   const updateBilling = useCallback(async () => {
     if (!workspaceId) return;
@@ -404,7 +479,10 @@ const latestDay = useMemo(() => {
           .map((d) => ({ id: d.id, data: d.data() }))
           .filter((row) => {
             const ws = String((row.data as any)?.workspaceId || "");
-            return !!ws && visibleWorkspaceIds.has(ws);
+            if (!ws || !visibleWorkspaceIds.has(ws)) return false;
+            if (!workspaceId) return true;
+            if (ws !== String(workspaceId)) return false;
+            return true;
           });
 
         setSites(list);
@@ -413,32 +491,23 @@ const latestDay = useMemo(() => {
         if (!exists) {
           const nextSiteId = list[0]?.id || "";
           setSiteId(nextSiteId);
-          const ws = (list[0]?.data as any)?.workspaceId;
-          setWorkspaceId(typeof ws === "string" ? ws : "");
         }
       },
       (e) => setErr(`sites read failed: ${e?.code || ""} ${e?.message || e}`)
     );
-  }, [currentUid, siteId, visibleWorkspaceIds]);
+  }, [currentUid, siteId, visibleWorkspaceIds, workspaceId]);
 
   useEffect(() => {
     if (!sites.length) {
       setSiteId("");
-      setWorkspaceId("");
       return;
     }
 
     const hit = siteId ? sites.find((s) => s.id === siteId) : null;
-
     if (!hit) {
       setSiteId(sites[0].id);
-      const firstWs = (sites[0].data as any)?.workspaceId;
-      if (typeof firstWs === "string" && firstWs) setWorkspaceId(firstWs);
       return;
     }
-
-    const ws = (hit.data as any)?.workspaceId;
-    if (typeof ws === "string" && ws) setWorkspaceId(ws);
   }, [siteId, sites]);
 
   // load stats_daily
@@ -478,102 +547,19 @@ const latestDay = useMemo(() => {
   }, [siteId, latestDay, abScenarioId, loadAbSummary]);
 
   return (
-    <div className="container" style={{ minWidth: 0 }}>
-      <div className="card" style={{ minWidth: 0 }}>
-        <h1 className="h1">ダッシュボード</h1>
-        <div className="small">選択中のサイトの反応状況、A/B結果、AIレビューをまとめて確認できます。</div>
-        <div className="small" style={{ opacity: 0.72 }}>直近の推移と主要KPIを、サイト名ベースで分かりやすく確認できます。</div>
+    <div className="container liquid-page" style={{ minWidth: 0 }}>
 
-        <div style={{ height: 12 }} />
-
-        <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <div className="h2" style={{ margin: 0 }}>サイト</div>
-          <select className="input" value={siteId} onChange={(e) => setSiteId(e.target.value)}>
-            {sites.map((s) => (
-              <option key={s.id} value={s.id}>
-                {siteLabel(s)}{siteLabel(s) !== s.id ? ` (${s.id})` : ""}
-              </option>
-            ))}
-          </select>
-
-          <div className="h2" style={{ margin: 0 }}>集計日数</div>
-          <input
-            className="input"
-            type="number"
-            style={{ width: 90 }}
-            value={days}
-            min={1}
-            max={365}
-            onChange={(e) => setDays(Number(e.target.value || 30))}
-          />
-
-          <div style={{ flex: 1 }} />
-
-          <div className="small" style={{ opacity: 0.75 }}>
-            ワークスペース: <b>{selectedWorkspaceName || workspaceId || "-"}</b>
-          </div>
-          <div className="small" style={{ opacity: 0.75 }}>
-            最新日: <b>{latestDay || "-"}</b>
+      <div className="page-header">
+        <div className="page-header__meta">
+          <div className="small" style={{ marginBottom: 6, opacity: 0.7 }}>MOKKEDA / Dashboard</div>
+          <h1 className="h1">ダッシュボード</h1>
+          <div className="small">選択中サイトのKPI、A/B状況、AIレビューをまとめて確認できます。</div>
+          <div className="small" style={{ opacity: 0.72, marginTop: 4 }}>
+            サイト名ベースで、直近の反応状況と運用判断に必要な情報を整理しています。
           </div>
         </div>
-        <div style={{ height: 12 }} />
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-            gap: 12,
-          }}
-        >
-          <StatCard label="表示回数" value={formatInt(summary.imp)} sub={`${days}日集計`} />
-          <StatCard label="主要クリック" value={formatInt(summary.clkLink)} sub="主要KPI" />
-          <StatCard label="CTR" value={`${summary.ctr}%`} sub="クリック率" />
-          <StatCard label="閉じる操作" value={formatInt(summary.close)} sub="dismiss / close" />
-        </div>
-
-        <div style={{ height: 12 }} />
-
-          <div
-            className="card"
-            style={{
-              minWidth: 0,
-              border: "1px solid rgba(255,255,255,0.10)",
-              background: "rgba(255,255,255,0.03)",
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-              <div>
-                <div className="small" style={{ opacity: 0.68 }}>選択中のサイト</div>
-                <div style={{ fontWeight: 800, marginTop: 4 }}>{selectedSiteName || "-"}</div>
-                {selectedSiteName && siteId && selectedSiteName !== siteId ? (
-                  <div className="small" style={{ opacity: 0.58, marginTop: 2 }}>
-                    ID: {siteId}
-                  </div>
-                ) : null}
-              </div>
-              <div>
-                <div className="small" style={{ opacity: 0.68 }}>選択中のシナリオ</div>
-                <div style={{ fontWeight: 800, marginTop: 4 }}>{scenarioName || "-"}</div>
-                {scenarioName && abScenarioId && scenarioName !== abScenarioId ? (
-                  <div className="small" style={{ opacity: 0.58, marginTop: 2 }}>
-                    ID: {abScenarioId}
-                  </div>
-                ) : null}
-              </div>
-              <div>
-                <div className="small" style={{ opacity: 0.68 }}>ワークスペース</div>
-                <div style={{ fontWeight: 800, marginTop: 4 }}>{selectedWorkspaceName || workspaceId || "-"}</div>
-              </div>
-              <div>
-                <div className="small" style={{ opacity: 0.68 }}>読み込み件数 / 日数</div>
-                <div style={{ fontWeight: 800, marginTop: 4 }}>{rows.length} / {chartData.length}</div>
-              </div>
-            </div>
-          </div>
-
-          <div style={{ height: 12 }} />
-
-        <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+        <div className="page-header__actions" style={{ flexWrap: "wrap" }}>
           <button
             className="btn"
             onClick={() => abScenarioId && navigate(`/scenarios/${abScenarioId}/review`)}
@@ -588,386 +574,122 @@ const latestDay = useMemo(() => {
           >
             AI分析を見る
           </button>
-          <button
-            className="btn"
-            onClick={() => navigate("/workspace/members")}
-          >
-            メンバー管理
-          </button>
-          <button
-            className="btn"
-            onClick={() => navigate("/workspace/billing")}
-          >
-            契約 / Billing
-          </button>
-          <button
-            className="btn"
-            onClick={() => navigate("/scenarios")}
-          >
+          <button className="btn" onClick={() => navigate("/scenarios")}>
             シナリオ一覧
           </button>
         </div>
+      </div>
 
-        <div style={{ height: 12 }} />
+      <div className="card liquid-page" style={{ minWidth: 0, marginBottom: 14 }}>
+        <div className="list-toolbar">
+          <div className="list-toolbar__filters" style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ minWidth: 260, flex: "1 1 320px" }}>
+              <div className="h2">サイト</div>
+              <select className="input" value={siteId} onChange={(e) => setSiteId(e.target.value)}>
+                {sites.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {siteLabel(s)}{siteLabel(s) !== s.id ? ` (${s.id})` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-        {/* Workspace / Billing */}
+            <div style={{ width: 120 }}>
+              <div className="h2">集計日数</div>
+              <input
+                className="input"
+                type="number"
+                value={days}
+                min={1}
+                max={365}
+                onChange={(e) => setDays(Number(e.target.value || 30))}
+              />
+            </div>
+          </div>
+
+          <div className="list-toolbar__actions">
+            <button className="btn" onClick={() => navigate("/workspace/members")}>
+              メンバー管理
+            </button>
+            <button className="btn" onClick={() => navigate("/workspace/billing")}>
+              契約 / Billing
+            </button>
+          </div>
+        </div>
+
         <div
           className="card"
           style={{
-            marginTop: 8,
-            border: "1px solid rgba(255,255,255,0.10)",
-            background: "rgba(0,0,0,0.20)",
             minWidth: 0,
+            padding: 16,
+            background: "linear-gradient(180deg,#ffffff,#f8fbff)",
+            border: "1px solid rgba(15,23,42,0.08)",
           }}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <div className="h2" style={{ margin: 0 }}>契約 / Billing</div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <button onClick={loadBilling} disabled={!workspaceId || billingLoading}>
-                {billingLoading ? "読込中..." : "現在の契約情報を取得"}
-              </button>
-              <button onClick={updateBilling} disabled={!workspaceId || billingLoading}>
-                {billingLoading ? "更新中..." : "契約情報を更新"}
-              </button>
-            </div>
-          </div>
-          <div className="small" style={{ opacity: 0.8 }}>workspace</div>
-          <div style={{ height: 10 }} />
-
-          <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <div className="small" style={{ opacity: 0.8 }}>workspace</div>
-            <input
-              className="input"
-              value={workspaceId}
-              onChange={(e) => setWorkspaceId(e.target.value)}
-              style={{ minWidth: 320, flex: "1 1 320px" }}
-              placeholder="workspace ID"
-            />
-          </div>
-
-          <div style={{ height: 10 }} />
-
-          <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <div className="small" style={{ opacity: 0.8 }}>plan</div>
-            <select className="input" value={billingForm.plan} onChange={(e) => setBillingForm((p) => ({ ...p, plan: e.target.value }))}>
-              <option value="free">free</option>
-              <option value="pro">pro</option>
-              <option value="enterprise">enterprise</option>
-            </select>
-
-            <div className="small" style={{ opacity: 0.8 }}>status</div>
-            <select className="input" value={billingForm.status} onChange={(e) => setBillingForm((p) => ({ ...p, status: e.target.value }))}>
-              <option value="trialing">trialing</option>
-              <option value="active">active</option>
-              <option value="past_due">past_due</option>
-              <option value="canceled">canceled</option>
-            </select>
-
-            <div className="small" style={{ opacity: 0.8 }}>trial_days</div>
-            <input
-              className="input"
-              type="number"
-              value={billingForm.trial_days}
-              min={0}
-              max={365}
-              style={{ width: 110 }}
-              onChange={(e) => setBillingForm((p) => ({ ...p, trial_days: Number(e.target.value || 0) }))}
-            />
-
-            <div className="small" style={{ opacity: 0.8 }}>billing_email</div>
-            <input
-              className="input"
-              value={billingForm.billing_email}
-              onChange={(e) => setBillingForm((p) => ({ ...p, billing_email: e.target.value }))}
-              style={{ minWidth: 220, flex: "1 1 220px" }}
-              placeholder="billing@example.com"
-            />
-          </div>
-
-          {billingErr ? (
-            <div className="small" style={{ marginTop: 10, color: "#ff6b6b", whiteSpace: "pre-wrap" }}>{billingErr}</div>
-          ) : null}
-
-          {billingData ? (
-            <div className="small" style={{ marginTop: 10, opacity: 0.9, whiteSpace: "pre-wrap" }}>
-              {JSON.stringify(billingData, null, 2)}
-            </div>
-          ) : (
-            <div className="small" style={{ marginTop: 10, opacity: 0.75 }}>
-              まだ契約情報を読み込んでいません（workspace を確認して「現在の契約情報を取得」を押してください）。
-            </div>
-          )}
-        </div>
-
-        <div style={{ height: 12 }} />
-
-        {/* AIレビュー */}
-        <div className="card" style={{ marginTop: 8, border: "1px solid rgba(255,255,255,0.10)", background: "rgba(0,0,0,0.20)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-            <div className="h2" style={{ margin: 0 }}>AIレビュー（画面プレビュー付き）</div>
-            <button
-              onClick={() =>
-                generateAiReview({
-                  site_id: siteId,
-                  day: latestDay,
-                  scenario_id: abScenarioId,
-                  variant_id: "na",
-                })
-              }
-              disabled={!latestDay || !abScenarioId || loadingReview}
-            >
-              {loadingReview ? "生成中..." : "AIレビューを生成"}
-            </button>
-          </div>
-
-          <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
-            ※ scenario_id は下の A/B 統計カードと同じ入力を使います（variant は一旦 na）
-          </div>
-
-          <div style={{ height: 12 }} />
-
-          <div className="small" style={{ opacity: 0.72, marginBottom: 10 }}>
-            プレビュー＋注釈ピンで、どこを改善すべきかを視覚的に確認できます。
-          </div>
-
-          {reviewData?.packs?.length ? (
-            <AdminPreviewWithPins packs={reviewData.packs} initialVariantId={reviewData.packs?.[0]?.variantId || "na"} />
-          ) : (
-            <div className="small" style={{ opacity: 0.8 }}>
-              まだAIレビュー結果がありません（右上のボタンで生成）
-            </div>
-          )}
-        </div>
-
-        {/* A/B */}
-        <div className="card" style={{ marginTop: 12, border: "1px solid rgba(255,255,255,0.10)", background: "rgba(0,0,0,0.20)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <div className="h2" style={{ margin: 0 }}>A/B 結果サマリー</div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button onClick={() => abScenarioId && navigate(`/scenarios/${abScenarioId}/review`)} disabled={!abScenarioId}>
-                AIレビューを見る
-              </button>
-              <button onClick={() => abScenarioId && navigate(`/scenarios/${abScenarioId}/ai`)} disabled={!abScenarioId}>
-                AI分析を見る
-              </button>
-              <button onClick={() => navigate("/scenarios")}>
-                シナリオ一覧
-              </button>
-              <button onClick={() => loadAbSummary()} disabled={!latestDay || !abScenarioId || loadingAb}>
-                {loadingAb ? "更新中..." : "集計を更新"}
-              </button>
-            </div>
-          </div>
-
-          <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
-            ※ 選択中 scenario を対象に variant_id:null でAPIを叩き、variants / ab（あれば）をそのまま表示します。scenario が無い場合は先に Scenario を作成してください。
-          </div>
-
-          <div style={{ height: 10 }} />
-
-          <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <div className="small" style={{ opacity: 0.8 }}>scenario</div>
-            <select
-              className="input"
-              value={abScenarioId}
-              onChange={(e) => setAbScenarioId(e.target.value)}
-              style={{ minWidth: 320, flex: "1 1 320px" }}
-              disabled={!scenarios.length}
-            >
-              {!scenarios.length ? (
-                <option value="">scenario がありません</option>
-              ) : null}
-              {scenarios.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {scenarioLabel(s)}{scenarioLabel(s) !== s.id ? ` (${s.id})` : ""}
-                </option>
-              ))}
-            </select>
-            <div className="small" style={{ opacity: 0.8 }}>day</div>
-            <input className="input" value={latestDay || ""} readOnly style={{ width: 140, opacity: 0.9 }} />
-          </div>
-
-          {abErr ? (
-            <div className="small" style={{ marginTop: 10, color: "#ff6b6b", whiteSpace: "pre-wrap" }}>{abErr}</div>
-          ) : null}
-
-          {abSummary?.ok ? (
-            <div style={{ marginTop: 10 }}>
-              <div className="small" style={{ opacity: 0.85 }}>
-                scope: <b>{abSummary.scope}</b> / scope_id: <b>{abSummary.scope_id}</b> / variant_id: <b>{String(abSummary.variant_id)}</b>
-              </div>
-
-              <div style={{ height: 8 }} />
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
-                  gap: 10,
-                  marginBottom: 10,
-                }}
-              >
-                <StatCard label="TOTAL Imp" value={formatInt(abSummary?.counts?.impressions)} />
-                <StatCard label="TOTAL Click" value={formatInt(abSummary?.counts?.click_links)} />
-                <StatCard label="TOTAL CTR" value={`${safeNum(abSummary?.metrics?.link_ctr ?? abSummary?.metrics?.ctr)}%`} />
-                <StatCard label="Winner" value={String(abSummary?.ab?.winner ?? "-")} />
-              </div>
-
-              <div
-                className="card"
-                style={{
-                  minWidth: 0,
-                  marginBottom: 10,
-                  border: "1px solid rgba(255,255,255,0.10)",
-                  background: "rgba(255,255,255,0.03)",
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-                  <div>
-                    <div className="small" style={{ opacity: 0.68 }}>A/B判定サマリー</div>
-                    <div style={{ fontSize: 22, fontWeight: 900, marginTop: 4 }}>
-                      {String(abSummary?.ab?.winner ?? "-")}
-                    </div>
-                  </div>
-
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <div className="small" style={{ opacity: 0.78 }}>
-                      significant: <b>{String(abSummary?.ab?.significant ?? "-")}</b>
-                    </div>
-                    <div className="small" style={{ opacity: 0.78 }}>
-                      p-value: <b>{String(abSummary?.ab?.p_value ?? abSummary?.ab?.pValue ?? "-")}</b>
-                    </div>
-                    <div className="small" style={{ opacity: 0.78 }}>
-                      lift_abs: <b>{String(abSummary?.ab?.lift_abs ?? abSummary?.ab?.liftAbs ?? "-")}</b>
-                    </div>
-                    <div className="small" style={{ opacity: 0.78 }}>
-                      lift_rel: <b>{String(abSummary?.ab?.lift_rel ?? abSummary?.ab?.liftRel ?? "-")}</b>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="small" style={{ opacity: 0.68, marginTop: 10, lineHeight: 1.8 }}>
-                  {abSummary?.ab?.winner
-                    ? `現在の暫定勝者は ${String(abSummary?.ab?.winner)} です。significant と p-value を見ながら切替判断します。`
-                    : "まだ winner は判定されていません。十分な impressions と click が集まるまで継続観測します。"}
-                </div>
-              </div>
-
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th style={{ textAlign: "left" }}>TOTAL</th>
-                    <th style={{ textAlign: "right" }}>impressions</th>
-                    <th style={{ textAlign: "right" }}>click_links</th>
-                    <th style={{ textAlign: "right" }}>CTR%</th>
-                    <th style={{ textAlign: "right" }}>closes</th>
-                    <th style={{ textAlign: "right" }}>conversions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td style={{ textAlign: "left" }}><b>all</b></td>
-                    <td style={{ textAlign: "right" }}><b>{safeNum(abSummary?.counts?.impressions)}</b></td>
-                    <td style={{ textAlign: "right" }}><b>{safeNum(abSummary?.counts?.click_links)}</b></td>
-                    <td style={{ textAlign: "right" }}><b>{safeNum(abSummary?.metrics?.link_ctr ?? abSummary?.metrics?.ctr)}</b></td>
-                    <td style={{ textAlign: "right" }}><b>{safeNum(abSummary?.counts?.closes)}</b></td>
-                    <td style={{ textAlign: "right" }}><b>{safeNum(abSummary?.counts?.conversions)}</b></td>
-                  </tr>
-                </tbody>
-              </table>
-
-              {Array.isArray(abSummary?.variants) && abSummary.variants.length ? (
-                <>
-                  <div style={{ height: 10 }} />
-                  <div className="h2" style={{ margin: 0, fontSize: 14 }}>バリエーション別結果</div>
-                  <div style={{ height: 6 }} />
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th style={{ textAlign: "left" }}>variant</th>
-                        <th style={{ textAlign: "right" }}>impressions</th>
-                        <th style={{ textAlign: "right" }}>click_links</th>
-                        <th style={{ textAlign: "right" }}>CTR%</th>
-                        <th style={{ textAlign: "right" }}>closes</th>
-                        <th style={{ textAlign: "right" }}>conversions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {abSummary.variants.map((v: any) => (
-                        <tr key={String(v?.variant_id ?? v?.variantId ?? "na")}>
-                          <td style={{ textAlign: "left" }}><b>{String(v?.variant_id ?? v?.variantId ?? "na")}</b></td>
-                          <td style={{ textAlign: "right" }}>{safeNum(v?.counts?.impressions)}</td>
-                          <td style={{ textAlign: "right" }}>{safeNum(v?.counts?.click_links)}</td>
-                          <td style={{ textAlign: "right" }}>{safeNum(v?.metrics?.link_ctr ?? v?.metrics?.ctr)}</td>
-                          <td style={{ textAlign: "right" }}>{safeNum(v?.counts?.closes)}</td>
-                          <td style={{ textAlign: "right" }}>{safeNum(v?.counts?.conversions)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </>
-              ) : (
-                <div className="small" style={{ marginTop: 10, opacity: 0.8 }}>
-                  variants がまだ返ってきてない（バックエンドがTOTALだけ返す版の可能性あり）。
-                </div>
-              )}
-
-              {abSummary?.ab ? (
-                <>
-                  <div style={{ height: 10 }} />
-                  <div className="h2" style={{ margin: 0, fontSize: 14 }}>A/B判定（統計）</div>
-                  <div style={{ height: 6 }} />
-                  <div className="small" style={{ opacity: 0.9, lineHeight: 1.7 }}>
-                    p-value: <b>{String(abSummary.ab.p_value ?? abSummary.ab.pValue ?? "-")}</b> / significant: <b>{String(abSummary.ab.significant)}</b> / winner: <b>{String(abSummary.ab.winner ?? "-")}</b>
-                    <br />
-                    lift_abs: <b>{String(abSummary.ab.lift_abs ?? abSummary.ab.liftAbs ?? "-")}</b> / lift_rel: <b>{String(abSummary.ab.lift_rel ?? abSummary.ab.liftRel ?? "-")}</b>
-                  </div>
-                </>
-              ) : null}
-
-              {abSummary?.rule ? (
-                <>
-                  <div style={{ height: 10 }} />
-                  <div className="h2" style={{ margin: 0, fontSize: 14 }}>Rule</div>
-                  <div style={{ height: 6 }} />
-                  <div className="small" style={{ opacity: 0.9 }}>
-                    grade: <b>{String(abSummary.rule.grade)}</b>
-                    {Array.isArray(abSummary.rule.reasons) && abSummary.rule.reasons.length ? (
-                      <ul>
-                        {abSummary.rule.reasons.map((t: string, i: number) => (
-                          <li key={i}>{t}</li>
-                        ))}
-                      </ul>
-                    ) : null}
-                  </div>
-                </>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+              gap: 14,
+            }}
+          >
+            <div>
+              <div className="small" style={{ opacity: 0.68 }}>現在のサイト</div>
+              <div style={{ fontWeight: 800, marginTop: 6 }}>{selectedSiteName || "-"}</div>
+              {selectedSiteName && siteId && selectedSiteName !== siteId ? (
+                <div className="small" style={{ opacity: 0.58, marginTop: 2 }}>ID: {siteId}</div>
               ) : null}
             </div>
-          ) : (
-            <div className="small" style={{ marginTop: 10, opacity: 0.8 }}>
-              まだ集計がありません（day/site/scenario_id を確認して「更新」）。
+            <div>
+              <div className="small" style={{ opacity: 0.68 }}>現在のシナリオ</div>
+              <div style={{ fontWeight: 800, marginTop: 6 }}>{scenarioName || "-"}</div>
+              {scenarioName && abScenarioId && scenarioName !== abScenarioId ? (
+                <div className="small" style={{ opacity: 0.58, marginTop: 2 }}>ID: {abScenarioId}</div>
+              ) : null}
             </div>
-          )}
+            <div>
+              <div className="small" style={{ opacity: 0.68 }}>ワークスペース</div>
+              <div style={{ fontWeight: 800, marginTop: 6 }}>{selectedWorkspaceName || "-"}</div>
+            </div>
+            <div>
+              <div className="small" style={{ opacity: 0.68 }}>最新日 / 読み込み件数</div>
+              <div style={{ fontWeight: 800, marginTop: 6 }}>{latestDay || "-"} / {rows.length}</div>
+            </div>
+          </div>
         </div>
 
-        <div style={{ height: 8 }} />
-        <div className="small" style={{ opacity: 0.85 }}>
-          rows: <b>{rows.length}</b> / chartDays: <b>{chartData.length}</b>
+        <div style={{ height: 14 }} />
+
+        <div
+          className="liquid-page"
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: 12,
+          }}
+        >
+          <StatCard label="表示回数" value={formatInt(summary.imp)} sub={`${days}日集計`} />
+          <StatCard label="主要クリック" value={formatInt(summary.clkLink)} sub="主要KPI" />
+          <StatCard label="CTR" value={`${summary.ctr}%`} sub="クリック率" />
+          <StatCard label="閉じる操作" value={formatInt(summary.close)} sub="dismiss / close" />
         </div>
 
         {err ? (
-          <div className="small" style={{ marginTop: 8, color: "#ff6b6b", whiteSpace: "pre-wrap" }}>
+          <div className="small" style={{ marginTop: 12, color: "#d93025", whiteSpace: "pre-wrap" }}>
             {err}
             {"\n"}
-            ※ index エラーなら、Firebase console が「Create index」リンク出すやつ。そこ踏めばOK。
+            ※ index エラーなら、Firebase console が「Create index」リンク出すやつ。そこを開けば対応できます。
           </div>
         ) : null}
       </div>
 
+
+
+
       <div style={{ height: 14 }} />
 
-      <div className="card" style={{ minWidth: 0 }}>
-        <div className="h2">表示回数 / 主要クリック</div>
+      <div className="card liquid-page" style={{ minWidth: 0 }}>
+        <div className="h2">推移：表示回数 / 主要クリック</div>
         <div className="small" style={{ opacity: 0.68, marginBottom: 8 }}>
           日別の表示回数と主要クリックを重ねて確認します。
         </div>
@@ -991,8 +713,8 @@ const latestDay = useMemo(() => {
 
       <div style={{ height: 14 }} />
 
-      <div className="card" style={{ minWidth: 0 }}>
-        <div className="h2">CTR（クリック率）</div>
+      <div className="card liquid-page" style={{ minWidth: 0 }}>
+        <div className="h2">推移：CTR（クリック率）</div>
         <div className="small" style={{ opacity: 0.68, marginBottom: 8 }}>
           クリック率の推移。A/Bや改善後の変化を確認するための指標です。
         </div>
@@ -1015,7 +737,7 @@ const latestDay = useMemo(() => {
 
       <div style={{ height: 14 }} />
 
-      <div className="card">
+      <div className="card liquid-page" style={{ minWidth: 0 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <div>
             <div className="h2">{days}日まとめ / バリエーション別インサイト</div>
@@ -1032,17 +754,18 @@ const latestDay = useMemo(() => {
             </button>
           </div>
         </div>
-        <table className="table">
-          <thead>
-            <tr>
-              <th style={{ textAlign: "right" }}>impression</th>
-              <th style={{ textAlign: "right" }}>click_link</th>
-              <th style={{ textAlign: "right" }}>CTR%</th>
-              <th style={{ textAlign: "right" }}>click</th>
-              <th style={{ textAlign: "right" }}>close</th>
-            </tr>
-          </thead>
-          <tbody>
+        <div className="liquid-scroll-x">
+          <table className="table">
+            <thead>
+              <tr>
+                <th style={{ textAlign: "right" }}>表示回数</th>
+                <th style={{ textAlign: "right" }}>主要クリック</th>
+                <th style={{ textAlign: "right" }}>CTR%</th>
+                <th style={{ textAlign: "right" }}>クリック</th>
+                <th style={{ textAlign: "right" }}>閉じる操作</th>
+              </tr>
+            </thead>
+            <tbody>
             <tr>
               <td style={{ textAlign: "right" }}><b>{summary.imp}</b></td>
               <td style={{ textAlign: "right" }}><b>{summary.clkLink}</b></td>
@@ -1050,8 +773,9 @@ const latestDay = useMemo(() => {
               <td style={{ textAlign: "right" }}><b>{summary.clk}</b></td>
               <td style={{ textAlign: "right" }}><b>{summary.close}</b></td>
             </tr>
-          </tbody>
-        </table>
+            </tbody>
+          </table>
+        </div>
 
         {summaryTable.map((r) => {
           const day = latestDay; // 最新日
@@ -1059,7 +783,16 @@ const latestDay = useMemo(() => {
           const ai = aiMap[key];
 
           return (
-            <div key={r.v} className="card" style={{ marginTop: 16 }}>
+            <div
+              key={r.v}
+              className="card liquid-page"
+              style={{
+                marginTop: 16,
+                minWidth: 0,
+                border: "1px solid rgba(15,23,42,0.08)",
+                background: "linear-gradient(180deg,#ffffff,#f8fbff)",
+              }}
+            >
               <div style={{ display: "flex", justifyContent: "space-between" }}>
                 <b>Variant {r.v}</b>
 
@@ -1084,6 +817,7 @@ const latestDay = useMemo(() => {
 
               {!ai && (
                 <button
+                  className="btn btn--primary"
                   onClick={() =>
                     generateAiInsight({
                       site_id: siteId,
@@ -1101,6 +835,7 @@ const latestDay = useMemo(() => {
                   }
                   disabled={!day || loadingAi === String(r.v ?? "na")}
                 >
+
                   {loadingAi === String(r.v ?? "na") ? "生成中..." : "AI分析を生成"}
                 </button>
               )}

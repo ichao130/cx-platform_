@@ -17,6 +17,34 @@
     return null;
   }
 
+  function getScriptOrigin(script) {
+    try {
+      if (script && script.src) return new URL(script.src, window.location.href).origin;
+    } catch (e) {}
+    try {
+      return window.location.origin || "";
+    } catch (e2) {
+      return "";
+    }
+  }
+
+  function defaultApiBaseFromScript(script) {
+    var origin = getScriptOrigin(script);
+    if (!origin) return "";
+    return origin + "/api/v1/serve";
+  }
+
+  function resolveApiBase(script) {
+    var attr = "";
+    try {
+      attr = String((script && script.getAttribute && script.getAttribute("data-api-base")) || "").trim();
+    } catch (e) {
+      attr = "";
+    }
+    if (attr) return attr;
+    return defaultApiBaseFromScript(script);
+  }
+
   function qs(obj) {
     var parts = [];
     for (var k in obj) {
@@ -883,11 +911,16 @@
 
     var siteId = script.getAttribute("data-site-id") || "";
     var siteKey = script.getAttribute("data-site-key") || "";
-    var apiBase = script.getAttribute("data-api-base") || "";
+    var apiBase = resolveApiBase(script);
     if (!siteId || !apiBase) {
-      log("[cx] missing data-site-id or data-api-base");
+      log("[cx] missing data-site-id or could not resolve api base");
       return;
     }
+
+    log("[cx] sdk origin/api", {
+      script: script && script.src ? script.src : "",
+      apiBase: apiBase
+    });
 
     var ctx = {
       site_id: siteId,

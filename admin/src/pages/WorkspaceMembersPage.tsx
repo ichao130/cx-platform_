@@ -198,7 +198,6 @@ export default function WorkspaceMembersPage() {
     return onAuthStateChanged(auth, (user) => {
       const uid = user?.uid || "";
       setCurrentUid(uid);
-      setWorkspaceId("");
       setWorkspaceId(readSelectedWorkspaceIdForUid(uid));
     });
   }, []);
@@ -224,38 +223,44 @@ export default function WorkspaceMembersPage() {
   }, [currentUid]);
 
   useEffect(() => {
+    if (!currentUid) return;
+
+    const applySelectedWorkspace = () => {
+      setWorkspaceId(readSelectedWorkspaceIdForUid(currentUid));
+    };
+
     const onStorage = (e: StorageEvent) => {
-      if (currentUid && e.key === workspaceKeyForUid(currentUid)) {
-        setWorkspaceId(readSelectedWorkspaceIdForUid(currentUid));
+      if (e.key === workspaceKeyForUid(currentUid)) {
+        applySelectedWorkspace();
       }
     };
-    const onCustom = (e: any) => {
-      const next = e?.detail?.workspaceId;
-      if (typeof next === "string") setWorkspaceId(next || "");
+
+    const onWorkspaceChanged = (e?: Event) => {
+      const next = (e as CustomEvent | undefined)?.detail?.workspaceId;
+      if (typeof next === "string") {
+        setWorkspaceId(next || "");
+        return;
+      }
+      applySelectedWorkspace();
     };
+
     window.addEventListener("storage", onStorage);
-    window.addEventListener("cx_admin_workspace_changed" as any, onCustom);
+    window.addEventListener("cx_admin_workspace_changed", onWorkspaceChanged as EventListener);
     return () => {
       window.removeEventListener("storage", onStorage);
-      window.removeEventListener("cx_admin_workspace_changed" as any, onCustom);
+      window.removeEventListener("cx_admin_workspace_changed", onWorkspaceChanged as EventListener);
     };
   }, [currentUid]);
 
   useEffect(() => {
     if (!currentUid) return;
-    if (!workspaceRows.length) {
-      setWorkspaceId("");
-      return;
-    }
-    const exists = workspaceId && workspaceRows.some((w) => w.id === workspaceId);
+    if (!workspaceRows.length) return;
+
+    const exists = !!workspaceId && workspaceRows.some((w) => w.id === workspaceId);
     if (!exists) {
       const next = workspaceRows[0]?.id || "";
       setWorkspaceId(next);
       if (next) writeSelectedWorkspaceId(next, currentUid);
-      return;
-    }
-    if (workspaceId) {
-      writeSelectedWorkspaceId(workspaceId, currentUid);
     }
   }, [currentUid, workspaceRows, workspaceId]);
 
@@ -317,10 +322,13 @@ export default function WorkspaceMembersPage() {
   }, [workspaceId, currentUid]);
 
   useEffect(() => {
-    // auto-load if workspaceId already present
-    if (workspaceId?.trim()) load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (!workspaceId?.trim()) {
+      setMembers([]);
+      setInvites([]);
+      return;
+    }
+    load();
+  }, [workspaceId, load]);
 
   const doInvite = useCallback(async () => {
     if (!workspaceId?.trim()) return;
@@ -466,60 +474,77 @@ export default function WorkspaceMembersPage() {
 
 
   return (
-    <div className="container" style={{ minWidth: 0 }}>
-      <div className="card" style={{ minWidth: 0 }}>
-        <h1 className="h1">メンバー管理</h1>
-        <div className="small" style={{ opacity: 0.8 }}>
-          ワークスペースごとのメンバー招待、権限変更、削除を行う画面です。
-        </div>
-        <div className="small" style={{ marginTop: 8, opacity: 0.72, lineHeight: 1.6 }}>
-          `workspace_role_missing` が出る場合は、選択中のワークスペースと権限を付与したワークスペースがズレている可能性があります。まず下のワークスペース選択を確認してください。
-        </div>
-
-        <div style={{ height: 12 }} />
-
-        <div className="small" style={{ opacity: 0.72, marginBottom: 8 }}>
-          現在のワークスペース: <b>{selectedWorkspaceName || workspaceId || "-"}</b>
-        </div>
-
-        {/* Workspace selector */}
-        <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <div className="small" style={{ opacity: 0.8 }}>ワークスペース</div>
-          <select
-            className="input"
-            value={workspaceId}
-            onChange={(e) => {
-              const next = e.target.value;
-              setWorkspaceId(next);
-              writeSelectedWorkspaceId(next, currentUid);
-            }}
-            style={{ minWidth: 320, flex: "1 1 320px" }}
-          >
-            {workspaceRows.length === 0 ? (
-              <option value="">ワークスペースがありません</option>
+    <div className="container liquid-page" style={{ minWidth: 0 }}>
+      <div className="page-header">
+        <div className="page-header__meta">
+          <div className="small" style={{ marginBottom: 6, opacity: 0.7 }}>MOKKEDA / Settings</div>
+          <h1 className="h1">メンバー管理</h1>
+          <div className="small">ワークスペースごとのメンバー招待、権限変更、削除を行う画面です。まずは一覧を確認し、必要なときだけ招待や権限変更を行います。</div>
+          <div className="small" style={{ marginTop: 6, opacity: 0.72 }}>
+            現在のワークスペース: <b>{selectedWorkspaceName || workspaceId || "-"}</b>
+            {workspaceId ? (
+              <React.Fragment>
+                {' '}<span style={{ opacity: 0.62 }}> / ID: <code>{workspaceId}</code></span>
+              </React.Fragment>
             ) : null}
-            {workspaceRows.map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.data?.name ? `${w.data.name} (${w.id})` : w.id}
-              </option>
-            ))}
-          </select>
-          <button onClick={() => load()} disabled={!canLoad || loading}>
+          </div>
+        </div>
+        <div className="page-header__actions" style={{ flexWrap: "wrap" }}>
+          <button onClick={() => load()} disabled={!canLoad || loading} className="btn">
             {loading ? "読込中..." : "メンバー情報を取得"}
           </button>
         </div>
+      </div>
+
+      <div className="card liquid-page" style={{ minWidth: 0, marginBottom: 14 }}>
+        <div className="list-toolbar">
+          <div className="list-toolbar__filters" style={{ flex: 1 }}>
+            <div style={{ minWidth: 260, flex: "1 1 320px" }}>
+              <div className="h2">ワークスペース</div>
+              <select
+                className="input"
+                value={workspaceId}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setWorkspaceId(next);
+                  writeSelectedWorkspaceId(next, currentUid);
+                }}
+                style={{ minWidth: 320 }}
+              >
+                {workspaceRows.length === 0 ? (
+                  <option value="">ワークスペースがありません</option>
+                ) : null}
+                {workspaceRows.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.data?.name ? `${w.data.name} (${w.id})` : w.id}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="list-toolbar__actions">
+            <div className="small" style={{ lineHeight: 1.6, opacity: 0.74, maxWidth: 520 }}>
+              `workspace_role_missing` が出る場合は、選択中のワークスペースと権限を付与したワークスペースがズレている可能性があります。まずこの選択を確認してください。
+            </div>
+          </div>
+        </div>
 
         {err ? (
-          <div className="small" style={{ marginTop: 10, color: "#ff6b6b", whiteSpace: "pre-wrap" }}>
+          <div className="small" style={{ marginTop: 10, color: "#d93025", whiteSpace: "pre-wrap" }}>
             {err}
           </div>
         ) : null}
       </div>
 
-      <div style={{ height: 14 }} />
-
-      {/* Invite */}
-      <div className="card" style={{ minWidth: 0 }}>
+      <div
+        className="card liquid-page"
+        style={{
+          minWidth: 0,
+          marginBottom: 14,
+          border: "1px solid rgba(15,23,42,.08)",
+          background: "linear-gradient(180deg,#ffffff,#f8fbff)",
+        }}
+      >
         <div className="h2" style={{ margin: 0 }}>メンバーを招待</div>
         <div className="small" style={{ opacity: 0.75, marginTop: 6 }}>
           メールアドレスと権限を指定して招待リンクを作成します。作成後は下の招待一覧から URL をワンクリックでコピーできます。
@@ -527,51 +552,56 @@ export default function WorkspaceMembersPage() {
 
         <div style={{ height: 10 }} />
 
-        <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <div className="row liquid-page" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <input
             className="input"
             value={inviteEmail}
             onChange={(e) => setInviteEmail(e.target.value)}
             placeholder="email@example.com"
-            style={{ minWidth: 320, flex: "1 1 320px" }}
+            style={{ minWidth: 260, flex: "1 1 320px" }}
           />
           <select
             className="input"
             value={inviteRole}
             onChange={(e) => setInviteRole(e.target.value as Role)}
-            style={{ width: 160 }}
+            style={{ width: 220 }}
           >
             <option value="admin">admin（管理者）</option>
             <option value="member">member（運用メンバー）</option>
             <option value="viewer">viewer（閲覧のみ）</option>
           </select>
 
-          <button onClick={doInvite} disabled={!canLoad || inviting || !inviteEmail.trim()}>
+          <button className="btn btn--primary" onClick={doInvite} disabled={!canLoad || inviting || !inviteEmail.trim()}>
             {inviting ? "招待中..." : "招待リンクを作成"}
           </button>
         </div>
       </div>
 
-      <div style={{ height: 14 }} />
+      <div className="card liquid-page" style={{ minWidth: 0, marginBottom: 14 }}>
+        <div className="list-toolbar">
+          <div className="list-toolbar__filters">
+            <div>
+              <div className="h2" style={{ margin: 0 }}>メンバー一覧</div>
+              <div className="small" style={{ marginTop: 6, opacity: 0.74 }}>
+                owner はこの画面から変更・削除できません。自分自身も削除不可です。
+              </div>
+            </div>
+          </div>
+        </div>
 
-      {/* Members */}
-      <div className="card" style={{ minWidth: 0 }}>
-        <div className="h2" style={{ margin: 0 }}>メンバー一覧</div>
-
-        <div style={{ height: 10 }} />
-
-        <table className="table">
-          <thead>
-            <tr>
-              <th style={{ textAlign: "left" }}>アカウント</th>
-              <th style={{ textAlign: "left" }}>メールアドレス</th>
-              <th style={{ textAlign: "left" }}>UID</th>
-              <th style={{ textAlign: "left" }}>権限</th>
-              <th style={{ textAlign: "left" }}>参加日時</th>
-              <th style={{ textAlign: "right" }}>操作</th>
-            </tr>
-          </thead>
-          <tbody>
+        <div className="liquid-scroll-x">
+          <table className="table">
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left" }}>アカウント</th>
+                <th style={{ textAlign: "left" }}>メールアドレス</th>
+                <th style={{ textAlign: "left" }}>UID</th>
+                <th style={{ textAlign: "left" }}>権限</th>
+                <th style={{ textAlign: "left" }}>参加日時</th>
+                <th style={{ textAlign: "right" }}>操作</th>
+              </tr>
+            </thead>
+            <tbody>
             {members.length ? (
               members.map((m) => (
                 <tr key={m.uid}>
@@ -601,9 +631,9 @@ export default function WorkspaceMembersPage() {
                         display: "inline-block",
                         padding: "2px 8px",
                         borderRadius: 8,
-                        background: "rgba(255,255,255,0.06)",
+                        background: "rgba(15,23,42,0.04)",
                         border: `1px solid ${roleColor(m.role)}`,
-                        color: "white",
+                        color: "inherit",
                         marginRight: 10,
                       }}
                     >
@@ -614,7 +644,7 @@ export default function WorkspaceMembersPage() {
                       className="input"
                       value={m.role}
                       onChange={(e) => updateRole(m.uid, e.target.value as Role)}
-                      style={{ width: 160 }}
+                      style={{ width: 180 }}
                       disabled={m.role === "owner"}
                     >
                       {m.role === "owner" ? <option value="owner">owner（オーナー）</option> : null}
@@ -631,8 +661,8 @@ export default function WorkspaceMembersPage() {
                   <td style={{ textAlign: "left" }}>{fmtAnyTs(m.joinedAt)}</td>
                   <td style={{ textAlign: "right" }}>
                     <button
+                      className="btn btn--danger"
                       onClick={() => removeMember(m.uid)}
-                      style={{ background: "rgba(239,68,68,0.15)" }}
                       disabled={m.role === "owner" || m.uid === currentUid}
                     >
                       削除する
@@ -647,37 +677,40 @@ export default function WorkspaceMembersPage() {
                 </td>
               </tr>
             )}
-          </tbody>
-        </table>
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      <div style={{ height: 14 }} />
-
-      {/* Invites */}
-      <div className="card" style={{ minWidth: 0 }}>
-        <div className="h2" style={{ margin: 0 }}>招待一覧</div>
-        <div className="small" style={{ opacity: 0.75, marginTop: 6 }}>
-          取り消し済みの招待は一覧から非表示にしています。pending / accepted を中心に確認できます。
+      <div className="card liquid-page" style={{ minWidth: 0 }}>
+        <div className="list-toolbar">
+          <div className="list-toolbar__filters">
+            <div>
+              <div className="h2" style={{ margin: 0 }}>招待一覧</div>
+              <div className="small" style={{ opacity: 0.75, marginTop: 6 }}>
+                取り消し済みの招待は一覧から非表示にしています。pending / accepted を中心に確認できます。
+              </div>
+            </div>
+          </div>
         </div>
 
-        <div style={{ height: 10 }} />
-
-        <table className="table">
-          <thead>
-            <tr>
-              <th style={{ textAlign: "left" }}>招待ID</th>
-              <th style={{ textAlign: "left" }}>メールアドレス</th>
-              <th style={{ textAlign: "left" }}>権限</th>
-              <th style={{ textAlign: "left" }}>状態</th>
-              <th style={{ textAlign: "left" }}>招待URL</th>
-              <th style={{ textAlign: "left" }}>作成日時</th>
-              <th style={{ textAlign: "left" }}>有効期限</th>
-              <th style={{ textAlign: "left" }}>承認日時</th>
-              <th style={{ textAlign: "left" }}>取り消し日時</th>
-              <th style={{ textAlign: "right" }}>操作</th>
-            </tr>
-          </thead>
-          <tbody>
+        <div className="liquid-scroll-x">
+          <table className="table">
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left" }}>招待ID</th>
+                <th style={{ textAlign: "left" }}>メールアドレス</th>
+                <th style={{ textAlign: "left" }}>権限</th>
+                <th style={{ textAlign: "left" }}>状態</th>
+                <th style={{ textAlign: "left" }}>招待URL</th>
+                <th style={{ textAlign: "left" }}>作成日時</th>
+                <th style={{ textAlign: "left" }}>有効期限</th>
+                <th style={{ textAlign: "left" }}>承認日時</th>
+                <th style={{ textAlign: "left" }}>取り消し日時</th>
+                <th style={{ textAlign: "right" }}>操作</th>
+              </tr>
+            </thead>
+            <tbody>
             {visibleInvites.length ? (
               visibleInvites.map((x) => (
                 <tr key={x.invite_id}>
@@ -691,20 +724,20 @@ export default function WorkspaceMembersPage() {
                         display: "inline-block",
                         padding: "2px 8px",
                         borderRadius: 8,
-                        background: "rgba(255,255,255,0.06)",
+                        background: "rgba(15,23,42,0.04)",
                         border: `1px solid ${roleColor(x.role)}`,
-                        color: "white",
+                        color: "inherit",
                       }}
                     >
                       {roleLabel(x.role)}
                     </span>
                   </td>
                   <td style={{ textAlign: "left" }}>{inviteStatus(x)}</td>
-                  <td style={{ textAlign: "left", minWidth: 360 }}>
+                  <td style={{ textAlign: "left", minWidth: 300 }}>
                     {x.token ? (
                       <div style={{ display: "grid", gap: 8 }}>
                         <input className="input" readOnly value={buildInviteUrl(x)} />
-                        <button onClick={() => copyInviteUrl(x)} style={{ width: 140 }}>
+                        <button className="btn" onClick={() => copyInviteUrl(x)} style={{ width: 160 }}>
                           URLをコピー
                         </button>
                       </div>
@@ -718,7 +751,7 @@ export default function WorkspaceMembersPage() {
                   <td style={{ textAlign: "left" }}>{fmtAnyTs(x.revokedAt)}</td>
                   <td style={{ textAlign: "right" }}>
                     {!x.acceptedAt && !x.revokedAt ? (
-                      <button onClick={() => revokeInvite(x.invite_id)} style={{ background: "rgba(239,68,68,0.15)" }}>
+                      <button className="btn btn--danger" onClick={() => revokeInvite(x.invite_id)}>
                         招待を取り消す
                       </button>
                     ) : (
@@ -734,8 +767,9 @@ export default function WorkspaceMembersPage() {
                 </td>
               </tr>
             )}
-          </tbody>
-        </table>
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div style={{ height: 24 }} />

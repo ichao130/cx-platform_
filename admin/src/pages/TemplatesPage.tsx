@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { Fragment, useEffect, useMemo, useState } from 'react';
 import { collection, doc, onSnapshot, orderBy, query, setDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { genId } from '../components/id';
@@ -139,17 +139,6 @@ export default function TemplatesPage() {
   const [workspaces, setWorkspaces] = useState<Array<{ id: string; data?: { name?: string } }>>([]);
   const [rows, setRows] = useState<Array<{ id: string; data: TemplateDoc }>>([]);
 
-  useEffect(() => {
-    const q = query(collection(db, 'workspaces'), orderBy('__name__'));
-    return onSnapshot(q, (snap) =>
-      setWorkspaces(snap.docs.map((d) => ({ id: d.id, data: d.data() as any })))
-    );
-  }, []);
-
-  useEffect(() => {
-    const q = query(collection(db, 'templates'), orderBy('__name__'));
-    return onSnapshot(q, (snap) => setRows(snap.docs.map((d) => ({ id: d.id, data: d.data() as TemplateDoc }))));
-  }, []);
 
   const [id, setId] = useState(() => genId('tpl'));
   const [workspaceId, setWorkspaceId] = useState('');
@@ -159,6 +148,8 @@ export default function TemplatesPage() {
   const [css, setCss] = useState(DEFAULTS.modal.css);
 
   const selectedWorkspaceName = useMemo(() => workspaceLabel(workspaces, workspaceId), [workspaces, workspaceId]);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [showJsonId, setShowJsonId] = useState('');
 
   const [sample, setSample] = useState<SampleData>({
     title: 'テスト表示',
@@ -188,178 +179,283 @@ export default function TemplatesPage() {
     return buildPreviewSrcDoc({ html, css, data: sample });
   }, [html, css, sample]);
 
+  function resetEditor() {
+    setId(genId('tpl'));
+    setName('Default');
+    setType('modal');
+    setHtml(DEFAULTS.modal.html);
+    setCss(DEFAULTS.modal.css);
+  }
+
+  function openCreateModal() {
+    resetEditor();
+    if (!workspaceId && workspaces.length) setWorkspaceId(workspaces[0].id);
+    setIsModalOpen(true);
+  }
+
+  function openEditModal(row: { id: string; data: TemplateDoc }) {
+    setId(row.id);
+    setWorkspaceId(row.data.workspaceId);
+    setType(row.data.type);
+    setName(row.data.name || 'Template');
+    setHtml(row.data.html || DEFAULTS[row.data.type].html);
+    setCss(row.data.css || DEFAULTS[row.data.type].css);
+    setIsModalOpen(true);
+  }
+
   async function createOrUpdate() {
     if (!workspaceId) throw new Error('workspaceId required');
     await setDoc(doc(db, 'templates', id.trim()), payload, { merge: true });
-    setId(genId('tpl'));
-    setName('Default');
-    setHtml(DEFAULTS.modal.html);
-    setCss(DEFAULTS.modal.css);
-    setType('modal');
+    resetEditor();
+    setIsModalOpen(false);
   }
 
   return (
-    <div className="container">
+    <div className="container liquid-page">
+      <div className="page-header">
+        <div className="page-header__meta">
+          <div className="small" style={{ marginBottom: 6, opacity: 0.7 }}>MOKKEDA / Main</div>
+          <h1 className="h1">テンプレート</h1>
+          <div className="small">モーダル・バナー・トーストの見た目を管理する画面です。まずは一覧で確認し、必要なときだけ登録・編集します。</div>
+          <div className="small" style={{ marginTop: 6, opacity: 0.72 }}>
+            現在のワークスペース: <b>{selectedWorkspaceName || workspaceId || '（未選択）'}</b>
+            {workspaceId ? (
+              <React.Fragment>
+                {' '}<span style={{ opacity: 0.62 }}> / ID: <code>{workspaceId}</code></span>
+              </React.Fragment>
+            ) : null}
+          </div>
+        </div>
+        <div className="page-header__actions">
+          <button className="btn btn--primary" onClick={openCreateModal}>
+            新規テンプレート
+          </button>
+        </div>
+      </div>
+
       <div className="card">
-        <h1 className="h1">テンプレート</h1>
-        <div className="small">モーダル・バナー・トーストの見た目を管理する画面です。</div>
-        <div className="small" style={{ opacity: 0.72 }}>アクションからテンプレートを選ぶと、この見た目が適用されます。</div>
-        <div style={{ height: 14 }} />
-
-        <div className="row" style={{ alignItems: 'flex-start' }}>
-          <div style={{ flex: 1, minWidth: 280 }}>
-            <div className="small" style={{ opacity: 0.72, marginBottom: 8 }}>
-              現在のワークスペース: <b>{selectedWorkspaceName || workspaceId || '（未選択）'}</b>
+        <div className="list-toolbar">
+          <div className="list-toolbar__filters">
+            <div className="small" style={{ opacity: 0.74 }}>
+              名前を中心に一覧化しています。HTML・CSS・プレビュー・確認用JSONは編集時または詳細表示で確認します。
             </div>
-            <div className="h2">テンプレートID</div>
-            <input className="input" value={id} onChange={(e) => setId(e.target.value)} />
-            <div style={{ height: 10 }} />
+          </div>
+          <div className="list-toolbar__actions">
+            <div style={{ minWidth: 240 }}>
+              <div className="h2">ワークスペース</div>
+              <select className="input" value={workspaceId} onChange={(e) => setWorkspaceId(e.target.value)}>
+                {workspaces.map((w) => {
+                  const label = workspaceLabel(workspaces, w.id);
+                  return (
+                    <option key={w.id} value={w.id}>
+                      {label}{label !== w.id ? ` (${w.id})` : ''}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+            <button className="btn" onClick={openCreateModal}>作成</button>
+          </div>
+        </div>
 
-            <div className="h2">ワークスペース</div>
-            <select className="input" value={workspaceId} onChange={(e) => setWorkspaceId(e.target.value)}>
-            {workspaces.map((w) => {
-              const label = workspaceLabel(workspaces, w.id);
+        <div className="liquid-scroll-x">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>テンプレート</th>
+                <th>ワークスペース</th>
+                <th>表示タイプ</th>
+                <th>テンプレート名</th>
+                <th>詳細</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+            {rows.map((r) => {
+              const isJsonOpen = showJsonId === r.id;
               return (
-                <option key={w.id} value={w.id}>
-                  {label}{label !== w.id ? ` (${w.id})` : ''}
-                </option>
+                <Fragment key={r.id}>
+                  <tr>
+                    <td>
+                      <div style={{ fontWeight: 700 }}>{r.data.name || '名称未設定'}</div>
+                      <div className="small" style={{ opacity: 0.72 }}>
+                        ID: <code>{r.id}</code>
+                      </div>
+                    </td>
+                    <td>
+                      <div>{workspaceLabel(workspaces, r.data.workspaceId)}</div>
+                      <div className="small" style={{ opacity: 0.72 }}>
+                        <code>{r.data.workspaceId}</code>
+                      </div>
+                    </td>
+                    <td>{r.data.type === 'modal' ? 'モーダル' : r.data.type === 'banner' ? 'バナー' : 'トースト'}</td>
+                    <td>{r.data.name}</td>
+                    <td>
+                      <button className="btn" onClick={() => setShowJsonId(isJsonOpen ? '' : r.id)}>
+                        {isJsonOpen ? 'JSONを閉じる' : 'JSONを表示'}
+                      </button>
+                    </td>
+                    <td>
+                      <button className="btn" onClick={() => openEditModal(r)}>編集</button>
+                      <span style={{ width: 8, display: 'inline-block' }} />
+                      <button className="btn btn--danger" onClick={() => deleteDoc(doc(db, 'templates', r.id))}>削除</button>
+                    </td>
+                  </tr>
+                  {isJsonOpen ? (
+                    <tr>
+                      <td colSpan={6}>
+                        <div className="small" style={{ marginBottom: 8, opacity: 0.74 }}>
+                          確認用JSON（必要な時だけ表示）
+                        </div>
+                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(r.data, null, 2)}</pre>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
               );
             })}
-            </select>
-            <div style={{ height: 10 }} />
+            </tbody>
+          </table>
+        </div>
+      </div>
 
-            <div className="row">
-              <div style={{ flex: 1 }}>
-                <div className="h2">表示タイプ</div>
-                <select className="input" value={type} onChange={(e) => {
-                  const t = e.target.value as TemplateDoc['type'];
-                  setType(t);
-                  setHtml(DEFAULTS[t].html);
-                  setCss(DEFAULTS[t].css);
-                }}>
-                  <option value="modal">modal（モーダル）</option>
-                  <option value="banner">banner（バナー）</option>
-                  <option value="toast">toast（トースト）</option>
-                </select>
+      {isModalOpen ? (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15,23,42,0.24)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+            zIndex: 50,
+          }}
+          onClick={() => setIsModalOpen(false)}
+        >
+          <div
+            className="card liquid-page"
+            style={{ width: 'min(1100px, 100%)', maxHeight: '88vh', overflow: 'auto', minWidth: 0 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="page-header" style={{ marginBottom: 10 }}>
+              <div className="page-header__meta">
+                <h2 className="h1" style={{ fontSize: 22 }}>{rows.some((r) => r.id === id) ? 'テンプレートを編集' : 'テンプレートを作成'}</h2>
+                <div className="small">新規登録・編集はモーダルで行います。HTML・CSS・プレビューはここで確認してください。</div>
               </div>
-              <div style={{ flex: 2 }}>
+              <div className="page-header__actions">
+                <button className="btn" onClick={() => setIsModalOpen(false)}>閉じる</button>
+              </div>
+            </div>
+
+            <div className="row liquid-page" style={{ alignItems: 'flex-start', flexWrap: 'wrap' }}>
+              <div style={{ flex: 1, minWidth: 280 }}>
                 <div className="h2">テンプレート名</div>
                 <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
-              </div>
-            </div>
-
-            <div style={{ height: 10 }} />
-            <div className="h2">HTMLテンプレート</div>
-            <textarea className="input" style={{ minHeight: 240, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }} value={html} onChange={(e) => setHtml(e.target.value)} />
-            <div className="small">差し込み変数：title / body / image_url / cta_text / cta_url / cta_url_text。 <code>{'{{#if key}}...{{/if}}'}</code> も使えます。</div>
-
-            <div style={{ height: 10 }} />
-            <div className="h2">CSSスタイル</div>
-            <textarea className="input" style={{ minHeight: 180, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }} value={css} onChange={(e) => setCss(e.target.value)} />
-
-            <div style={{ height: 14 }} />
-            <button className="btn btn--primary" onClick={createOrUpdate}>保存</button>
-          </div>
-
-          <div style={{ flex: 1, minWidth: 280 }}>
-            <div className="h2">プレビュー</div>
-            <div className="small">安全のため script は実行しません。固定表示のテンプレートでも見やすいように iframe 内で補正しています。</div>
-            <div style={{ height: 10 }} />
-
-            <div className="card" style={{ background: 'rgba(255,255,255,.03)' }}>
-              <div className="h2">サンプル値</div>
-              <div className="small">ここで入力した値を使って、テンプレートの見た目を確認できます。</div>
-              <div style={{ height: 10 }} />
-              <div className="h2">タイトル</div>
-              <input className="input" value={sample.title} onChange={(e) => setSample((s) => ({ ...s, title: e.target.value }))} />
-              <div style={{ height: 10 }} />
-              <div className="h2">本文</div>
-              <textarea className="input" value={sample.body} onChange={(e) => setSample((s) => ({ ...s, body: e.target.value }))} />
-              <div style={{ height: 10 }} />
-              <div className="h2">画像URL</div>
-              <input className="input" value={sample.image_url} onChange={(e) => setSample((s) => ({ ...s, image_url: e.target.value }))} />
-              <div style={{ height: 10 }} />
-              <div className="row">
-                <div style={{ flex: 1 }}>
-                  <div className="h2">CTAボタン文言</div>
-                  <input className="input" value={sample.cta_text} onChange={(e) => setSample((s) => ({ ...s, cta_text: e.target.value }))} />
+                <div className="small" style={{ opacity: 0.72, marginTop: 6, marginBottom: 8 }}>
+                  テンプレートID: <code>{id}</code>
                 </div>
-                <div style={{ flex: 2 }}>
-                  <div className="h2">遷移先URL</div>
-                  <input className="input" value={sample.cta_url} onChange={(e) => setSample((s) => ({ ...s, cta_url: e.target.value }))} />
+                <div className="small" style={{ opacity: 0.72, marginBottom: 8 }}>
+                  現在のワークスペース: <b>{selectedWorkspaceName || workspaceId || '（未選択）'}</b>
                 </div>
-              </div>
-              <div style={{ height: 10 }} />
-              <div className="h2">補助リンク文言</div>
-              <input className="input" value={sample.cta_url_text} onChange={(e) => setSample((s) => ({ ...s, cta_url_text: e.target.value }))} />
-            </div>
+                <div style={{ height: 10 }} />
 
-            <div style={{ height: 12 }} />
+                <div className="h2">ワークスペース</div>
+                <select className="input" value={workspaceId} onChange={(e) => setWorkspaceId(e.target.value)}>
+                  {workspaces.map((w) => {
+                    const label = workspaceLabel(workspaces, w.id);
+                    return (
+                      <option key={w.id} value={w.id}>
+                        {label}{label !== w.id ? ` (${w.id})` : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+                <div style={{ height: 10 }} />
 
-            <div className="card" style={{ background: 'rgba(255,255,255,.03)' }}>
-              <div className="h2">見た目（リアルタイム）</div>
-              <iframe
-                title="template-preview"
-                sandbox=""
-                style={{ width: '100%', height: 420, border: '1px solid rgba(255,255,255,.12)', borderRadius: 12, background: '#0b0b0b' }}
-                srcDoc={previewSrcDoc}
-              />
-            </div>
-
-            <div style={{ height: 12 }} />
-
-            <div className="h2">確認用JSON（上級者向け）</div>
-            <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(payload, null, 2)}</pre>
-          </div>
-        </div>
-      </div>
-
-      <div style={{ height: 14 }} />
-
-      <div className="card">
-        <div className="h2">テンプレート一覧</div>
-        <div className="small" style={{ opacity: 0.72, marginBottom: 8 }}>
-          ワークスペース: <b>{selectedWorkspaceName || workspaceId || '（未選択）'}</b>
-        </div>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>テンプレート</th>
-              <th>ワークスペース</th>
-              <th>表示タイプ</th>
-              <th>テンプレート名</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id}>
-                <td>
-                  <div style={{ fontWeight: 700 }}>{r.data.name || '名称未設定'}</div>
-                  <div className="small" style={{ opacity: 0.72 }}>
-                    ID: <code>{r.id}</code>
+                <div className="row">
+                  <div style={{ flex: 1 }}>
+                    <div className="h2">表示タイプ</div>
+                    <select className="input" value={type} onChange={(e) => {
+                      const t = e.target.value as TemplateDoc['type'];
+                      setType(t);
+                      setHtml(DEFAULTS[t].html);
+                      setCss(DEFAULTS[t].css);
+                    }}>
+                      <option value="modal">modal（モーダル）</option>
+                      <option value="banner">banner（バナー）</option>
+                      <option value="toast">toast（トースト）</option>
+                    </select>
                   </div>
-                </td>
-                <td>{workspaceLabel(workspaces, r.data.workspaceId)}</td>
-                <td>{r.data.type === 'modal' ? 'モーダル' : r.data.type === 'banner' ? 'バナー' : 'トースト'}</td>
-                <td>{r.data.name}</td>
-                <td>
-                  <button className="btn" onClick={() => {
-                    setId(r.id);
-                    setWorkspaceId(r.data.workspaceId);
-                    setType(r.data.type);
-                    setName(r.data.name || 'Template');
-                    setHtml(r.data.html || DEFAULTS[r.data.type].html);
-                    setCss(r.data.css || DEFAULTS[r.data.type].css);
-                  }}>編集する</button>
-                  <span style={{ width: 8, display: 'inline-block' }} />
-                  <button className="btn btn--danger" onClick={() => deleteDoc(doc(db, 'templates', r.id))}>削除する</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+                </div>
+
+                <div style={{ height: 10 }} />
+                <div className="h2">HTMLテンプレート</div>
+                <textarea className="input" style={{ minHeight: 240, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }} value={html} onChange={(e) => setHtml(e.target.value)} />
+                <div className="small">差し込み変数：title / body / image_url / cta_text / cta_url / cta_url_text。 <code>{'{{#if key}}...{{/if}}'}</code> も使えます。</div>
+
+                <div style={{ height: 10 }} />
+                <div className="h2">CSSスタイル</div>
+                <textarea className="input" style={{ minHeight: 180, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }} value={css} onChange={(e) => setCss(e.target.value)} />
+
+                <div style={{ height: 14 }} />
+                <button className="btn btn--primary" onClick={createOrUpdate}>保存</button>
+              </div>
+
+              <div style={{ flex: 1, minWidth: 280 }}>
+                <div className="h2">プレビュー</div>
+                <div className="small">安全のため script は実行しません。固定表示のテンプレートでも見やすいように iframe 内で補正しています。</div>
+                <div style={{ height: 10 }} />
+
+                <div className="card liquid-page" style={{ background: 'linear-gradient(180deg,#ffffff,#f8fbff)', minWidth: 0 }}>
+                  <div className="h2">サンプル値</div>
+                  <div className="small">ここで入力した値を使って、テンプレートの見た目を確認できます。</div>
+                  <div style={{ height: 10 }} />
+                  <div className="h2">タイトル</div>
+                  <input className="input" value={sample.title} onChange={(e) => setSample((s) => ({ ...s, title: e.target.value }))} />
+                  <div style={{ height: 10 }} />
+                  <div className="h2">本文</div>
+                  <textarea className="input" value={sample.body} onChange={(e) => setSample((s) => ({ ...s, body: e.target.value }))} />
+                  <div style={{ height: 10 }} />
+                  <div className="h2">画像URL</div>
+                  <input className="input" value={sample.image_url} onChange={(e) => setSample((s) => ({ ...s, image_url: e.target.value }))} />
+                  <div style={{ height: 10 }} />
+                  <div className="row liquid-page" style={{ flexWrap: 'wrap' }}>
+                    <div style={{ flex: 1 }}>
+                      <div className="h2">CTAボタン文言</div>
+                      <input className="input" value={sample.cta_text} onChange={(e) => setSample((s) => ({ ...s, cta_text: e.target.value }))} />
+                    </div>
+                    <div style={{ flex: 2 }}>
+                      <div className="h2">遷移先URL</div>
+                      <input className="input" value={sample.cta_url} onChange={(e) => setSample((s) => ({ ...s, cta_url: e.target.value }))} />
+                    </div>
+                  </div>
+                  <div style={{ height: 10 }} />
+                  <div className="h2">補助リンク文言</div>
+                  <input className="input" value={sample.cta_url_text} onChange={(e) => setSample((s) => ({ ...s, cta_url_text: e.target.value }))} />
+                </div>
+
+                <div style={{ height: 12 }} />
+
+                <div className="card liquid-page" style={{ background: 'linear-gradient(180deg,#ffffff,#f8fbff)', minWidth: 0 }}>
+                  <div className="h2">見た目（リアルタイム）</div>
+                  <iframe
+                    title="template-preview"
+                    sandbox=""
+                    style={{ width: '100%', height: 420, border: '1px solid rgba(15,23,42,.12)', borderRadius: 12, background: '#0b0b0b' }}
+                    srcDoc={previewSrcDoc}
+                  />
+                </div>
+
+                <div style={{ height: 12 }} />
+
+                <div className="h2">確認用JSON（上級者向け）</div>
+                <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(payload, null, 2)}</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -14,6 +14,7 @@ import { adminDb } from "./services/admin";
 setGlobalOptions({ region: "asia-northeast1" });
 
 const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
+const POSTMARK_SERVER_TOKEN = defineSecret("POSTMARK_SERVER_TOKEN");
 
 
 /**
@@ -34,7 +35,7 @@ registerV1Routes(app);
 export const api = onRequest(
 {
   region: "asia-northeast1",
-  secrets: [OPENAI_API_KEY],
+  secrets: [OPENAI_API_KEY, POSTMARK_SERVER_TOKEN],
 },
 app
 );
@@ -45,7 +46,7 @@ app
  * Callable: deleteMedia
  * ==========================
  */
-export const deleteMedia = onCall(async (req) => {
+export const deleteMedia = onCall({ region: "asia-northeast1" }, async (req) => {
   const uid = req.auth?.uid;
   if (!uid) throw new HttpsError("unauthenticated", "sign in required");
 

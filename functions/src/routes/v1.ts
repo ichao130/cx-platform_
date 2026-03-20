@@ -4,6 +4,7 @@ import { z } from "zod";
 import { adminDb, requireAuthUid } from "../services/admin";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
+import { getStorage } from "firebase-admin/storage";
 import {
   pickSiteById,
   pickWorkspaceById,
@@ -125,6 +126,7 @@ const WorkspaceInviteCreateReqSchema = z.object({
 
 const WorkspaceInviteListReqSchema = z.object({
   workspace_id: z.string().min(1),
+  statuses: z.array(z.string().min(1)).optional().default(["pending"]),
 });
 
 const WorkspaceInviteRevokeReqSchema = z.object({
@@ -158,16 +160,62 @@ const WorkspaceBillingGetReqSchema = z.object({
   workspace_id: z.string().min(1),
 });
 
+const PlanLimitValueSchema = z.number().int().min(0).nullable();
+
+const PlanLimitsSchema = z.object({
+  workspaces: PlanLimitValueSchema.optional(),
+  sites: PlanLimitValueSchema.optional(),
+  scenarios: PlanLimitValueSchema.optional(),
+  actions: PlanLimitValueSchema.optional(),
+  aiInsights: PlanLimitValueSchema.optional(),
+  members: PlanLimitValueSchema.optional(),
+});
+
 const WorkspaceBillingUpdateReqSchema = z.object({
   workspace_id: z.string().min(1),
-  plan: z.enum(["free", "starter", "pro", "team", "enterprise"]).optional(),
+  plan: z.enum(["standard", "premium", "custom"]).optional(),
   status: z.enum(["inactive", "trialing", "active", "past_due", "canceled"]).optional(),
-  // trial end: days from now (recommended)
+  provider: z.enum(["stripe", "manual"]).optional(),
   trial_days: z.number().int().min(0).max(365).optional(),
-  // or explicit ISO timestamps (if provided, takes precedence)
   trial_ends_at: z.string().datetime().optional(),
   current_period_ends_at: z.string().datetime().optional(),
   billing_email: z.string().email().optional(),
+  stripe_customer_id: z.string().min(1).optional(),
+  stripe_subscription_id: z.string().min(1).optional(),
+  stripe_price_id: z.string().min(1).optional(),
+  custom_limit_override_id: z.string().min(1).optional(),
+  manual_billing_note: z.string().max(2000).optional(),
+});
+
+const PlansListReqSchema = z.object({
+  workspace_id: z.string().min(1),
+  include_inactive: z.boolean().optional().default(false),
+});
+
+const PlansUpsertReqSchema = z.object({
+  workspace_id: z.string().min(1),
+  plan_id: z.string().min(1),
+  code: z.enum(["standard", "premium", "custom"]),
+  name: z.string().min(1).max(80),
+  description: z.string().max(2000).optional().default(""),
+  active: z.boolean().optional().default(true),
+  billing_provider: z.enum(["stripe", "manual"]),
+  currency: z.string().min(1).max(8).optional().default("JPY"),
+  price_monthly: z.number().min(0),
+  price_yearly: z.number().min(0).nullable().optional(),
+  limits: PlanLimitsSchema,
+  stripe_price_monthly_id: z.string().nullable().optional(),
+  stripe_price_yearly_id: z.string().nullable().optional(),
+});
+
+const WorkspaceLimitOverrideGetReqSchema = z.object({
+  workspace_id: z.string().min(1),
+});
+
+const WorkspaceLimitOverrideUpsertReqSchema = z.object({
+  workspace_id: z.string().min(1),
+  limits: PlanLimitsSchema,
+  note: z.string().max(2000).optional().default(""),
 });
 
 const SiteDomainsUpdateReqSchema = z.object({
@@ -177,6 +225,57 @@ const SiteDomainsUpdateReqSchema = z.object({
 
 const SiteDeleteReqSchema = z.object({
   site_id: z.string().min(1),
+});
+
+const ScenarioTargetingRuleSchema = z.object({
+  op: z.enum(["contains", "equals", "startsWith"]),
+  value: z.string().min(1).max(500),
+});
+
+const ScenarioTargetingSchema = z.object({
+  enabled: z.boolean().optional().default(false),
+  audience: z
+    .object({
+      visitorType: z.enum(["all", "new", "returning"]).optional().default("all"),
+      device: z.enum(["all", "pc", "sp"]).optional().default("all"),
+      loginStatus: z.enum(["all", "guest", "member"]).optional().default("all"),
+      cartStatus: z.enum(["all", "empty", "hasItems"]).optional().default("all"),
+      urlRules: z.array(ScenarioTargetingRuleSchema).optional().default([]),
+      utmRules: z
+        .object({
+          source: z.array(z.string().min(1).max(200)).optional().default([]),
+          medium: z.array(z.string().min(1).max(200)).optional().default([]),
+          campaign: z.array(z.string().min(1).max(200)).optional().default([]),
+        })
+        .optional()
+        .default({ source: [], medium: [], campaign: [] }),
+    })
+    .optional()
+    .default({
+      visitorType: "all",
+      device: "all",
+      loginStatus: "all",
+      cartStatus: "all",
+      urlRules: [],
+      utmRules: { source: [], medium: [], campaign: [] },
+    }),
+  exclude: z
+    .object({
+      shownWithinDays: z.number().int().min(0).max(365).optional(),
+      maxImpressionsPerUser: z.number().int().min(0).max(9999).optional(),
+      converted: z.boolean().optional().default(false),
+    })
+    .optional()
+    .default({
+      converted: false,
+    }),
+});
+
+const MediaDeleteReqSchema = z.object({
+  workspace_id: z.string().min(1),
+  media_id: z.string().min(1),
+  storage_path: z.string().optional(),
+  download_url: z.string().optional(),
 });
 
 /* =========================================
@@ -337,8 +436,202 @@ function parseIsoToDate(iso: string | undefined): Date | null {
   return d;
 }
 
+function defaultScenarioTargeting() {
+  return {
+    enabled: false,
+    audience: {
+      visitorType: "all" as "all" | "new" | "returning",
+      device: "all" as "all" | "pc" | "sp",
+      loginStatus: "all" as "all" | "guest" | "member",
+      cartStatus: "all" as "all" | "empty" | "hasItems",
+      urlRules: [] as Array<{ op: "contains" | "equals" | "startsWith"; value: string }>,
+      utmRules: {
+        source: [] as string[],
+        medium: [] as string[],
+        campaign: [] as string[],
+      },
+    },
+    exclude: {
+      shownWithinDays: undefined as number | undefined,
+      maxImpressionsPerUser: undefined as number | undefined,
+      converted: false,
+    },
+  };
+}
 
+function normalizeStringList(input: any): string[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((v) => String(v || "").trim())
+    .filter(Boolean);
+}
 
+function normalizeScenarioTargeting(input: any) {
+  const base = defaultScenarioTargeting();
+  const parsed = ScenarioTargetingSchema.safeParse(input || {});
+  const src: any = parsed.success ? parsed.data : {};
+
+  base.enabled = !!src?.enabled;
+  base.audience.visitorType = (src as any)?.audience?.visitorType || "all";
+  base.audience.device = (src as any)?.audience?.device || "all";
+  base.audience.loginStatus = (src as any)?.audience?.loginStatus || "all";
+  base.audience.cartStatus = (src as any)?.audience?.cartStatus || "all";
+  base.audience.urlRules = Array.isArray((src as any)?.audience?.urlRules)
+    ? (src as any).audience.urlRules
+        .map((rule: any) => ({
+          op: String(rule?.op || "contains") as "contains" | "equals" | "startsWith",
+          value: String(rule?.value || "").trim(),
+        }))
+        .filter((rule: any) => !!rule.value)
+    : [];
+  base.audience.utmRules = {
+    source: normalizeStringList((src as any)?.audience?.utmRules?.source),
+    medium: normalizeStringList((src as any)?.audience?.utmRules?.medium),
+    campaign: normalizeStringList((src as any)?.audience?.utmRules?.campaign),
+  };
+  if (typeof (src as any)?.exclude?.shownWithinDays === "number") {
+    base.exclude.shownWithinDays = Math.max(0, Math.floor((src as any).exclude.shownWithinDays));
+  }
+  if (typeof (src as any)?.exclude?.maxImpressionsPerUser === "number") {
+    base.exclude.maxImpressionsPerUser = Math.max(0, Math.floor((src as any).exclude.maxImpressionsPerUser));
+  }
+  base.exclude.converted = !!(src as any)?.exclude?.converted;
+
+  return base;
+}
+
+function matchStringRule(value: string, rule: { op: "contains" | "equals" | "startsWith"; value: string }): boolean {
+  const target = String(value || "");
+  const needle = String(rule?.value || "");
+  if (!needle) return true;
+  if (rule.op === "equals") return target === needle;
+  if (rule.op === "startsWith") return target.startsWith(needle);
+  return target.includes(needle);
+}
+
+function matchScenarioTargeting(targeting: any, ctx: any): boolean {
+  const t = normalizeScenarioTargeting(targeting);
+  if (!t.enabled) return true;
+
+  const visitorType = String(ctx?.visitorType || "all");
+  const device = String(ctx?.device || "all");
+  const loginStatus = String(ctx?.loginStatus || "all");
+  const cartStatus = String(ctx?.cartStatus || "all");
+  const url = String(ctx?.url || ctx?.path || "");
+  const utm = ctx?.utm || {};
+
+  if (t.audience.visitorType !== "all" && t.audience.visitorType !== visitorType) return false;
+  if (t.audience.device !== "all" && t.audience.device !== device) return false;
+  if (t.audience.loginStatus !== "all" && t.audience.loginStatus !== loginStatus) return false;
+  if (t.audience.cartStatus !== "all" && t.audience.cartStatus !== cartStatus) return false;
+
+  if (t.audience.urlRules.length > 0) {
+    const ok = t.audience.urlRules.some((rule) => matchStringRule(url, rule));
+    if (!ok) return false;
+  }
+
+  if (t.audience.utmRules.source.length > 0 && !t.audience.utmRules.source.includes(String(utm?.source || ""))) {
+    return false;
+  }
+  if (t.audience.utmRules.medium.length > 0 && !t.audience.utmRules.medium.includes(String(utm?.medium || ""))) {
+    return false;
+  }
+  if (t.audience.utmRules.campaign.length > 0 && !t.audience.utmRules.campaign.includes(String(utm?.campaign || ""))) {
+    return false;
+  }
+
+  if (t.exclude.converted && !!ctx?.converted) return false;
+
+  if (typeof t.exclude.maxImpressionsPerUser === "number") {
+    const impressionCount = Number(ctx?.impressionCount || 0);
+    if (impressionCount >= t.exclude.maxImpressionsPerUser) return false;
+  }
+
+  return true;
+}
+
+function defaultPlanLimits() {
+  return {
+    workspaces: null as number | null,
+    sites: null as number | null,
+    scenarios: null as number | null,
+    actions: null as number | null,
+    aiInsights: null as number | null,
+    members: null as number | null,
+  };
+}
+
+function normalizePlanLimits(input: any) {
+  const base = defaultPlanLimits();
+  for (const key of Object.keys(base) as Array<keyof typeof base>) {
+    const v = input?.[key];
+    if (v === null) {
+      base[key] = null;
+    } else if (typeof v === "number" && isFinite(v) && v >= 0) {
+      base[key] = Math.floor(v);
+    }
+  }
+  return base;
+}
+
+function normalizeBillingProvider(input: any, plan?: string) {
+  const raw = String(input || "").trim().toLowerCase();
+  if (raw === "stripe" || raw === "manual") return raw;
+  return String(plan || "") === "custom" ? "manual" : "stripe";
+}
+
+function buildBillingResponse(billing: any, planDoc?: any, overrideDoc?: any) {
+  return {
+    plan: billing?.plan || "standard",
+    status: billing?.status || "inactive",
+    provider: normalizeBillingProvider(billing?.provider, billing?.plan),
+    billing_email: billing?.billing_email || null,
+    trial_ends_at: billing?.trial_ends_at || null,
+    current_period_ends_at: billing?.current_period_ends_at || null,
+    stripe_customer_id: billing?.stripe_customer_id || null,
+    stripe_subscription_id: billing?.stripe_subscription_id || null,
+    stripe_price_id: billing?.stripe_price_id || null,
+    custom_limit_override_id: billing?.custom_limit_override_id || null,
+    manual_billing_note: billing?.manual_billing_note || "",
+    plan_master: planDoc
+      ? {
+          id: planDoc.id || "",
+          code: planDoc.code || billing?.plan || "",
+          name: planDoc.name || "",
+          description: planDoc.description || "",
+          active: typeof planDoc.active === "boolean" ? planDoc.active : true,
+          billing_provider: normalizeBillingProvider(planDoc.billing_provider, planDoc.code),
+          currency: planDoc.currency || "JPY",
+          price_monthly: Number(planDoc.price_monthly || 0),
+          price_yearly: planDoc.price_yearly ?? null,
+          limits: normalizePlanLimits(planDoc.limits),
+          stripe_price_monthly_id: planDoc.stripe_price_monthly_id || null,
+          stripe_price_yearly_id: planDoc.stripe_price_yearly_id || null,
+          updatedAt: planDoc.updatedAt || null,
+        }
+      : null,
+    override: overrideDoc
+      ? {
+          limits: normalizePlanLimits(overrideDoc.limits),
+          note: overrideDoc.note || "",
+          updatedAt: overrideDoc.updatedAt || null,
+        }
+      : null,
+    updatedAt: billing?.updatedAt || null,
+  };
+}
+
+function getRequestUserEmail(req: any): string {
+  return String(req?.auth?.email || req?.user?.email || req?.token?.email || "").trim().toLowerCase();
+}
+
+function requirePlatformAdmin(req: any) {
+  const email = getRequestUserEmail(req);
+  if (email !== "iwatanabe@branberyheag.com") {
+    throw new Error("platform_admin_only");
+  }
+  return email;
+}
 
 async function requireWorkspaceRoleBySiteId(
   req: any,
@@ -420,6 +713,11 @@ async function requireWorkspaceAccessBySiteId(
 // Secret values are stored in Secret Manager.
 const ADMIN_ORIGINS = defineString("ADMIN_ORIGINS");
 const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
+const POSTMARK_SERVER_TOKEN = defineSecret("POSTMARK_SERVER_TOKEN");
+const INVITE_FROM_EMAIL = defineString("INVITE_FROM_EMAIL");
+const INVITE_BASE_URL = defineString("INVITE_BASE_URL");
+const INVITE_TEMPLATE_ALIAS = defineString("INVITE_TEMPLATE_ALIAS");
+const INVITE_MESSAGE_STREAM = defineString("INVITE_MESSAGE_STREAM");
 
 function parseOriginsEnv(s?: string): string[] {
   return (s || "")
@@ -497,6 +795,55 @@ function genToken(bytes = 24): string {
   return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
+function resolveStorageTarget(input: string, downloadURL?: string): { bucket?: string; path: string } {
+  const raw = String(input || "").trim();
+  if (raw) {
+    // gs://bucket/path/to/file
+    if (raw.startsWith("gs://")) {
+      const withoutScheme = raw.replace(/^gs:\/\//, "");
+      const firstSlash = withoutScheme.indexOf("/");
+      const bucket = firstSlash >= 0 ? withoutScheme.slice(0, firstSlash) : "";
+      const path = firstSlash >= 0 ? withoutScheme.slice(firstSlash + 1) : "";
+      return { bucket: bucket || undefined, path };
+    }
+
+    // Firebase Storage download URL (firebasestorage.googleapis.com)
+    if (/^https?:\/\//i.test(raw)) {
+      try {
+        const u = new URL(raw);
+        const bucket = u.pathname.match(/\/b\/([^/]+)\/o\//)?.[1];
+        const objectPath = u.pathname.match(/\/o\/(.+)$/)?.[1];
+        return {
+          bucket: bucket ? decodeURIComponent(bucket) : undefined,
+          path: objectPath ? decodeURIComponent(objectPath) : "",
+        };
+      } catch {
+        // fall through
+      }
+    }
+
+    // Already a relative object path
+    return { path: raw.replace(/^\/+/, "") };
+  }
+
+  const url = String(downloadURL || "").trim();
+  if (url && /^https?:\/\//i.test(url)) {
+    try {
+      const u = new URL(url);
+      const bucket = u.pathname.match(/\/b\/([^/]+)\/o\//)?.[1];
+      const objectPath = u.pathname.match(/\/o\/(.+)$/)?.[1];
+      return {
+        bucket: bucket ? decodeURIComponent(bucket) : undefined,
+        path: objectPath ? decodeURIComponent(objectPath) : "",
+      };
+    } catch {
+      return { path: "" };
+    }
+  }
+
+  return { path: "" };
+}
+
 function yyyyMmDdJST(d: Date): string {
   // stats_daily の day はJST基準で切る
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -510,6 +857,124 @@ function yyyyMmDdJST(d: Date): string {
   const m = parts.find((p) => p.type === "month")?.value || "01";
   const dd = parts.find((p) => p.type === "day")?.value || "01";
   return `${y}-${m}-${dd}`;
+}
+
+function toIsoStringOrEmpty(v: any): string {
+  if (!v) return "";
+  try {
+    if (typeof v?.toDate === "function") return v.toDate().toISOString();
+    if (typeof v?.toMillis === "function") return new Date(v.toMillis()).toISOString();
+    const d = new Date(v);
+    return isFinite(d.getTime()) ? d.toISOString() : "";
+  } catch {
+    return "";
+  }
+}
+
+function getInviteBaseUrl(): string {
+  const raw = String(INVITE_BASE_URL.value() || "").trim();
+  return raw || "https://cx-platform-v1.web.app/invite";
+}
+
+function getInviteFromEmail(): string {
+  const raw = String(INVITE_FROM_EMAIL.value() || "").trim();
+  return raw || "no-reply@mokkeda.com";
+}
+function getInviteTemplateAlias(): string {
+  return String(INVITE_TEMPLATE_ALIAS.value() || "").trim();
+}
+
+function getInviteMessageStream(): string {
+  const raw = String(INVITE_MESSAGE_STREAM.value() || "").trim();
+  return raw || "outbound";
+}
+
+async function sendWorkspaceInviteEmail(args: {
+  to: string;
+  workspaceName: string;
+  role: string;
+  token: string;
+  expiresAt: any;
+}) {
+  const token = String(POSTMARK_SERVER_TOKEN.value() || "").trim();
+  if (!token) {
+    throw new Error("missing_postmark_server_token");
+  }
+
+  const inviteUrl = `${getInviteBaseUrl()}?token=${encodeURIComponent(args.token)}`;
+  const expiresAtIso = toIsoStringOrEmpty(args.expiresAt);
+  const from = getInviteFromEmail();
+  const templateAlias = getInviteTemplateAlias();
+  const messageStream = getInviteMessageStream();
+
+  const subject = `MOKKEDAへの招待: ${args.workspaceName}`;
+  const textBody = [
+    `${args.workspaceName} に招待されました。`,
+    "",
+    `権限: ${args.role}`,
+    `有効期限: ${expiresAtIso || "7日以内"}`,
+    "",
+    "参加する:",
+    inviteUrl,
+  ].join("\n");
+
+  const htmlBody = `
+    <div style="font-family:Arial,Helvetica,sans-serif;line-height:1.6;color:#111827;">
+      <p><strong>${args.workspaceName}</strong> に招待されました。</p>
+      <p>権限: <strong>${args.role}</strong><br/>有効期限: <strong>${expiresAtIso || "7日以内"}</strong></p>
+      <p><a href="${inviteUrl}" style="display:inline-block;padding:10px 16px;border-radius:8px;background:#111827;color:#ffffff;text-decoration:none;">参加する</a></p>
+      <p style="word-break:break-all;">${inviteUrl}</p>
+    </div>
+  `.trim();
+
+  const endpoint = templateAlias
+    ? "https://api.postmarkapp.com/email/withTemplate"
+    : "https://api.postmarkapp.com/email";
+
+  const payload = templateAlias
+    ? {
+        From: from,
+        To: args.to,
+        TemplateAlias: templateAlias,
+        TemplateModel: {
+          workspaceName: args.workspaceName,
+          role: args.role,
+          inviteUrl,
+          expiresAt: expiresAtIso || "7日以内",
+        },
+        MessageStream: messageStream,
+      }
+    : {
+        From: from,
+        To: args.to,
+        Subject: subject,
+        TextBody: textBody,
+        HtmlBody: htmlBody,
+        MessageStream: messageStream,
+      };
+
+  const resp = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-Postmark-Server-Token": token,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const json = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    throw new Error(`postmark_send_failed:${resp.status}:${json?.Message || resp.statusText || "unknown"}`);
+  }
+
+  return {
+    inviteUrl,
+    messageId: String(json?.MessageID || ""),
+    submittedAt: new Date().toISOString(),
+    templateAlias,
+    messageStream,
+  };
 }
 
 // ---- stats helpers (z-test for A/B) ----
@@ -799,11 +1264,37 @@ export function registerV1Routes(app: Express) {
       if (!wSnap.exists) return res.status(404).json({ ok: false, error: "workspace_not_found" });
 
       const w = (wSnap.data() || {}) as any;
-      const members = (w.members || {}) as Record<string, string>;
+      const members = (w.members || {}) as Record<string, any>;
 
-      const items = Object.entries(members)
-        .map(([memberUid, role]) => ({ uid: memberUid, role: String(role || "member") }))
-        .sort((a, b) => a.uid.localeCompare(b.uid));
+      const memberEntries = Object.entries(members).map(([memberUid, rawRole]) => ({
+        uid: memberUid,
+        role: readMemberRole(rawRole) || String(rawRole || "member") || "member",
+      }));
+
+      const uniqueUids = Array.from(new Set(memberEntries.map((x) => x.uid).filter(Boolean)));
+      const userDocs = await Promise.all(uniqueUids.map((memberUid) => db.collection("users").doc(memberUid).get()));
+      const userMap = new Map<string, any>();
+      userDocs.forEach((snap) => {
+        if (!snap.exists) return;
+        userMap.set(snap.id, snap.data() || {});
+      });
+
+      const items = memberEntries
+        .map((entry) => {
+          const u = userMap.get(entry.uid) || {};
+          return {
+            uid: entry.uid,
+            role: entry.role,
+            email: String(u.email || ""),
+            displayName: String(u.displayName || u.name || ""),
+            photoURL: String(u.photoURL || ""),
+          };
+        })
+        .sort((a, b) => {
+          const aName = String(a.displayName || a.email || a.uid);
+          const bName = String(b.displayName || b.email || b.uid);
+          return aName.localeCompare(bName);
+        });
 
       return res.json({ ok: true, workspace_id: body.workspace_id, items });
     } catch (e: any) {
@@ -997,6 +1488,7 @@ export function registerV1Routes(app: Express) {
       if (!wSnap.exists) return res.status(404).json({ ok: false, error: "workspace_not_found" });
 
       const w = (wSnap.data() || {}) as any;
+      const workspaceName = String(w?.name || "");
       const actorRole = String(w?.members?.[actorUid] || "");
       if (!canManageMembers(actorRole, body.role)) {
         return res.status(403).json({ ok: false, error: "forbidden", message: "insufficient_role" });
@@ -1005,24 +1497,76 @@ export function registerV1Routes(app: Express) {
       const inviteId = genId("inv");
       const token = genToken(24);
       const now = FieldValue.serverTimestamp();
+      const expiresAt = addDaysTs(7);
+      const normalizedEmail = body.email.toLowerCase();
 
-      await db.collection("workspace_invites").doc(inviteId).set(
+      const inviteRef = db.collection("workspace_invites").doc(inviteId);
+      await inviteRef.set(
         {
           id: inviteId,
           workspaceId: body.workspace_id,
-          email: body.email.toLowerCase(),
+          email: normalizedEmail,
           role: body.role,
           token,
-          expiresAt: addDaysTs(7),
+          expiresAt,
           status: "pending",
           createdBy: actorUid,
           createdAt: now,
           updatedAt: now,
+          emailStatus: "pending",
+          emailError: "",
+          emailMessageId: "",
+          emailSentAt: null,
+          emailTemplateAlias: getInviteTemplateAlias(),
+          emailMessageStream: getInviteMessageStream(),
         },
         { merge: true }
       );
 
-      return res.json({ ok: true, invite_id: inviteId, workspace_id: body.workspace_id, email: body.email, role: body.role, token });
+      let emailResult: any = null;
+      let emailStatus = "pending";
+      let emailError = "";
+
+      try {
+        emailResult = await sendWorkspaceInviteEmail({
+          to: normalizedEmail,
+          workspaceName,
+          role: body.role,
+          token,
+          expiresAt,
+        });
+        emailStatus = "sent";
+      } catch (mailErr: any) {
+        emailStatus = "failed";
+        emailError = mailErr?.message || String(mailErr);
+        console.error("[/v1/workspaces/invites/create] postmark send error:", mailErr);
+      }
+
+      await inviteRef.set(
+        {
+          emailStatus,
+          emailError,
+          emailMessageId: String(emailResult?.messageId || ""),
+          emailSentAt: emailResult?.submittedAt || null,
+          emailTemplateAlias: String(emailResult?.templateAlias || getInviteTemplateAlias() || ""),
+          emailMessageStream: String(emailResult?.messageStream || getInviteMessageStream()),
+          inviteUrl: String(emailResult?.inviteUrl || `${getInviteBaseUrl()}?token=${encodeURIComponent(token)}`),
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      return res.json({
+        ok: true,
+        invite_id: inviteId,
+        workspace_id: body.workspace_id,
+        email: normalizedEmail,
+        role: body.role,
+        token,
+        email_status: emailStatus,
+        email_error: emailError,
+        invite_url: String(emailResult?.inviteUrl || `${getInviteBaseUrl()}?token=${encodeURIComponent(token)}`),
+      });
     } catch (e: any) {
       console.error("[/v1/workspaces/invites/create] error:", e);
       return res
@@ -1075,30 +1619,41 @@ export function registerV1Routes(app: Express) {
       await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "members", ["owner", "admin"]);
 
       const db = adminDb();
+      const requestedStatuses = Array.from(new Set((body.statuses || ["pending"]).map((x) => String(x || "").trim()).filter(Boolean)));
+
       const snap = await db
         .collection("workspace_invites")
         .where("workspaceId", "==", body.workspace_id)
         .orderBy("createdAt", "desc")
         .get();
 
-      const items = snap.docs.map((d) => {
-        const v = (d.data() || {}) as any;
-        return {
-          invite_id: d.id,
-          email: v.email || "",
-          role: v.role || "member",
-          token: v.token || "",
-          status: v.status || "pending",
-          createdBy: v.createdBy || null,
-          createdAt: v.createdAt || null,
-          expiresAt: v.expiresAt || null,
-          acceptedBy: v.acceptedBy || null,
-          acceptedAt: v.acceptedAt || null,
-          revokedAt: v.revokedAt || null,
-        };
-      });
+      const items = snap.docs
+        .map((d) => {
+          const v = (d.data() || {}) as any;
+          return {
+            invite_id: d.id,
+            email: v.email || "",
+            role: v.role || "member",
+            token: v.token || "",
+            status: v.status || "pending",
+            createdBy: v.createdBy || null,
+            createdAt: v.createdAt || null,
+            expiresAt: v.expiresAt || null,
+            acceptedBy: v.acceptedBy || null,
+            acceptedAt: v.acceptedAt || null,
+            revokedAt: v.revokedAt || null,
+            emailStatus: v.emailStatus || "pending",
+            emailError: v.emailError || "",
+            emailMessageId: v.emailMessageId || "",
+            emailSentAt: v.emailSentAt || null,
+            emailTemplateAlias: v.emailTemplateAlias || "",
+            emailMessageStream: v.emailMessageStream || "outbound",
+            inviteUrl: v.inviteUrl || "",
+          };
+        })
+        .filter((item) => requestedStatuses.includes(String(item.status || "pending")));
 
-      return res.json({ ok: true, workspace_id: body.workspace_id, items });
+      return res.json({ ok: true, workspace_id: body.workspace_id, items, statuses: requestedStatuses });
     } catch (e: any) {
       console.error("[/v1/workspaces/invites/list] error:", e);
       return res
@@ -1267,6 +1822,7 @@ export function registerV1Routes(app: Express) {
         {
           status: "accepted",
           acceptedBy: uid,
+          acceptedEmail: signedInEmail,
           acceptedAt: now,
           updatedAt: now,
         },
@@ -1510,6 +2066,232 @@ export function registerV1Routes(app: Express) {
   });
 
   /* -----------------------------
+     /v1/plans/list  ★管理画面専用（ADMIN_ORIGINS）
+     - plan master 一覧を返す
+  ------------------------------ */
+  app.post("/v1/plans/list", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+
+      const body = PlansListReqSchema.parse(req.body);
+      requirePlatformAdmin(req);
+      await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner", "admin"]);
+
+      const db = adminDb();
+      const snap = await db.collection("plans").orderBy("code", "asc").get();
+
+      const items = snap.docs
+        .map((d) => {
+          const p = (d.data() || {}) as any;
+          return {
+            plan_id: d.id,
+            code: p.code || d.id,
+            name: p.name || "",
+            description: p.description || "",
+            active: typeof p.active === "boolean" ? p.active : true,
+            billing_provider: normalizeBillingProvider(p.billing_provider, p.code),
+            currency: p.currency || "JPY",
+            price_monthly: Number(p.price_monthly || 0),
+            price_yearly: p.price_yearly ?? null,
+            limits: normalizePlanLimits(p.limits),
+            stripe_price_monthly_id: p.stripe_price_monthly_id || null,
+            stripe_price_yearly_id: p.stripe_price_yearly_id || null,
+            updatedAt: p.updatedAt || null,
+          };
+        })
+        .filter((item) => body.include_inactive || item.active);
+
+      return res.json({ ok: true, items });
+    } catch (e: any) {
+      console.error("[/v1/plans/list] error:", e);
+      return res
+        .status(
+          e?.message === "missing_authorization" || e?.message === "invalid_token"
+            ? 401
+            : e?.message === "platform_admin_only"
+            ? 403
+            : String(e?.message || "").startsWith("workspace_access_denied:")
+            ? 403
+            : 400
+        )
+        .json({ ok: false, error: "plans_list_failed", message: e?.message || String(e) });
+    }
+  });
+
+  app.options("/v1/plans/list", (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+      res.status(204).send("");
+    } catch (e: any) {
+      return res.status(403).send(e?.message || "forbidden");
+    }
+  });
+
+  /* -----------------------------
+     /v1/plans/upsert  ★管理画面専用（ADMIN_ORIGINS）
+     - plan master を追加・更新
+  ------------------------------ */
+  app.post("/v1/plans/upsert", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+
+      const body = PlansUpsertReqSchema.parse(req.body);
+      requirePlatformAdmin(req);
+      await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner", "admin"]);
+
+      const db = adminDb();
+      const ref = db.collection("plans").doc(body.plan_id);
+      const now = FieldValue.serverTimestamp();
+
+      await ref.set(
+        {
+          id: body.plan_id,
+          code: body.code,
+          name: body.name,
+          description: body.description || "",
+          active: body.active,
+          billing_provider: normalizeBillingProvider(body.billing_provider, body.code),
+          currency: body.currency || "JPY",
+          price_monthly: Number(body.price_monthly || 0),
+          price_yearly: body.price_yearly ?? null,
+          limits: normalizePlanLimits(body.limits),
+          stripe_price_monthly_id: body.stripe_price_monthly_id || null,
+          stripe_price_yearly_id: body.stripe_price_yearly_id || null,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
+
+      return res.json({ ok: true, plan_id: body.plan_id });
+    } catch (e: any) {
+      console.error("[/v1/plans/upsert] error:", e);
+      return res
+        .status(
+          e?.message === "missing_authorization" || e?.message === "invalid_token"
+            ? 401
+            : e?.message === "platform_admin_only"
+            ? 403
+            : String(e?.message || "").startsWith("workspace_access_denied:")
+            ? 403
+            : 400
+        )
+        .json({ ok: false, error: "plans_upsert_failed", message: e?.message || String(e) });
+    }
+  });
+
+  app.options("/v1/plans/upsert", (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+      res.status(204).send("");
+    } catch (e: any) {
+      return res.status(403).send(e?.message || "forbidden");
+    }
+  });
+
+  /* -----------------------------
+     /v1/workspaces/limits/get  ★管理画面専用（ADMIN_ORIGINS）
+     - workspace の個別 limit override を取得
+  ------------------------------ */
+  app.post("/v1/workspaces/limits/get", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+
+      const body = WorkspaceLimitOverrideGetReqSchema.parse(req.body);
+      await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner", "admin"]);
+
+      const db = adminDb();
+      const snap = await db.collection("workspace_limit_overrides").doc(body.workspace_id).get();
+      const v = (snap.data() || {}) as any;
+
+      return res.json({
+        ok: true,
+        workspace_id: body.workspace_id,
+        override: snap.exists
+          ? {
+              limits: normalizePlanLimits(v.limits),
+              note: v.note || "",
+              updatedAt: v.updatedAt || null,
+            }
+          : null,
+      });
+    } catch (e: any) {
+      console.error("[/v1/workspaces/limits/get] error:", e);
+      return res
+        .status(
+          e?.message === "missing_authorization" || e?.message === "invalid_token"
+            ? 401
+            : String(e?.message || "").startsWith("workspace_access_denied:")
+            ? 403
+            : 400
+        )
+        .json({ ok: false, error: "workspace_limits_get_failed", message: e?.message || String(e) });
+    }
+  });
+
+  app.options("/v1/workspaces/limits/get", (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+      res.status(204).send("");
+    } catch (e: any) {
+      return res.status(403).send(e?.message || "forbidden");
+    }
+  });
+
+  /* -----------------------------
+     /v1/workspaces/limits/upsert  ★管理画面専用（ADMIN_ORIGINS）
+     - workspace の個別 limit override を追加・更新
+  ------------------------------ */
+  app.post("/v1/workspaces/limits/upsert", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+
+      const body = WorkspaceLimitOverrideUpsertReqSchema.parse(req.body);
+      await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner", "admin"]);
+
+      const db = adminDb();
+      await db.collection("workspace_limit_overrides").doc(body.workspace_id).set(
+        {
+          workspaceId: body.workspace_id,
+          limits: normalizePlanLimits(body.limits),
+          note: body.note || "",
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      return res.json({ ok: true, workspace_id: body.workspace_id });
+    } catch (e: any) {
+      console.error("[/v1/workspaces/limits/upsert] error:", e);
+      return res
+        .status(
+          e?.message === "missing_authorization" || e?.message === "invalid_token"
+            ? 401
+            : String(e?.message || "").startsWith("workspace_access_denied:")
+            ? 403
+            : 400
+        )
+        .json({ ok: false, error: "workspace_limits_upsert_failed", message: e?.message || String(e) });
+    }
+  });
+
+  app.options("/v1/workspaces/limits/upsert", (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+      res.status(204).send("");
+    } catch (e: any) {
+      return res.status(403).send(e?.message || "forbidden");
+    }
+  });
+
+  /* -----------------------------
      /v1/workspaces/billing/get  ★管理画面専用（ADMIN_ORIGINS）
      - workspace の課金状態/プラン情報を取得
   ------------------------------ */
@@ -1527,17 +2309,28 @@ export function registerV1Routes(app: Express) {
       const w = (wSnap.data() || {}) as any;
       const billing = (w.billing || {}) as any;
 
+      const planSnap = billing.plan
+        ? await db.collection("plans").where("code", "==", String(billing.plan)).limit(1).get()
+        : null;
+      const planDoc = planSnap && !planSnap.empty ? ({ id: planSnap.docs[0].id, ...(planSnap.docs[0].data() || {}) } as any) : null;
+
+      const overrideId = String(billing.custom_limit_override_id || body.workspace_id);
+      const overrideSnap = await db.collection("workspace_limit_overrides").doc(overrideId).get();
+      const overrideDoc = overrideSnap.exists ? ((overrideSnap.data() || {}) as any) : null;
+
+      const responseBilling = buildBillingResponse(
+        {
+          ...billing,
+          updatedAt: billing.updatedAt || w.updatedAt || null,
+        },
+        planDoc,
+        overrideDoc
+      );
+
       return res.json({
         ok: true,
         workspace_id: body.workspace_id,
-        billing: {
-          plan: billing.plan || "free",
-          status: billing.status || "inactive",
-          billing_email: billing.billing_email || null,
-          trial_ends_at: billing.trial_ends_at || null,
-          current_period_ends_at: billing.current_period_ends_at || null,
-          updatedAt: billing.updatedAt || w.updatedAt || null,
-        },
+        billing: responseBilling,
       });
     } catch (e: any) {
       console.error("[/v1/workspaces/billing/get] error:", e);
@@ -1585,7 +2378,13 @@ export function registerV1Routes(app: Express) {
 
       if (body.plan) patch.plan = body.plan;
       if (body.status) patch.status = body.status;
+      if (body.provider) patch.provider = normalizeBillingProvider(body.provider, body.plan);
       if (body.billing_email) patch.billing_email = body.billing_email.toLowerCase();
+      if (body.stripe_customer_id) patch.stripe_customer_id = body.stripe_customer_id;
+      if (body.stripe_subscription_id) patch.stripe_subscription_id = body.stripe_subscription_id;
+      if (body.stripe_price_id) patch.stripe_price_id = body.stripe_price_id;
+      if (body.custom_limit_override_id) patch.custom_limit_override_id = body.custom_limit_override_id;
+      if (body.manual_billing_note !== undefined) patch.manual_billing_note = body.manual_billing_note;
 
       const explicitTrial = parseIsoToDate(body.trial_ends_at);
       if (explicitTrial) {
@@ -1615,17 +2414,28 @@ export function registerV1Routes(app: Express) {
       const w2 = (after.data() || {}) as any;
       const billing = (w2.billing || {}) as any;
 
+      const planSnap = billing.plan
+        ? await db.collection("plans").where("code", "==", String(billing.plan)).limit(1).get()
+        : null;
+      const planDoc = planSnap && !planSnap.empty ? ({ id: planSnap.docs[0].id, ...(planSnap.docs[0].data() || {}) } as any) : null;
+
+      const overrideId = String(billing.custom_limit_override_id || body.workspace_id);
+      const overrideSnap = await db.collection("workspace_limit_overrides").doc(overrideId).get();
+      const overrideDoc = overrideSnap.exists ? ((overrideSnap.data() || {}) as any) : null;
+
+      const responseBilling = buildBillingResponse(
+        {
+          ...billing,
+          updatedAt: billing.updatedAt || w2.updatedAt || null,
+        },
+        planDoc,
+        overrideDoc
+      );
+
       return res.json({
         ok: true,
         workspace_id: body.workspace_id,
-        billing: {
-          plan: billing.plan || "free",
-          status: billing.status || "inactive",
-          billing_email: billing.billing_email || null,
-          trial_ends_at: billing.trial_ends_at || null,
-          current_period_ends_at: billing.current_period_ends_at || null,
-          updatedAt: billing.updatedAt || w2.updatedAt || null,
-        },
+        billing: responseBilling,
       });
     } catch (e: any) {
       console.error("[/v1/workspaces/billing/update] error:", e);
@@ -1734,6 +2544,134 @@ export function registerV1Routes(app: Express) {
   });
 
   app.options("/v1/sites/delete", (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+      res.status(204).send("");
+    } catch (e: any) {
+      return res.status(403).send(e?.message || "forbidden");
+    }
+  });
+
+  /* -----------------------------
+     /v1/media/delete  ★管理画面専用（ADMIN_ORIGINS）
+     - media doc と storage file を削除
+     - 使用中メディアは削除させない
+  ------------------------------ */
+  app.post("/v1/media/delete", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+
+      const body = MediaDeleteReqSchema.parse(req.body);
+      await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "media", ["owner", "admin"]);
+
+      const db = adminDb();
+      const mediaRef = db.collection("media").doc(body.media_id);
+      const mediaSnap = await mediaRef.get();
+
+      const media = mediaSnap.exists ? ((mediaSnap.data() || {}) as any) : {};
+      const rawStoragePath = String(media.storagePath || body.storage_path || "");
+      const rawDownloadURL = String(media.downloadURL || body.download_url || "");
+
+      if (mediaSnap.exists && String(media.workspaceId || "") !== String(body.workspace_id)) {
+        return res.status(400).json({ ok: false, error: "workspace_mismatch" });
+      }
+
+      if (mediaSnap.exists) {
+        const actionsSnap = await db.collection("actions").where("workspaceId", "==", body.workspace_id).get();
+        const usedIn: Array<{ actionId: string; title?: string }> = [];
+
+        actionsSnap.forEach((doc) => {
+          const a = (doc.data() || {}) as any;
+          const ids = new Set<string>(Array.isArray(a.mediaIds) ? a.mediaIds.map((x: any) => String(x)) : []);
+          if (a?.creative?.image_media_id) ids.add(String(a.creative.image_media_id));
+          if (ids.has(String(body.media_id))) {
+            usedIn.push({
+              actionId: doc.id,
+              title: String(a?.creative?.title || ""),
+            });
+          }
+        });
+
+        if (usedIn.length) {
+          return res.status(409).json({ ok: false, error: "media_in_use", usedIn });
+        }
+      }
+
+      const target = resolveStorageTarget(rawStoragePath, rawDownloadURL);
+      if (target.path) {
+        const bucket = target.bucket ? getStorage().bucket(target.bucket) : getStorage().bucket();
+        const primaryPath = String(target.path || "");
+        const fallbackPath = encodeURIComponent(primaryPath).replace(/%2F/g, "/");
+
+        const primaryFile = bucket.file(primaryPath);
+        const [primaryExists] = await primaryFile.exists();
+
+        console.error(
+          `[/v1/media/delete] delete target ${JSON.stringify({
+            workspace_id: body.workspace_id,
+            media_id: body.media_id,
+            bucket: bucket.name,
+            primaryPath,
+            primaryExists,
+            fallbackPath: fallbackPath !== primaryPath ? fallbackPath : null,
+            rawStoragePath,
+            rawDownloadURL,
+          })}`
+        );
+
+        if (primaryExists) {
+          await primaryFile.delete({ ignoreNotFound: true } as any);
+        } else if (fallbackPath && fallbackPath !== primaryPath) {
+          const fallbackFile = bucket.file(fallbackPath);
+          const [fallbackExists] = await fallbackFile.exists();
+
+          console.error(
+            `[/v1/media/delete] fallback target ${JSON.stringify({
+              workspace_id: body.workspace_id,
+              media_id: body.media_id,
+              bucket: bucket.name,
+              fallbackPath,
+              fallbackExists,
+            })}`
+          );
+
+          if (fallbackExists) {
+            await fallbackFile.delete({ ignoreNotFound: true } as any);
+          }
+        }
+      } else {
+        console.error(
+          `[/v1/media/delete] storage target not resolved ${JSON.stringify({
+            workspace_id: body.workspace_id,
+            media_id: body.media_id,
+            rawStoragePath,
+            rawDownloadURL,
+          })}`
+        );
+      }
+
+      if (mediaSnap.exists) {
+        await mediaRef.delete();
+      }
+
+      return res.json({ ok: true, media_id: body.media_id, media_existed: mediaSnap.exists });
+    } catch (e: any) {
+      console.error("[/v1/media/delete] error:", e);
+      return res
+        .status(
+          e?.message === "missing_authorization" || e?.message === "invalid_token"
+            ? 401
+            : String(e?.message || "").startsWith("workspace_access_denied:")
+            ? 403
+            : 400
+        )
+        .json({ ok: false, error: "media_delete_failed", message: e?.message || String(e) });
+    }
+  });
+
+  app.options("/v1/media/delete", (req, res) => {
     try {
       corsByAdminOrigins(req, res);
       res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");

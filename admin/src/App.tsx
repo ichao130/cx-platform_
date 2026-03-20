@@ -1,13 +1,17 @@
 import React, { createContext, useCallback, useEffect, useMemo, useState } from "react";
+import { Link, NavLink, Navigate } from "react-router-dom";
 import AppRoutes from "./routes";
 
 import { auth, googleProvider, db } from "./firebase";
 import {
+  collection,
   doc,
   getDoc,
   onSnapshot,
+  query,
   serverTimestamp,
   setDoc,
+  where,
 } from "firebase/firestore";
 import {
   onAuthStateChanged,
@@ -171,14 +175,343 @@ function genWorkspaceId() {
   return `ws_${Math.random().toString(36).slice(2, 10)}_${Date.now()}`;
 }
 
+
 function readMemberRole(raw: any): RoleKey | null {
   if (typeof raw === "string") return raw as RoleKey;
   if (raw && typeof raw.role === "string") return raw.role as RoleKey;
   return null;
 }
 
+function canShow(canAccess: ((key: AccessKey) => boolean) | undefined, key: AccessKey) {
+  if (!canAccess) return true;
+  return canAccess(key);
+}
+
+function SidebarLink({
+  to,
+  children,
+}: {
+  to: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <NavLink
+      to={to}
+      style={({ isActive }) => ({
+        display: "block",
+        textDecoration: "none",
+        padding: "10px 12px",
+        borderRadius: 10,
+        fontWeight: isActive ? 700 : 500,
+        background: isActive ? "rgba(89,183,198,.18)" : "transparent",
+        color: isActive ? "#1f6573" : "inherit",
+      })}
+    >
+      {children}
+    </NavLink>
+  );
+}
+
+const PLATFORM_ADMIN_EMAIL = "iwatanabe@branberyheag.com";
+const PLATFORM_ADMIN_ONLY_PATH_PREFIXES = [
+  "/plans",
+  "/ops/invoices",
+  "/ops/stripe-sync",
+  "/ops/billing-admin",
+  "/system-settings",
+];
+
+function isPlatformAdminEmail(email?: string | null) {
+  return String(email || "").trim().toLowerCase() === PLATFORM_ADMIN_EMAIL;
+}
+
+function isPlatformAdminOnlyPath(pathname: string) {
+  return PLATFORM_ADMIN_ONLY_PATH_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
+  );
+}
+
+function getWorkspaceAccentColor(data: any): string {
+  return String(
+    data?.theme?.accent ||
+    data?.accentColor ||
+    data?.accent_color ||
+    "#2563eb"
+  ).trim() || "#2563eb";
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const raw = String(hex || "").trim().replace("#", "");
+  const full = raw.length === 3
+    ? raw.split("").map((c) => c + c).join("")
+    : raw;
+  if (!/^[0-9a-fA-F]{6}$/.test(full)) return `rgba(37,99,235,${alpha})`;
+  const num = parseInt(full, 16);
+  const r = (num >> 16) & 255;
+  const g = (num >> 8) & 255;
+  const b = num & 255;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function getWorkspaceRailLabel(row: { id: string; data: any }) {
+  return String(row?.data?.name || row?.id || "W");
+}
+
+function getWorkspaceRailIcon(row: { id: string; data: any }) {
+  const logoUrl = String(row?.data?.logoUrl || row?.data?.logoURL || row?.data?.iconUrl || "").trim();
+  const label = getWorkspaceRailLabel(row);
+  return {
+    logoUrl,
+    fallback: label.slice(0, 1).toUpperCase() || "W",
+  };
+}
+
+function AppShell({ children }: { children: React.ReactNode }) {
+
+  const { user, workspaceId, workspaceRole, canAccess, currentUid } = useAuth();
+  const isPlatformAdmin = isPlatformAdminEmail(user?.email);
+  const [workspaceRows, setWorkspaceRows] = useState<Array<{ id: string; data: any }>>([]);
+
+  useEffect(() => {
+    if (!currentUid) {
+      setWorkspaceRows([]);
+      return;
+    }
+
+    const q = query(
+      collection(db, "workspaces"),
+      where(`members.${currentUid}`, "in", ["owner", "admin", "member", "viewer"])
+    );
+
+    return onSnapshot(q, (snap) => {
+      setWorkspaceRows(snap.docs.map((d) => ({ id: d.id, data: d.data() as any })));
+    });
+  }, [currentUid]);
+
+  const selectedWorkspaceRow = useMemo(() => {
+    return workspaceRows.find((r) => r.id === workspaceId) || null;
+  }, [workspaceRows, workspaceId]);
+
+  const selectedWorkspaceName = useMemo(() => {
+    return String(selectedWorkspaceRow?.data?.name || workspaceId || "（未選択）");
+  }, [selectedWorkspaceRow, workspaceId]);
+
+  const selectedWorkspaceDescription = useMemo(() => {
+    return String(
+      selectedWorkspaceRow?.data?.description ||
+        selectedWorkspaceRow?.data?.tagline ||
+        selectedWorkspaceRow?.data?.lead ||
+        ""
+    );
+  }, [selectedWorkspaceRow]);
+
+  const selectedWorkspaceLogoUrl = useMemo(() => {
+    return String(
+      selectedWorkspaceRow?.data?.logoUrl ||
+        selectedWorkspaceRow?.data?.logoURL ||
+        selectedWorkspaceRow?.data?.iconUrl ||
+        ""
+    );
+  }, [selectedWorkspaceRow]);
+
+  const selectedWorkspaceAccent = useMemo(() => {
+    return getWorkspaceAccentColor(selectedWorkspaceRow?.data);
+  }, [selectedWorkspaceRow]);
+
+  const selectedWorkspaceTintSoft = useMemo(() => {
+    return hexToRgba(selectedWorkspaceAccent, 0.08);
+  }, [selectedWorkspaceAccent]);
+
+  const selectedWorkspaceTintStrong = useMemo(() => {
+    return hexToRgba(selectedWorkspaceAccent, 0.18);
+  }, [selectedWorkspaceAccent]);
+
+  function changeWorkspace(nextWorkspaceId: string) {
+    if (!nextWorkspaceId) return;
+    writeSelectedWorkspaceId(nextWorkspaceId, currentUid);
+  }
+
+
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "grid",
+        gridTemplateColumns: "76px 280px minmax(0, 1fr)",
+        background: `radial-gradient(circle at 18% 12%, ${selectedWorkspaceTintStrong}, transparent 20%), linear-gradient(180deg, ${selectedWorkspaceTintSoft}, transparent 24%), linear-gradient(180deg,var(--bg),var(--bg2))`,
+      }}
+    >
+      <aside
+        style={{
+          borderRight: "1px solid rgba(15,23,42,.08)",
+          background: `linear-gradient(180deg, #173040, #1d4150)`,
+          padding: "14px 10px",
+          position: "sticky",
+          top: 0,
+          alignSelf: "start",
+          height: "100vh",
+          overflow: "auto",
+        }}
+      >
+        <div style={{ display: "grid", gap: 10, justifyItems: "center" }}>
+          {workspaceRows.map((w) => {
+            const active = w.id === workspaceId;
+            const icon = getWorkspaceRailIcon(w);
+            const accent = getWorkspaceAccentColor(w.data);
+            return (
+              <button
+                key={w.id}
+                type="button"
+                title={getWorkspaceRailLabel(w)}
+                onClick={() => changeWorkspace(w.id)}
+                style={{
+                  width: 52,
+                  height: 52,
+                  borderRadius: active ? 18 : 16,
+                  border: active ? `2px solid ${accent}` : "1px solid rgba(255,255,255,.08)",
+                  background: active ? hexToRgba(accent, 0.22) : "rgba(255,255,255,.06)",
+                  color: "#fff",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  boxShadow: active ? `0 10px 24px ${hexToRgba(accent, 0.28)}` : "none",
+                  overflow: "hidden",
+                  padding: 0,
+                  transition: "transform .16s ease, border-radius .16s ease, background .16s ease, box-shadow .16s ease",
+                }}
+              >
+                {icon.logoUrl ? (
+                  <img src={icon.logoUrl} alt={getWorkspaceRailLabel(w)} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                ) : (
+                  <span style={{ fontWeight: 700, fontSize: 22, letterSpacing: "-0.04em" }}>{icon.fallback}</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </aside>
+
+      <aside
+        style={{
+          borderRight: "1px solid rgba(15,23,42,.08)",
+          background: "rgba(255,255,255,.82)",
+          backdropFilter: "blur(12px)",
+          padding: 18,
+          position: "sticky",
+          top: 0,
+          alignSelf: "start",
+          height: "100vh",
+          overflow: "auto",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
+          <div
+            className="mokkeda-brand-slot"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 11,
+              opacity: selectedWorkspaceLogoUrl ? 1 : 0.75,
+              overflow: "hidden",
+              background: selectedWorkspaceLogoUrl ? "#fff" : undefined,
+            }}
+          >
+            {selectedWorkspaceLogoUrl ? (
+              <img
+                src={selectedWorkspaceLogoUrl}
+                alt={selectedWorkspaceName}
+                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+              />
+            ) : (
+              "LOGO"
+            )}
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <Link to="/dashboard" className="h2" style={{ margin: 0, textDecoration: "none", display: "block", color: "inherit" }}>
+              {selectedWorkspaceName}
+            </Link>
+            <div className="small" style={{ marginTop: 4 }}>
+              {selectedWorkspaceDescription || "ワークスペース設定でロゴ・説明文を登録できます"}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ marginBottom: 18 }}>
+          <div className="small" style={{ opacity: 0.62, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase", marginBottom: 8 }}>
+            メインメニュー
+          </div>
+          <div style={{ display: "grid", gap: 4 }}>
+            {canShow(canAccess, "dashboard") && <SidebarLink to="/dashboard">ダッシュボード</SidebarLink>}
+            {canShow(canAccess, "sites") && <SidebarLink to="/sites">サイト</SidebarLink>}
+            {canShow(canAccess, "scenarios") && <SidebarLink to="/scenarios">シナリオ</SidebarLink>}
+            {canShow(canAccess, "actions") && <SidebarLink to="/actions">アクション</SidebarLink>}
+            {canShow(canAccess, "templates") && <SidebarLink to="/templates">テンプレート</SidebarLink>}
+            {canShow(canAccess, "media") && <SidebarLink to="/media">メディア</SidebarLink>}
+            {canShow(canAccess, "ai") && <SidebarLink to="/ai">AIインサイト</SidebarLink>}
+          </div>
+        </div>
+
+        <div>
+          <div className="small" style={{ opacity: 0.62, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase", marginBottom: 8 }}>
+            設定
+          </div>
+          <div style={{ display: "grid", gap: 4 }}>
+            {canShow(canAccess, "workspaces") && <SidebarLink to="/workspaces">ワークスペース</SidebarLink>}
+            {canShow(canAccess, "members") && <SidebarLink to="/workspace/members">メンバー</SidebarLink>}
+            {canShow(canAccess, "billing") && <SidebarLink to="/workspace/billing">契約 / Billing</SidebarLink>}
+            {isPlatformAdmin ? <SidebarLink to="/plans">Plans / マスタ管理</SidebarLink> : null}
+          </div>
+        </div>
+
+        <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid rgba(15,23,42,.08)" }}>
+          <div className="small" style={{ opacity: 0.62, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase", marginBottom: 8 }}>
+            Signed in
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 999,
+                overflow: "hidden",
+                background: "rgba(15,23,42,.08)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flex: "0 0 auto",
+                fontWeight: 700,
+              }}
+            >
+              {user.photoURL ? (
+                <img src={user.photoURL} alt={user.displayName || user.email || "user"} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              ) : (
+                String(user.displayName || user.email || "U").slice(0, 1).toUpperCase()
+              )}
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {user.displayName || "Google User"}
+              </div>
+              <div className="small" style={{ opacity: 0.72, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {user.email || ""}
+              </div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <main style={{ minWidth: 0, width: "100%", overflowX: "hidden" }}>
+        {children}
+      </main>
+    </div>
+  );
+}
+
 type AuthContextValue = {
   user: User;
+  currentUid: string;
   /** Returns Firebase Auth ID token (JWT). */
   getIdToken: (forceRefresh?: boolean) => Promise<string>;
   /** Convenience: authorized fetch to your Functions API */
@@ -198,6 +531,124 @@ export function useAuth(): AuthContextValue {
   const v = React.useContext(AuthContext);
   if (!v) throw new Error("useAuth must be used within <AuthGate>");
   return v;
+}
+
+function AuthScreen({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "grid",
+        gridTemplateColumns: "minmax(320px, 520px) minmax(420px, 1fr)",
+        background: "linear-gradient(180deg,var(--bg),var(--bg2))",
+      }}
+    >
+      <div
+        style={{
+          padding: 32,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          borderRight: "1px solid rgba(15,23,42,.08)",
+          background: "rgba(255,255,255,.82)",
+          backdropFilter: "blur(10px)",
+        }}
+      >
+        <div style={{ width: "100%", maxWidth: 420 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 18 }}>
+            <div
+              style={{
+                width: 72,
+                height: 72,
+                borderRadius: 20,
+                background: "rgba(255,255,255,.94)",
+                border: "1px solid rgba(15,23,42,.08)",
+                boxShadow: "0 14px 30px rgba(22,48,71,.08)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                overflow: "hidden",
+                padding: 10,
+                flex: "0 0 auto",
+              }}
+            >
+              <img
+                src="/logo_mokkeda_v1.svg"
+                alt="MOKKEDA"
+                style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+              />
+            </div>
+            <div>
+              <div className="h1" style={{ margin: 0, fontWeight: 800, fontSize: 26, letterSpacing: "-0.04em", color: "#1f6573" }}>
+                MOKKEDA
+              </div>
+              <div className="small" style={{ color: "#1f6573", opacity: 0.82, marginTop: 2 }}>
+                Make CX feel native.
+              </div>
+            </div>
+          </div>
+          <div className="card" style={{ padding: 20 }}>
+            <div className="small" style={{ lineHeight: 1.7 }}>{description}</div>
+            <div style={{ height: 16 }} />
+            {children}
+          </div>
+        </div>
+      </div>
+
+      <div
+        style={{
+          padding: 40,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          position: "relative",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background:
+              "radial-gradient(circle at 20% 20%, rgba(37,99,235,.18), transparent 28%), radial-gradient(circle at 80% 30%, rgba(15,118,110,.16), transparent 24%), radial-gradient(circle at 50% 80%, rgba(99,102,241,.14), transparent 30%)",
+          }}
+        />
+        <div style={{ position: "relative", width: "100%", maxWidth: 680 }}>
+          <div className="card" style={{ padding: 24, background: "rgba(255,255,255,.72)", backdropFilter: "blur(14px)" }}>
+            <div className="small" style={{ opacity: 0.72, textTransform: "uppercase", letterSpacing: ".08em" }}>Product concept</div>
+            <div className="h1" style={{ marginTop: 10, marginBottom: 10 }}>Make CX feel native.</div>
+            <div className="small" style={{ lineHeight: 1.8 }}>
+              MOKKEDA は、サイトごとの接客シナリオ、アクション、メディア、AIインサイトを一つの管理画面で扱うための CX プラットフォームです。
+              ワークスペースごとに切り替えながら、運用と改善を一気通貫で回せます。
+            </div>
+            <div style={{ height: 18 }} />
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
+              <div className="card" style={{ padding: 14 }}>
+                <div style={{ fontWeight: 800 }}>Scenarios</div>
+                <div className="small" style={{ marginTop: 6, opacity: 0.72 }}>ターゲット条件と発火条件を分けて管理</div>
+              </div>
+              <div className="card" style={{ padding: 14 }}>
+                <div style={{ fontWeight: 800 }}>Actions</div>
+                <div className="small" style={{ marginTop: 6, opacity: 0.72 }}>導線・バナー・モーダルを柔軟に配信</div>
+              </div>
+              <div className="card" style={{ padding: 14 }}>
+                <div style={{ fontWeight: 800 }}>Workspace rail</div>
+                <div className="small" style={{ marginTop: 6, opacity: 0.72 }}>Slack風UIでブランドごとに切り替え</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function AuthGate({ children }: { children: React.ReactNode }) {
@@ -513,6 +964,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 
     return {
       user,
+      currentUid: user.uid,
       getIdToken,
       apiFetch,
       apiPost,
@@ -522,56 +974,54 @@ function AuthGate({ children }: { children: React.ReactNode }) {
       workspaceAccess: workspaceInfo.access,
       canAccess,
     };
+
   }, [user, getIdToken, apiFetch, apiPost, logout, workspaceInfo, canAccess]);
 
   if (checking) {
     return (
-      <div className="container">
-        <div className="card">
-          <div className="h1">読み込み中...</div>
-          <div className="small">ログイン状態とワークスペース設定を確認しています。</div>
-        </div>
-      </div>
+      <AuthScreen
+        title="読み込み中..."
+        description="ログイン状態とワークスペース設定を確認しています。MOKKEDA の管理画面を起動する準備をしています。"
+      >
+        <div className="small" style={{ opacity: 0.72 }}>認証状態 / ワークスペース / 権限を順番に初期化しています。</div>
+      </AuthScreen>
     );
   }
 
   if (user && bootstrapping) {
     return (
-      <div className="container">
-        <div className="card">
-          <div className="h1">初期設定を準備しています...</div>
-          <div className="small">初回ログイン時は、ユーザー情報・ワークスペース・オーナー権限を自動で作成しています。</div>
-          <div className="small" style={{ marginTop: 8, opacity: 0.72 }}>
-            ワークスペースの選択状態は、ログイン中のアカウントごとに分かれて管理されます。
-          </div>
+      <AuthScreen
+        title="初期設定を準備しています..."
+        description="初回ログイン時は、ユーザー情報・ワークスペース・オーナー権限を自動で作成しています。ログイン中のアカウントごとにワークスペース選択状態も分けて管理されます。"
+      >
+        <div className="small" style={{ opacity: 0.72 }}>
+          あと少しで管理画面が利用できます。ワークスペースの土台を自動で整えています。
         </div>
-      </div>
+      </AuthScreen>
     );
   }
 
   if (!user || !ctxValue) {
     return (
-      <div className="container">
-        <div className="card">
-          <div className="h1">CX Platform 管理画面</div>
-          <div className="small">管理画面を利用するにはログインが必要です。</div>
-          <div className="small" style={{ marginTop: 8, opacity: 0.72 }}>
-            初回ログイン時は、そのアカウント用のワークスペースが自動作成され、作成者はオーナーとして登録されます。
-          </div>
-          <div style={{ height: 12 }} />
-          <button className="btn btn--primary" onClick={login}>
-            Googleでログイン
-          </button>
-          {error ? (
-            <>
-              <div style={{ height: 10 }} />
-              <div className="small" style={{ color: "salmon" }}>
-                {error}
-              </div>
-            </>
-          ) : null}
+      <AuthScreen
+        title="MOKKEDA にログイン"
+        description="管理画面を利用するには Google ログインが必要です。初回ログイン時は、そのアカウント用のワークスペースが自動作成され、作成者はオーナーとして登録されます。"
+      >
+        <button className="btn btn--primary" onClick={login}>
+          Googleでログイン
+        </button>
+        <div className="small" style={{ marginTop: 12, opacity: 0.72 }}>
+          接客シナリオ、アクション、メディア、AIインサイトを一つの管理画面で扱えます。
         </div>
-      </div>
+        {error ? (
+          <>
+            <div style={{ height: 10 }} />
+            <div className="small" style={{ color: "salmon" }}>
+              {error}
+            </div>
+          </>
+        ) : null}
+      </AuthScreen>
     );
   }
 
@@ -580,10 +1030,25 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   return <AuthContext.Provider value={ctxValue}>{children}</AuthContext.Provider>;
 }
 
+function AppRoutesGuarded() {
+  const { user } = useAuth();
+  const isPlatformAdmin = isPlatformAdminEmail(user?.email);
+  const pathname = window.location.pathname || "/";
+
+  if (!isPlatformAdmin && isPlatformAdminOnlyPath(pathname)) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  return <AppRoutes />;
+}
+
 export default function App() {
   return (
     <AuthGate>
-      <AppRoutes />
+      <AppShell>
+        {/* platform-admin only: plans, 請求書関連, Stripe同期, 全workspace横断の請求管理, system settings */}
+        <AppRoutesGuarded />
+      </AppShell>
     </AuthGate>
   );
 }
