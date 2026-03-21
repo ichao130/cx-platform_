@@ -2300,6 +2300,59 @@ export function registerV1Routes(app: Express) {
   });
 
   /* -----------------------------
+     /v1/workspaces/usage  ★管理画面専用（ADMIN_ORIGINS）
+     - ワークスペースの現在の使用量を返す（アラート判定用）
+  ------------------------------ */
+  app.post("/v1/workspaces/usage", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+
+      const body = z.object({ workspace_id: z.string().min(1) }).parse(req.body);
+      await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner", "admin", "member", "viewer"]);
+
+      const db = adminDb();
+      const wid = body.workspace_id;
+
+      // 並列でカウント取得
+      const [sitesSnap, scenariosSnap, actionsSnap, wSnap] = await Promise.all([
+        db.collection("sites").where("workspaceId", "==", wid).get(),
+        db.collection("scenarios").where("workspaceId", "==", wid).get(),
+        db.collection("actions").where("workspaceId", "==", wid).get(),
+        db.collection("workspaces").doc(wid).get(),
+      ]);
+
+      // メンバー数は workspaces doc の members フィールド or workspace_members コレクション
+      const ws = wSnap.data() as any;
+      const members = ws?.members || ws?.memberUids || {};
+      const memberCount = typeof members === "object" && !Array.isArray(members)
+        ? Object.keys(members).length
+        : Array.isArray(members) ? members.length : 0;
+
+      return res.json({
+        ok: true,
+        usage: {
+          sites: sitesSnap.size,
+          scenarios: scenariosSnap.size,
+          actions: actionsSnap.size,
+          members: memberCount,
+        },
+      });
+    } catch (e: any) {
+      console.error("[/v1/workspaces/usage] error:", e);
+      return res.status(
+        e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400
+      ).json({ ok: false, error: "usage_fetch_failed", message: e?.message || String(e) });
+    }
+  });
+
+  app.options("/v1/workspaces/usage", (req, res) => {
+    corsByAdminOrigins(req, res);
+    res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+    res.status(204).send("");
+  });
+
+  /* -----------------------------
      /v1/workspaces/billing/get  ★管理画面専用（ADMIN_ORIGINS）
      - workspace の課金状態/プラン情報を取得
   ------------------------------ */

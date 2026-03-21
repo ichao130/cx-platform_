@@ -5,10 +5,13 @@ import { apiPostJson, auth } from "../firebase";
 const API_PATHS = {
   get: "/v1/workspaces/billing/get",
   update: "/v1/workspaces/billing/update",
+  usage: "/v1/workspaces/usage",
   stripeCheckout: "/v1/stripe/create-checkout-session",
   stripePortal: "/v1/stripe/create-portal-session",
   misocaStatus: "/v1/misoca/status",
 };
+
+type Usage = { sites: number; scenarios: number; actions: number; members: number };
 
 type Plan = "free" | "standard" | "pro" | "enterprise";
 type Status = "inactive" | "trialing" | "active" | "past_due" | "canceled";
@@ -116,6 +119,7 @@ export default function WorkspaceBillingPage() {
   const [editOpen, setEditOpen] = useState(false);
   const [misocaStatus, setMisocaStatus] = useState<{ connected: boolean; expired?: boolean; expires_at?: string } | null>(null);
   const [stripeLoading, setStripeLoading] = useState(false);
+  const [usage, setUsage] = useState<Usage | null>(null);
 
   // form fields
   const [plan, setPlan] = useState<Plan>("free");
@@ -183,8 +187,12 @@ export default function WorkspaceBillingPage() {
   }, [currentUid]);
 
   useEffect(() => {
-    if (!workspaceId?.trim()) { setBilling(null); setMisocaStatus(null); return; }
+    if (!workspaceId?.trim()) { setBilling(null); setMisocaStatus(null); setUsage(null); return; }
     load();
+    // 使用量を取得
+    apiPostJson<any>(API_PATHS.usage, { workspace_id: workspaceId.trim() })
+      .then((d) => { if (d?.ok) setUsage(d.usage); })
+      .catch(() => {});
     // Misoca 連携状態を確認
     apiPostJson<any>(API_PATHS.misocaStatus, { workspace_id: workspaceId.trim() })
       .then((d) => { if (d?.ok) setMisocaStatus({ connected: d.connected, expired: d.expired, expires_at: d.expires_at }); })
@@ -390,28 +398,59 @@ export default function WorkspaceBillingPage() {
         </div>
       </div>
 
-      {/* Limits */}
+      {/* Usage + Limits */}
       {effectiveLimits && (
         <div className="card" style={{ marginBottom: 20 }}>
-          <div className="h2" style={{ marginTop: 0 }}>制限値</div>
-          {billing?.override && (
-            <div className="small" style={{ color: "#b45309", marginBottom: 8 }}>
-              ⚠ カスタム override が適用されています
-              {billing.override.note ? `（${billing.override.note}）` : ""}
-            </div>
-          )}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12 }}>
-            {Object.entries(effectiveLimits).map(([label, value]) => (
-              <div key={label} style={{
-                background: "#f8fafc", borderRadius: 8, padding: "12px 16px",
-                border: "1px solid rgba(15,23,42,.07)",
-              }}>
-                <div className="small" style={{ opacity: 0.7, marginBottom: 4 }}>{label}</div>
-                <div style={{ fontSize: 20, fontWeight: 700, color: value === "無制限" ? "#059669" : "#1e293b" }}>
-                  {value}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+            <div className="h2" style={{ margin: 0 }}>使用量 / 上限</div>
+            {billing?.override && (
+              <span className="small" style={{ color: "#b45309" }}>
+                ⚠ カスタム override 適用中{billing.override.note ? `（${billing.override.note}）` : ""}
+              </span>
+            )}
+          </div>
+          <div style={{ display: "grid", gap: 10 }}>
+            {([
+              { label: "サイト数",     key: "サイト数",     usageKey: "sites"     },
+              { label: "シナリオ数",   key: "シナリオ数",   usageKey: "scenarios" },
+              { label: "アクション数", key: "アクション数", usageKey: "actions"   },
+              { label: "メンバー数",   key: "メンバー数",   usageKey: "members"   },
+            ] as { label: string; key: string; usageKey: keyof Usage }[]).map(({ label, key, usageKey }) => {
+              const limitStr = effectiveLimits[key as keyof typeof effectiveLimits] ?? "無制限";
+              const limit = limitStr === "無制限" ? null : Number(limitStr);
+              const current = usage ? usage[usageKey] : null;
+              const pct = limit != null && current != null ? Math.min(100, Math.round((current / limit) * 100)) : null;
+              const isOver = pct != null && pct >= 100;
+              const isWarn = pct != null && pct >= 80 && pct < 100;
+              const barColor = isOver ? "#dc2626" : isWarn ? "#d97706" : "#2563eb";
+
+              return (
+                <div key={key}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                    <span className="small" style={{ fontWeight: 600 }}>{label}</span>
+                    <span style={{
+                      fontSize: 13, fontWeight: 700,
+                      color: isOver ? "#dc2626" : isWarn ? "#d97706" : "#1e293b",
+                    }}>
+                      {current != null ? current : "-"}
+                      <span style={{ fontWeight: 400, opacity: 0.6 }}> / {limitStr}</span>
+                      {isOver && <span style={{ marginLeft: 6, fontSize: 12, color: "#dc2626" }}>⚠ 上限超過</span>}
+                      {isWarn && <span style={{ marginLeft: 6, fontSize: 12, color: "#d97706" }}>⚠ 上限に近づいています</span>}
+                    </span>
+                  </div>
+                  {limit != null && (
+                    <div style={{ height: 6, background: "#e2e8f0", borderRadius: 99, overflow: "hidden" }}>
+                      <div style={{
+                        height: "100%", borderRadius: 99,
+                        width: `${pct ?? 0}%`,
+                        background: barColor,
+                        transition: "width .3s ease",
+                      }} />
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

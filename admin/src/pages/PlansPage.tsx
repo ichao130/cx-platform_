@@ -69,7 +69,7 @@ const PLAN_DEFS: {
     label: "Standard",
     color: "#2563eb",
     bg: "#eff6ff",
-    price: "¥9,800 / 月",
+    price: "¥13,000 / 月",
     description: "中規模チームの本番運用に最適。",
     features: ["シナリオ配信", "高度な分析 (流入計測)", "日時スケジュール", "AIインサイト", "Slack通知"],
     limits: [
@@ -85,7 +85,7 @@ const PLAN_DEFS: {
     label: "Pro",
     color: "#7c3aed",
     bg: "#f5f3ff",
-    price: "¥29,800 / 月",
+    price: "¥39,800 / 月",
     description: "大規模運用・マルチサイトに対応。",
     features: ["Standard の全機能", "A/Bテスト", "カスタムドメイン", "優先サポート", "APIアクセス"],
     limits: [
