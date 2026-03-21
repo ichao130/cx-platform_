@@ -558,43 +558,17 @@ export default function WorkspaceBillingPage() {
                 <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>プラン</div>
                 <select className="input" value={plan} onChange={(e) => setPlan(e.target.value as Plan)}>
                   <option value="free">Free（無料）</option>
-                  <option value="standard">Standard（標準）</option>
-                  <option value="pro">Pro（上位）</option>
+                  <option value="standard">Standard</option>
+                  <option value="pro">Pro</option>
                   <option value="enterprise">Enterprise（個別契約）</option>
                 </select>
               </div>
               <div style={{ flex: "1 1 200px" }}>
-                <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>利用状態</div>
-                <select className="input" value={status} onChange={(e) => setStatus(e.target.value as Status)}>
-                  <option value="inactive">未契約</option>
-                  <option value="trialing">トライアル中</option>
-                  <option value="active">利用中</option>
-                  <option value="past_due">支払い要確認</option>
-                  <option value="canceled">解約済み</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="row" style={{ gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-              <div style={{ flex: "1 1 200px" }}>
-                <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>課金方式</div>
+                <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>支払い方法</div>
                 <select className="input" value={provider} onChange={(e) => setProvider(e.target.value as Provider)}>
-                  <option value="stripe">Stripe（カード自動課金）</option>
-                  <option value="misoca">Misoca（請求書払い）</option>
-                  <option value="manual">手動管理</option>
+                  <option value="stripe">カード（Stripe）</option>
+                  <option value="misoca">請求書（Misoca）</option>
                 </select>
-              </div>
-              <div style={{ flex: "0 0 160px", opacity: status === "trialing" ? 1 : 0.5 }}>
-                <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>トライアル日数</div>
-                <input
-                  className="input"
-                  type="number"
-                  value={trialDays}
-                  onChange={(e) => setTrialDays(Number(e.target.value))}
-                  disabled={status !== "trialing"}
-                  min={1}
-                  max={60}
-                />
               </div>
             </div>
 
