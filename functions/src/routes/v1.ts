@@ -2082,7 +2082,6 @@ export function registerV1Routes(app: Express) {
       corsByAdminOrigins(req, res);
 
       const body = PlansListReqSchema.parse(req.body);
-      requirePlatformAdmin(req);
       await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner", "admin"]);
 
       const db = adminDb();
@@ -2146,7 +2145,6 @@ export function registerV1Routes(app: Express) {
       corsByAdminOrigins(req, res);
 
       const body = PlansUpsertReqSchema.parse(req.body);
-      requirePlatformAdmin(req);
       await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner", "admin"]);
 
       const db = adminDb();
