@@ -118,7 +118,7 @@ export default function WorkspaceBillingPage() {
   const [stripeLoading, setStripeLoading] = useState(false);
 
   // form fields
-  const [plan, setPlan] = useState<Plan>("standard");
+  const [plan, setPlan] = useState<Plan>("free");
   const [status, setStatus] = useState<Status>("inactive");
   const [provider, setProvider] = useState<Provider>("stripe");
   const [trialDays, setTrialDays] = useState<number>(14);

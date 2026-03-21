@@ -586,7 +586,7 @@ function normalizeBillingProvider(input: any, plan?: string) {
 
 function buildBillingResponse(billing: any, planDoc?: any, overrideDoc?: any) {
   return {
-    plan: billing?.plan || "standard",
+    plan: billing?.plan || "free",
     status: billing?.status || "inactive",
     provider: normalizeBillingProvider(billing?.provider, billing?.plan),
     billing_email: billing?.billing_email || null,
@@ -3781,7 +3781,7 @@ export function registerV1Routes(app: Express) {
           }
 
           await db.collection("workspace_billing").doc(workspaceId).set({
-            plan: planCode || "standard",
+            plan: planCode || "free",
             status: "active",
             provider: "stripe",
             stripe_customer_id: customerId || null,
