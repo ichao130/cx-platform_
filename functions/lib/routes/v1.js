@@ -586,8 +586,12 @@ function buildBillingResponse(billing, planDoc, overrideDoc) {
 function getRequestUserEmail(req) {
     return String(req?.auth?.email || req?.user?.email || req?.token?.email || "").trim().toLowerCase();
 }
-function requirePlatformAdmin(req) {
-    const email = getRequestUserEmail(req);
+async function requirePlatformAdmin(req) {
+    // IDトークンを直接デコードしてemailを取得する（req.authにemailがセットされないため）
+    const { verifyIdToken, extractBearerToken } = await Promise.resolve().then(() => __importStar(require("../services/admin")));
+    const token = extractBearerToken(req);
+    const decoded = await verifyIdToken(token);
+    const email = String(decoded?.email || "").trim().toLowerCase();
     if (email !== "iwatanabe@branberyheag.com") {
         throw new Error("platform_admin_only");
     }
@@ -1813,6 +1817,7 @@ function registerV1Routes(app) {
         try {
             corsByAdminOrigins(req, res);
             const body = PlansListReqSchema.parse(req.body);
+            await requirePlatformAdmin(req);
             await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner", "admin"]);
             const db = (0, admin_1.adminDb)();
             const snap = await db.collection("plans").orderBy("code", "asc").get();
@@ -1870,6 +1875,7 @@ function registerV1Routes(app) {
         try {
             corsByAdminOrigins(req, res);
             const body = PlansUpsertReqSchema.parse(req.body);
+            await requirePlatformAdmin(req);
             await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner", "admin"]);
             const db = (0, admin_1.adminDb)();
             const ref = db.collection("plans").doc(body.plan_id);

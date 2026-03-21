@@ -629,8 +629,12 @@ function getRequestUserEmail(req: any): string {
   return String(req?.auth?.email || req?.user?.email || req?.token?.email || "").trim().toLowerCase();
 }
 
-function requirePlatformAdmin(req: any) {
-  const email = getRequestUserEmail(req);
+async function requirePlatformAdmin(req: any) {
+  // IDトークンを直接デコードしてemailを取得する（req.authにemailがセットされないため）
+  const { verifyIdToken, extractBearerToken } = await import("../services/admin");
+  const token = extractBearerToken(req);
+  const decoded = await verifyIdToken(token);
+  const email = String(decoded?.email || "").trim().toLowerCase();
   if (email !== "iwatanabe@branberyheag.com") {
     throw new Error("platform_admin_only");
   }
@@ -2082,6 +2086,7 @@ export function registerV1Routes(app: Express) {
       corsByAdminOrigins(req, res);
 
       const body = PlansListReqSchema.parse(req.body);
+      await requirePlatformAdmin(req);
       await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner", "admin"]);
 
       const db = adminDb();
@@ -2145,6 +2150,7 @@ export function registerV1Routes(app: Express) {
       corsByAdminOrigins(req, res);
 
       const body = PlansUpsertReqSchema.parse(req.body);
+      await requirePlatformAdmin(req);
       await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner", "admin"]);
 
       const db = adminDb();
