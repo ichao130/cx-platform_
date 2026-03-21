@@ -969,6 +969,47 @@
       utm_campaign: utm.utm_campaign || null,
     }, siteId, siteKey);
 
+    // 滞在時間・離脱計測
+    var pageEnterTime = Date.now();
+    var pageLeaveSent = false;
+    function sendPageLeave() {
+      if (pageLeaveSent) return;
+      pageLeaveSent = true;
+      var duration = Math.round((Date.now() - pageEnterTime) / 1000);
+      var payload = JSON.stringify({
+        site_id: siteId,
+        event: "pageleave",
+        url: window.location.href,
+        path: window.location.pathname,
+        vid: ctx.vid,
+        sid: ctx.sid,
+        duration_sec: duration,
+      });
+      // navigator.sendBeacon はページ離脱時でも確実に送れる
+      var logUrl = apiBase.replace("/serve", "/log");
+      var sent = false;
+      try {
+        if (navigator.sendBeacon) {
+          sent = navigator.sendBeacon(logUrl, new Blob([payload], { type: "application/json" }));
+        }
+      } catch (e) {}
+      if (!sent) {
+        // sendBeacon が使えない場合は fetch (keepalive)
+        try {
+          fetch(logUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Site-Id": siteId, "X-Site-Key": siteKey },
+            body: payload,
+            keepalive: true,
+          });
+        } catch (e) {}
+      }
+    }
+    window.addEventListener("beforeunload", sendPageLeave);
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "hidden") sendPageLeave();
+    });
+
     fetch(apiBase + (apiBase.indexOf("?") >= 0 ? "&" : "?") + qs(ctx), {
       headers: {
         "X-Site-Id": siteId,
