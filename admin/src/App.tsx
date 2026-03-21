@@ -277,7 +277,7 @@ function getWorkspaceRailIcon(row: { id: string; data: any }) {
 
 function AppShell({ children }: { children: React.ReactNode }) {
 
-  const { user, workspaceId, workspaceRole, canAccess, currentUid } = useAuth();
+  const { user, workspaceId, workspaceRole, canAccess, currentUid, logout } = useAuth();
   const isPlatformAdmin = isPlatformAdminEmail(user?.email);
   const [workspaceRows, setWorkspaceRows] = useState<Array<{ id: string; data: any }>>([]);
 
@@ -500,7 +500,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
                 String(user.displayName || user.email || "U").slice(0, 1).toUpperCase()
               )}
             </div>
-            <div style={{ minWidth: 0 }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
               <div style={{ fontWeight: 700, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: "rgba(255,255,255,.9)" }}>
                 {user.displayName || "Google User"}
               </div>
@@ -508,6 +508,19 @@ function AppShell({ children }: { children: React.ReactNode }) {
                 {user.email || ""}
               </div>
             </div>
+            <button
+              onClick={() => void logout()}
+              title="ログアウト"
+              style={{
+                background: "none", border: "none", cursor: "pointer", padding: "4px 6px",
+                color: "rgba(255,255,255,.3)", fontSize: 16, lineHeight: 1, borderRadius: 6,
+                flexShrink: 0, transition: "color .15s",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = "rgba(255,255,255,.7)")}
+              onMouseLeave={(e) => (e.currentTarget.style.color = "rgba(255,255,255,.3)")}
+            >
+              ↩
+            </button>
           </div>
         </div>
       </aside>
