@@ -881,7 +881,7 @@ function toIsoStringOrEmpty(v: any): string {
 
 function getInviteBaseUrl(): string {
   const raw = String(INVITE_BASE_URL.value() || "").trim();
-  return raw || "https://cx-platform-v1.web.app/invite";
+  return raw || "https://app.mokkeda.com/invite";
 }
 
 function getInviteFromEmail(): string {
@@ -3861,7 +3861,7 @@ export function registerV1Routes(app: Express) {
       await requireWorkspaceAccessByWorkspaceId(req, workspaceId, "billing", ["owner"]);
 
       const clientId = MISOCA_CLIENT_ID.value();
-      const redirectUri = encodeURIComponent("https://cx-platform-v1.web.app/api/v1/misoca/callback");
+      const redirectUri = encodeURIComponent("https://app.mokkeda.com/api/v1/misoca/callback");
       const state = Buffer.from(JSON.stringify({ workspace_id: workspaceId })).toString("base64url");
       const scope = encodeURIComponent("write");
 
@@ -3896,7 +3896,7 @@ export function registerV1Routes(app: Express) {
 
       const clientId = MISOCA_CLIENT_ID.value();
       const clientSecret = MISOCA_CLIENT_SECRET.value();
-      const redirectUri = "https://cx-platform-v1.web.app/api/v1/misoca/callback";
+      const redirectUri = "https://app.mokkeda.com/api/v1/misoca/callback";
 
       // アクセストークンを取得
       const tokenRes = await fetch("https://app.misoca.jp/oauth2/token", {
@@ -3932,7 +3932,7 @@ export function registerV1Routes(app: Express) {
       });
 
       // 管理画面のBillingページにリダイレクト
-      return res.redirect("https://cx-platform-v1.web.app/billing?misoca_connected=1");
+      return res.redirect("https://app.mokkeda.com/billing?misoca_connected=1");
     } catch (e: any) {
       console.error("[/v1/misoca/callback] error:", e);
       return res.status(400).send("Misoca callback error: " + (e?.message || String(e)));
