@@ -2,529 +2,460 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import { apiPostJson, auth } from "../firebase";
 
-// =====================
-// Adjust ONLY these paths if your backend uses different route names
-// =====================
-const API_PATHS = {
-  get: "/v1/workspaces/billing/get",
-  update: "/v1/workspaces/billing/update",
-};
+const PLATFORM_ADMIN_EMAIL = "iwatanabe@branberyheag.com";
 
-type Plan = "standard" | "premium" | "custom";
+type Plan = "free" | "pro" | "advanced" | "enterprise";
 type Status = "inactive" | "trialing" | "active" | "past_due" | "canceled";
-type Provider = "stripe" | "manual";
-
-type Limits = {
-  workspaces?: number | null;
-  sites?: number | null;
-  scenarios?: number | null;
-  actions?: number | null;
-  aiInsights?: number | null;
-  members?: number | null;
-};
-
-type PlanMaster = {
-  id?: string;
-  code: Plan;
-  name?: string;
-  description?: string;
-  active?: boolean;
-  billing_provider?: Provider;
-  currency?: string;
-  price_monthly?: number;
-  price_yearly?: number | null;
-  limits?: Limits;
-  stripe_price_monthly_id?: string | null;
-  stripe_price_yearly_id?: string | null;
-  updatedAt?: any;
-};
-
-type LimitOverride = {
-  limits?: Limits;
-  note?: string;
-  updatedAt?: any;
-};
+type Provider = "stripe" | "misoca" | "manual";
 
 type Billing = {
   plan: Plan;
   status: Status;
   provider?: Provider;
   billing_email?: string | null;
-  trial_ends_at?: any;
-  current_period_ends_at?: any;
+  billing_company_name?: string | null;
+  billing_contact_name?: string | null;
+  billing_contact_phone?: string | null;
+  trial_ends_at?: string | null;
+  current_period_ends_at?: string | null;
   stripe_customer_id?: string | null;
   stripe_subscription_id?: string | null;
-  stripe_price_id?: string | null;
-  custom_limit_override_id?: string | null;
   manual_billing_note?: string;
-  plan_master?: PlanMaster | null;
-  override?: LimitOverride | null;
+  access_override_until?: string | null;
+  access_override_note?: string;
+  access_override_active?: boolean;
+  plan_master?: {
+    name?: string;
+    price_monthly?: number;
+    currency?: string;
+    description?: string;
+  } | null;
   updatedAt?: any;
 };
 
-function fmtAnyTs(v: any) {
+const PLAN_META: Record<Plan, { label: string; color: string; bg: string; price: string }> = {
+  free:       { label: "Free",       color: "#64748b", bg: "#f8fafc",  price: "¥0 / 月" },
+  pro:        { label: "Pro",        color: "#2563eb", bg: "#eff6ff",  price: "¥13,000 / 月" },
+  advanced:   { label: "Advanced",   color: "#7c3aed", bg: "#f5f3ff",  price: "¥39,800 / 月" },
+  enterprise: { label: "Enterprise", color: "#b45309", bg: "#fffbeb",  price: "お問い合わせ" },
+};
+
+const STATUS_META: Record<Status, { label: string; color: string; bg: string }> = {
+  inactive: { label: "未契約",       color: "#64748b", bg: "#f1f5f9" },
+  trialing: { label: "トライアル中", color: "#0891b2", bg: "#ecfeff" },
+  active:   { label: "利用中",       color: "#166534", bg: "#dcfce7" },
+  past_due: { label: "支払い要確認", color: "#b45309", bg: "#fffbeb" },
+  canceled: { label: "解約済み",     color: "#b91c1c", bg: "#fef2f2" },
+};
+
+const PROVIDER_META: Record<Provider, { label: string; icon: string }> = {
+  stripe:  { label: "クレジットカード（Stripe）", icon: "💳" },
+  misoca:  { label: "請求書払い（Misoca）",       icon: "🧾" },
+  manual:  { label: "手動管理",                   icon: "📋" },
+};
+
+const PLAN_ORDER: Plan[] = ["free", "pro", "advanced", "enterprise"];
+
+function fmtDate(v: string | null | undefined) {
   if (!v) return "-";
-  try {
-    if (typeof v === "string") return v;
-    if (typeof v?.toDate === "function") return v.toDate().toISOString();
-    if (typeof v?.seconds === "number") return new Date(v.seconds * 1000).toISOString();
-  } catch {}
-  return String(v);
+  try { return new Date(v).toLocaleDateString("ja-JP"); } catch { return v; }
 }
 
-function planLabel(plan: Plan | string | undefined) {
-  if (plan === "standard") return "standard（標準）";
-  if (plan === "premium") return "premium（上位）";
-  if (plan === "custom") return "custom（個別契約）";
-  return String(plan || "-");
-}
-
-function statusLabel(status: Status | string | undefined) {
-  if (status === "inactive") return "inactive（未契約）";
-  if (status === "trialing") return "trialing（トライアル中）";
-  if (status === "active") return "active（利用中）";
-  if (status === "past_due") return "past_due（支払い要確認）";
-  if (status === "canceled") return "canceled（解約済み）";
-  return String(status || "-");
-}
-
-function providerLabel(provider: Provider | string | undefined) {
-  if (provider === "stripe") return "stripe（自動課金）";
-  if (provider === "manual") return "manual（請求書 / 手動管理）";
-  return String(provider || "-");
-}
-
-function fmtLimit(v: number | null | undefined) {
-  if (v == null) return "無制限";
-  return String(v);
-}
-
-function workspaceKeyForUid(uid: string) {
-  return `cx_admin_workspace_id:${uid}`;
-}
-
-function readSelectedWorkspaceId(uid?: string) {
-  if (!uid) return "";
-  try {
-    return localStorage.getItem(workspaceKeyForUid(uid)) || "";
-  } catch {
-    return "";
-  }
-}
-
-export default function WorkspaceBillingPage() {
-  const [workspaceId, setWorkspaceId] = useState<string>("");
-  const [currentUid, setCurrentUid] = useState<string>("");
-
-  const canLoad = useMemo(() => !!workspaceId?.trim(), [workspaceId]);
-
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState("");
-
+// ── コンポーネント ──────────────────────────────────────────────
+export default function WorkspaceBillingPage({ workspaceId }: { workspaceId?: string }) {
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [wsId, setWsId] = useState(workspaceId ?? "");
   const [billing, setBilling] = useState<Billing | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState("");
 
-  // edit form
-  const [plan, setPlan] = useState<Plan>("standard");
-  const [status, setStatus] = useState<Status>("inactive");
-  const [provider, setProvider] = useState<Provider>("stripe");
-  const [trialDays, setTrialDays] = useState<number>(14);
-  const [billingEmail, setBillingEmail] = useState<string>("");
-  const [manualBillingNote, setManualBillingNote] = useState<string>("");
+  // モーダル
+  const [showUpgrade, setShowUpgrade] = useState(false);
+  const [showProvider, setShowProvider] = useState(false);
+  const [selectedPlan, setSelectedPlan] = useState<Plan>("free");
+  const [selectedProvider, setSelectedProvider] = useState<Provider>("stripe");
 
-  const applyFromBilling = useCallback((b: Billing | null) => {
-    if (!b) return;
-    setPlan((b.plan || "standard") as Plan);
-    setStatus((b.status || "inactive") as Status);
-    setProvider((b.provider || (b.plan === "custom" ? "manual" : "stripe")) as Provider);
-    setBillingEmail(b.billing_email || "");
-    setManualBillingNote(b.manual_billing_note || "");
+  // 請求先フォーム
+  const [billingEmail, setBillingEmail] = useState("");
+  const [billingCompany, setBillingCompany] = useState("");
+  const [billingContact, setBillingContact] = useState("");
+  const [billingPhone, setBillingPhone] = useState("");
+
+  // アクセスオーバーライド
+  const [overrideDate, setOverrideDate] = useState("");
+  const [overrideNote, setOverrideNote] = useState("");
+  const [overrideSaving, setOverrideSaving] = useState(false);
+
+  const isPlatformAdmin = useMemo(() => userEmail === PLATFORM_ADMIN_EMAIL, [userEmail]);
+
+  useEffect(() => {
+    return onAuthStateChanged(auth, (u) => setUserEmail(u?.email ?? null));
   }, []);
 
   const load = useCallback(async () => {
-    if (!workspaceId?.trim()) return;
-    setErr("");
-    setLoading(true);
-
+    if (!wsId) return;
+    setLoading(true); setError("");
     try {
-      const data = await apiPostJson<any>(API_PATHS.get, {
-        workspace_id: workspaceId.trim(),
-      });
-
-      if (!data?.ok) throw new Error(data?.message || data?.error || "billing_get_failed");
-
-      const b: Billing | null = data?.billing || null;
+      const res = await apiPostJson("/v1/workspaces/billing/get", { workspace_id: wsId });
+      const b: Billing = res.billing ?? res;
       setBilling(b);
-      applyFromBilling(b);
-    } catch (e: any) {
-      console.error(e);
-      setErr(e?.message || String(e));
-      setBilling(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [workspaceId, applyFromBilling]);
-
-  useEffect(() => {
-    return onAuthStateChanged(auth, (user) => {
-      const uid = user?.uid || "";
-      setCurrentUid(uid);
-      setWorkspaceId(readSelectedWorkspaceId(uid));
-    });
-  }, []);
-
-  useEffect(() => {
-    if (!currentUid) {
-      setWorkspaceId("");
-      return;
-    }
-
-    const applySelectedWorkspace = () => {
-      setWorkspaceId(readSelectedWorkspaceId(currentUid));
-    };
-
-    applySelectedWorkspace();
-
-    const onWorkspaceChanged = (e?: Event) => {
-      const next = (e as CustomEvent | undefined)?.detail?.workspaceId;
-      if (typeof next === "string") {
-        setWorkspaceId(next);
-        return;
+      setSelectedPlan(b.plan ?? "free");
+      setSelectedProvider(b.provider ?? "stripe");
+      setBillingEmail(b.billing_email ?? "");
+      setBillingCompany(b.billing_company_name ?? "");
+      setBillingContact(b.billing_contact_name ?? "");
+      setBillingPhone(b.billing_contact_phone ?? "");
+      if (b.access_override_until) {
+        setOverrideDate(b.access_override_until.slice(0, 10));
+        setOverrideNote(b.access_override_note ?? "");
       }
-      applySelectedWorkspace();
-    };
+    } catch (e: any) { setError(e.message ?? "取得失敗"); }
+    finally { setLoading(false); }
+  }, [wsId]);
 
-    const onStorageChanged = () => applySelectedWorkspace();
+  useEffect(() => { load(); }, [load]);
 
-    window.addEventListener("cx_admin_workspace_changed", onWorkspaceChanged as EventListener);
-    window.addEventListener("storage", onStorageChanged);
-    return () => {
-      window.removeEventListener("cx_admin_workspace_changed", onWorkspaceChanged as EventListener);
-      window.removeEventListener("storage", onStorageChanged);
-    };
-  }, [currentUid]);
-
-  useEffect(() => {
-    if (!workspaceId?.trim()) {
-      setBilling(null);
-      return;
-    }
-    load();
-  }, [workspaceId, load]);
-
-  const save = useCallback(async () => {
-    if (!workspaceId?.trim()) return;
-    setErr("");
-    setSaving(true);
-
+  // 請求先住所の保存
+  const saveAddress = useCallback(async () => {
+    if (!wsId || !billing) return;
+    setLoading(true); setError(""); setSaved("");
     try {
-      const payload: any = {
-        workspace_id: workspaceId.trim(),
-        plan,
-        status,
-        provider,
-        billing_email: billingEmail?.trim() || null,
-        manual_billing_note: manualBillingNote,
-      };
+      await apiPostJson("/v1/workspaces/billing/update", {
+        workspace_id: wsId,
+        plan: billing.plan,
+        provider: billing.provider,
+        billing_email: billingEmail,
+        billing_company_name: billingCompany,
+        billing_contact_name: billingContact,
+        billing_contact_phone: billingPhone,
+      });
+      setSaved("請求先情報を保存しました");
+      await load();
+    } catch (e: any) { setError(e.message ?? "保存失敗"); }
+    finally { setLoading(false); }
+  }, [wsId, billing, billingEmail, billingCompany, billingContact, billingPhone, load]);
 
-      // trialing のときだけ trial_days を送る（API側の実装に合わせやすい）
-      if (status === "trialing") payload.trial_days = Math.max(1, Math.min(60, Number(trialDays) || 14));
+  // プラン変更
+  const changePlan = useCallback(async () => {
+    if (!wsId || !billing) return;
+    setLoading(true); setError(""); setSaved("");
+    try {
+      await apiPostJson("/v1/workspaces/billing/update", {
+        workspace_id: wsId,
+        plan: selectedPlan,
+        provider: billing.provider,
+        billing_email: billingEmail,
+        billing_company_name: billingCompany,
+        billing_contact_name: billingContact,
+        billing_contact_phone: billingPhone,
+      });
+      setShowUpgrade(false);
+      setSaved("プランを変更しました");
+      await load();
+    } catch (e: any) { setError(e.message ?? "変更失敗"); }
+    finally { setLoading(false); }
+  }, [wsId, billing, selectedPlan, billingEmail, billingCompany, billingContact, billingPhone, load]);
 
-      const data = await apiPostJson<any>(API_PATHS.update, payload);
+  // 支払い方法変更
+  const changeProvider = useCallback(async () => {
+    if (!wsId || !billing) return;
+    setLoading(true); setError(""); setSaved("");
+    try {
+      await apiPostJson("/v1/workspaces/billing/update", {
+        workspace_id: wsId,
+        plan: billing.plan,
+        provider: selectedProvider,
+        billing_email: billingEmail,
+        billing_company_name: billingCompany,
+        billing_contact_name: billingContact,
+        billing_contact_phone: billingPhone,
+      });
+      setShowProvider(false);
+      setSaved("支払い方法を変更しました");
+      await load();
+    } catch (e: any) { setError(e.message ?? "変更失敗"); }
+    finally { setLoading(false); }
+  }, [wsId, billing, selectedProvider, billingEmail, billingCompany, billingContact, billingPhone, load]);
 
-      if (!data?.ok) throw new Error(data?.message || data?.error || "billing_update_failed");
+  // アクセスオーバーライド保存
+  const saveOverride = useCallback(async () => {
+    if (!wsId) return;
+    setOverrideSaving(true); setError(""); setSaved("");
+    try {
+      await apiPostJson("/v1/workspaces/access-override/set", {
+        workspace_id: wsId,
+        override_until: overrideDate ? new Date(overrideDate).toISOString() : null,
+        note: overrideNote,
+      });
+      setSaved("アクセス権限を設定しました");
+      await load();
+    } catch (e: any) { setError(e.message ?? "設定失敗"); }
+    finally { setOverrideSaving(false); }
+  }, [wsId, overrideDate, overrideNote, load]);
 
-      const b: Billing | null = data?.billing || null;
-      setBilling(b);
-      applyFromBilling(b);
-    } catch (e: any) {
-      console.error(e);
-      setErr(e?.message || String(e));
-    } finally {
-      setSaving(false);
-    }
-  }, [workspaceId, plan, status, provider, billingEmail, manualBillingNote, trialDays, applyFromBilling]);
+  // ── UI ────────────────────────────────────────────────────────
+  const plan = billing?.plan ?? "free";
+  const status = billing?.status ?? "inactive";
+  const provider = billing?.provider ?? "manual";
+  const planMeta = PLAN_META[plan] ?? PLAN_META.free;
+  const statusMeta = STATUS_META[status] ?? STATUS_META.inactive;
+  const providerMeta = PROVIDER_META[provider] ?? PROVIDER_META.manual;
 
   return (
-    <div className="container liquid-page" style={{ minWidth: 0 }}>
-      <div className="page-header">
-        <div className="page-header__meta">
-          <div className="small" style={{ marginBottom: 6, opacity: 0.7 }}>MOKKEDA / Settings</div>
-          <h1 className="h1">契約 / Billing</h1>
-          <div className="small">ワークスペースごとの契約プラン、利用状態、トライアル、請求先メールを確認・更新する画面です。まずは現在の状態を確認してから編集します。</div>
-          <div className="small" style={{ marginTop: 6, opacity: 0.72 }}>
-            現在のワークスペース: <b>{workspaceId || '（未選択）'}</b>
-          </div>
-        </div>
-        <div className="page-header__actions" style={{ flexWrap: "wrap" }}>
-          <button className="btn" onClick={() => load()} disabled={!canLoad || loading}>
-            {loading ? "読込中..." : "現在の契約情報を取得"}
-          </button>
-        </div>
-      </div>
+    <div style={{ padding: 32, maxWidth: 800 }}>
+      <h2 style={{ margin: "0 0 24px", fontSize: 22, fontWeight: 700 }}>契約・Billing</h2>
 
-      <div className="card liquid-page" style={{ minWidth: 0, marginBottom: 14 }}>
-        <div className="list-toolbar">
-          <div className="list-toolbar__filters" style={{ flex: 1 }}>
-            <div style={{ minWidth: 320, flex: "1 1 360px" }}>
-              <div className="h2">ワークスペース</div>
-              <input
-                className="input"
-                value={workspaceId}
-                readOnly
-                placeholder="workspace ID"
-                style={{ minWidth: 320 }}
-              />
-            </div>
-          </div>
-          <div className="list-toolbar__actions">
-            <div className="small" style={{ lineHeight: 1.6, opacity: 0.74, maxWidth: 480 }}>
-              現時点では手動更新用の管理画面です。将来的に Stripe / Checkout / Webhook と連携する前提で利用します。
-            </div>
-          </div>
-        </div>
-
-        {err ? (
-          <div className="small" style={{ marginTop: 10, color: "#d93025", whiteSpace: "pre-wrap" }}>
-            {err}
-          </div>
-        ) : null}
-      </div>
-
-      <div
-        className="card liquid-page"
-        style={{
-          minWidth: 0,
-          marginBottom: 14,
-          border: "1px solid rgba(15,23,42,.08)",
-          background: "linear-gradient(180deg,#ffffff,#f8fbff)",
-        }}
-      >
-        <div className="h2" style={{ margin: 0 }}>契約情報を編集</div>
-        <div className="small" style={{ opacity: 0.75, marginTop: 6 }}>
-          現在は手動更新の管理画面です。ベータ運用では trialing を使いながら、後から Stripe 連携へ移行できる構成にしています。
-        </div>
-
-        <div style={{ height: 12 }} />
-
-        <div className="row liquid-page" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ minWidth: 200, flex: "1 1 200px" }}>
-            <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>プラン</div>
-            <select className="input" value={plan} onChange={(e) => setPlan(e.target.value as Plan)}>
-              <option value="standard">standard（標準）</option>
-              <option value="premium">premium（上位）</option>
-              <option value="custom">custom（個別契約）</option>
-            </select>
-          </div>
-
-          <div style={{ minWidth: 200, flex: "1 1 200px" }}>
-            <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>利用状態</div>
-            <select className="input" value={status} onChange={(e) => setStatus(e.target.value as Status)}>
-              <option value="inactive">inactive（未契約）</option>
-              <option value="trialing">trialing（トライアル中）</option>
-              <option value="active">active（利用中）</option>
-              <option value="past_due">past_due（支払い要確認）</option>
-              <option value="canceled">canceled（解約済み）</option>
-            </select>
-          </div>
-
-          <div style={{ minWidth: 200, flex: "1 1 200px" }}>
-            <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>課金方式</div>
-            <select className="input" value={provider} onChange={(e) => setProvider(e.target.value as Provider)}>
-              <option value="stripe">stripe（自動課金）</option>
-              <option value="manual">manual（請求書 / 手動管理）</option>
-            </select>
-          </div>
-
-          <div style={{ minWidth: 200, flex: "1 1 200px", opacity: status === "trialing" ? 1 : 0.5 }}>
-            <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>トライアル日数</div>
-            <input
-              className="input"
-              type="number"
-              value={trialDays}
-              onChange={(e) => setTrialDays(Number(e.target.value))}
-              disabled={status !== "trialing"}
-              min={1}
-              max={60}
-            />
-          </div>
-        </div>
-
-        <div style={{ height: 10 }} />
-
-        <div style={{ minWidth: 0 }}>
-          <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>請求先メールアドレス</div>
+      {/* ワークスペースID入力（workspaceIdがpropsで来ない場合） */}
+      {!workspaceId && (
+        <div style={{ marginBottom: 20, display: "flex", gap: 8 }}>
           <input
-            className="input"
-            value={billingEmail}
-            onChange={(e) => setBillingEmail(e.target.value)}
-            placeholder="billing@example.com"
-            style={{ width: "100%" }}
+            value={wsId}
+            onChange={(e) => setWsId(e.target.value)}
+            placeholder="ワークスペースID"
+            style={{ flex: 1, padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 14 }}
           />
-        </div>
-
-        <div style={{ height: 10 }} />
-
-        <div style={{ minWidth: 0, opacity: provider === "manual" ? 1 : 0.6 }}>
-          <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>手動課金メモ</div>
-          <textarea
-            className="input"
-            rows={4}
-            value={manualBillingNote}
-            onChange={(e) => setManualBillingNote(e.target.value)}
-            placeholder="請求書払い、個別見積、稟議待ちなどのメモ"
-            disabled={provider !== "manual"}
-            style={{ width: "100%" }}
-          />
-        </div>
-
-        <div style={{ height: 12 }} />
-
-        <div className="page-header__actions" style={{ flexWrap: "wrap" }}>
-          <button className="btn btn--primary" onClick={save} disabled={!canLoad || saving}>
-            {saving ? "保存中..." : "契約情報を保存"}
-          </button>
           <button
-            className="btn"
-            onClick={() => applyFromBilling(billing)}
-            disabled={!billing}
+            onClick={load}
+            style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 14 }}
           >
-            読み込み内容に戻す
+            読み込む
           </button>
         </div>
-      </div>
+      )}
 
-      <div className="card liquid-page" style={{ minWidth: 0 }}>
-        <div className="list-toolbar">
-          <div className="list-toolbar__filters">
-            <div>
-              <div className="h2" style={{ margin: 0 }}>現在の契約情報</div>
-              <div className="small" style={{ opacity: 0.75, marginTop: 6 }}>
-                Stripe 連携前の確認用として、現在の Billing ドキュメント内容を一覧で確認できます。
+      {error && <div style={{ marginBottom: 16, padding: "10px 14px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, color: "#b91c1c", fontSize: 14 }}>{error}</div>}
+      {saved && <div style={{ marginBottom: 16, padding: "10px 14px", background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 6, color: "#166534", fontSize: 14 }}>{saved}</div>}
+
+      {loading && <div style={{ color: "#64748b", marginBottom: 16 }}>読み込み中…</div>}
+
+      {billing && (
+        <>
+          {/* ── 現在のプランカード ── */}
+          <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, marginBottom: 16, overflow: "hidden", borderTop: `4px solid ${planMeta.color}` }}>
+            <div style={{ padding: "20px 24px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                <div>
+                  <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>現在のプラン</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: planMeta.color }}>{planMeta.label}</div>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <span style={{ display: "inline-block", padding: "4px 10px", borderRadius: 20, fontSize: 12, fontWeight: 600, background: statusMeta.bg, color: statusMeta.color }}>
+                    {statusMeta.label}
+                  </span>
+                  <button
+                    onClick={() => { setSelectedPlan(plan); setShowUpgrade(true); }}
+                    style={{ padding: "6px 14px", background: planMeta.color, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 600 }}
+                  >
+                    プランを変更
+                  </button>
+                </div>
+              </div>
+              <div style={{ fontSize: 20, fontWeight: 600, color: "#1e293b", marginBottom: 12 }}>{planMeta.price}</div>
+              <div style={{ display: "flex", gap: 24, fontSize: 13, color: "#64748b" }}>
+                {billing.trial_ends_at && <span>トライアル終了: {fmtDate(billing.trial_ends_at)}</span>}
+                {billing.current_period_ends_at && <span>次回更新: {fmtDate(billing.current_period_ends_at)}</span>}
+              </div>
+              {/* アクセスオーバーライド表示 */}
+              {billing.access_override_active && billing.access_override_until && (
+                <div style={{ marginTop: 12, padding: "8px 12px", background: "#f5f3ff", borderRadius: 6, fontSize: 13, color: "#7c3aed", fontWeight: 600 }}>
+                  🔑 フルアクセス付与中（{fmtDate(billing.access_override_until)} まで）
+                  {billing.access_override_note && <span style={{ fontWeight: 400, marginLeft: 8 }}>— {billing.access_override_note}</span>}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── 支払い方法カード ── */}
+          <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, marginBottom: 16, padding: "20px 24px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div>
+                <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>支払い方法</div>
+                <div style={{ fontSize: 16, fontWeight: 600, color: "#1e293b" }}>
+                  {providerMeta.icon} {providerMeta.label}
+                </div>
+                {billing.stripe_customer_id && (
+                  <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>Customer ID: {billing.stripe_customer_id}</div>
+                )}
+              </div>
+              <button
+                onClick={() => { setSelectedProvider(provider); setShowProvider(true); }}
+                style={{ padding: "6px 14px", background: "#f1f5f9", color: "#374151", border: "1px solid #e2e8f0", borderRadius: 6, cursor: "pointer", fontSize: 13 }}
+              >
+                変更する
+              </button>
+            </div>
+          </div>
+
+          {/* ── 請求先住所フォーム ── */}
+          <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, marginBottom: 16, padding: "20px 24px" }}>
+            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 16, color: "#1e293b" }}>請求先情報</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+              <div>
+                <label style={{ fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 }}>企業名</label>
+                <input
+                  value={billingCompany}
+                  onChange={(e) => setBillingCompany(e.target.value)}
+                  placeholder="株式会社〇〇"
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 14, boxSizing: "border-box" }}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 }}>担当者名</label>
+                <input
+                  value={billingContact}
+                  onChange={(e) => setBillingContact(e.target.value)}
+                  placeholder="山田 太郎"
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 14, boxSizing: "border-box" }}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 }}>請求先メール</label>
+                <input
+                  value={billingEmail}
+                  onChange={(e) => setBillingEmail(e.target.value)}
+                  placeholder="billing@example.com"
+                  type="email"
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 14, boxSizing: "border-box" }}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 }}>電話番号</label>
+                <input
+                  value={billingPhone}
+                  onChange={(e) => setBillingPhone(e.target.value)}
+                  placeholder="03-0000-0000"
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 14, boxSizing: "border-box" }}
+                />
               </div>
             </div>
+            <button
+              onClick={saveAddress}
+              disabled={loading}
+              style={{ padding: "8px 20px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 14, fontWeight: 600 }}
+            >
+              保存する
+            </button>
+          </div>
+
+          {/* ── アクセスオーバーライド（管理者のみ） ── */}
+          {isPlatformAdmin && (
+            <div style={{ background: "#faf5ff", border: "1px solid #e9d5ff", borderRadius: 10, padding: "20px 24px" }}>
+              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4, color: "#7c3aed" }}>🔑 アクセス権限の付与（管理者専用）</div>
+              <div style={{ fontSize: 13, color: "#8b5cf6", marginBottom: 16 }}>プランに関係なく、指定期間フル機能を利用可能にします</div>
+              <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+                <div>
+                  <label style={{ fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 }}>有効期限</label>
+                  <input
+                    type="date"
+                    value={overrideDate}
+                    onChange={(e) => setOverrideDate(e.target.value)}
+                    style={{ padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 14 }}
+                  />
+                </div>
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <label style={{ fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 }}>メモ</label>
+                  <input
+                    value={overrideNote}
+                    onChange={(e) => setOverrideNote(e.target.value)}
+                    placeholder="検証用、など"
+                    style={{ width: "100%", padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 14, boxSizing: "border-box" }}
+                  />
+                </div>
+                <button
+                  onClick={saveOverride}
+                  disabled={overrideSaving}
+                  style={{ padding: "8px 20px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 14, fontWeight: 600 }}
+                >
+                  {overrideSaving ? "設定中…" : "設定する"}
+                </button>
+                {overrideDate && (
+                  <button
+                    onClick={() => { setOverrideDate(""); setOverrideNote(""); }}
+                    style={{ padding: "8px 14px", background: "#f1f5f9", color: "#64748b", border: "1px solid #e2e8f0", borderRadius: 6, cursor: "pointer", fontSize: 13 }}
+                  >
+                    クリア
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ── プラン変更モーダル ── */}
+      {showUpgrade && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#fff", borderRadius: 12, padding: 28, width: 500, maxWidth: "90vw", maxHeight: "80vh", overflowY: "auto" }}>
+            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 20 }}>プランを変更する</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 24 }}>
+              {PLAN_ORDER.map((p) => {
+                const m = PLAN_META[p];
+                const isSelected = selectedPlan === p;
+                return (
+                  <label
+                    key={p}
+                    style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", border: `2px solid ${isSelected ? m.color : "#e2e8f0"}`, borderRadius: 8, cursor: "pointer", background: isSelected ? m.bg : "#fff", transition: "all .15s" }}
+                  >
+                    <input type="radio" name="plan" value={p} checked={isSelected} onChange={() => setSelectedPlan(p)} style={{ accentColor: m.color }} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 700, color: m.color, fontSize: 15 }}>{m.label}</div>
+                      <div style={{ fontSize: 13, color: "#64748b" }}>{m.price}</div>
+                    </div>
+                    {billing?.plan === p && <span style={{ fontSize: 12, color: "#64748b", background: "#f1f5f9", padding: "2px 8px", borderRadius: 10 }}>現在</span>}
+                  </label>
+                );
+              })}
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button onClick={() => setShowUpgrade(false)} style={{ padding: "9px 20px", background: "#f1f5f9", color: "#374151", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 14 }}>キャンセル</button>
+              <button
+                onClick={changePlan}
+                disabled={loading || selectedPlan === billing?.plan}
+                style={{ padding: "9px 20px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 14, fontWeight: 600, opacity: selectedPlan === billing?.plan ? .5 : 1 }}
+              >
+                {loading ? "変更中…" : "変更する"}
+              </button>
+            </div>
           </div>
         </div>
+      )}
 
-        <div className="liquid-scroll-x">
-          <table className="table">
-            <tbody>
-            <tr>
-              <th style={{ textAlign: "left", width: 220 }}>プラン</th>
-              <td style={{ textAlign: "left" }}>{planLabel(billing?.plan)}</td>
-            </tr>
-            <tr>
-              <th style={{ textAlign: "left" }}>利用状態</th>
-              <td style={{ textAlign: "left" }}>{statusLabel(billing?.status)}</td>
-            </tr>
-            <tr>
-              <th style={{ textAlign: "left" }}>課金方式</th>
-              <td style={{ textAlign: "left" }}>{providerLabel(billing?.provider)}</td>
-            </tr>
-            <tr>
-              <th style={{ textAlign: "left" }}>トライアル終了日</th>
-              <td style={{ textAlign: "left" }}>{fmtAnyTs(billing?.trial_ends_at)}</td>
-            </tr>
-            <tr>
-              <th style={{ textAlign: "left" }}>契約更新日</th>
-              <td style={{ textAlign: "left" }}>{fmtAnyTs(billing?.current_period_ends_at)}</td>
-            </tr>
-            <tr>
-              <th style={{ textAlign: "left" }}>請求先メールアドレス</th>
-              <td style={{ textAlign: "left" }}>{billing?.billing_email || "-"}</td>
-            </tr>
-            <tr>
-              <th style={{ textAlign: "left" }}>Stripe customer ID</th>
-              <td style={{ textAlign: "left" }}>{billing?.stripe_customer_id || "-"}</td>
-            </tr>
-            <tr>
-              <th style={{ textAlign: "left" }}>Stripe subscription ID</th>
-              <td style={{ textAlign: "left" }}>{billing?.stripe_subscription_id || "-"}</td>
-            </tr>
-            <tr>
-              <th style={{ textAlign: "left" }}>Stripe price ID</th>
-              <td style={{ textAlign: "left" }}>{billing?.stripe_price_id || "-"}</td>
-            </tr>
-            <tr>
-              <th style={{ textAlign: "left" }}>手動課金メモ</th>
-              <td style={{ textAlign: "left", whiteSpace: "pre-wrap" }}>{billing?.manual_billing_note || "-"}</td>
-            </tr>
-            <tr>
-              <th style={{ textAlign: "left" }}>最終更新日</th>
-              <td style={{ textAlign: "left" }}>{fmtAnyTs(billing?.updatedAt)}</td>
-            </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div style={{ height: 12 }} />
-
-        <div className="card liquid-page" style={{ background: "rgba(15,23,42,.02)", border: "1px solid rgba(15,23,42,.08)", minWidth: 0 }}>
-          <div className="h2" style={{ margin: 0 }}>プランマスタ</div>
-          <div className="small" style={{ opacity: 0.75, marginTop: 6 }}>
-            今の契約にひもづいているプラン定義です。制限や料金は plan master から参照する前提です。
-          </div>
-
-          <div className="liquid-scroll-x">
-            <table className="table" style={{ marginTop: 10 }}>
-              <tbody>
-              <tr>
-                <th style={{ textAlign: "left", width: 220 }}>name</th>
-                <td style={{ textAlign: "left" }}>{billing?.plan_master?.name || "-"}</td>
-              </tr>
-              <tr>
-                <th style={{ textAlign: "left" }}>description</th>
-                <td style={{ textAlign: "left" }}>{billing?.plan_master?.description || "-"}</td>
-              </tr>
-              <tr>
-                <th style={{ textAlign: "left" }}>料金（月額）</th>
-                <td style={{ textAlign: "left" }}>
-                  {billing?.plan_master?.currency || "JPY"} {billing?.plan_master?.price_monthly ?? "-"}
-                </td>
-              </tr>
-              <tr>
-                <th style={{ textAlign: "left" }}>料金（年額）</th>
-                <td style={{ textAlign: "left" }}>
-                  {billing?.plan_master?.price_yearly == null ? "-" : `${billing?.plan_master?.currency || "JPY"} ${billing?.plan_master?.price_yearly}`}
-                </td>
-              </tr>
-              <tr>
-                <th style={{ textAlign: "left" }}>課金方式</th>
-                <td style={{ textAlign: "left" }}>{providerLabel(billing?.plan_master?.billing_provider)}</td>
-              </tr>
-              </tbody>
-            </table>
+      {/* ── 支払い方法変更モーダル ── */}
+      {showProvider && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#fff", borderRadius: 12, padding: 28, width: 440, maxWidth: "90vw" }}>
+            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 20 }}>支払い方法を変更する</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 24 }}>
+              {(["stripe", "misoca", "manual"] as Provider[]).map((pv) => {
+                const m = PROVIDER_META[pv];
+                const isSelected = selectedProvider === pv;
+                return (
+                  <label
+                    key={pv}
+                    style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", border: `2px solid ${isSelected ? "#2563eb" : "#e2e8f0"}`, borderRadius: 8, cursor: "pointer", background: isSelected ? "#eff6ff" : "#fff" }}
+                  >
+                    <input type="radio" name="provider" value={pv} checked={isSelected} onChange={() => setSelectedProvider(pv)} />
+                    <div style={{ fontSize: 18 }}>{m.icon}</div>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>{m.label}</div>
+                    {billing?.provider === pv && <span style={{ marginLeft: "auto", fontSize: 12, color: "#64748b", background: "#f1f5f9", padding: "2px 8px", borderRadius: 10 }}>現在</span>}
+                  </label>
+                );
+              })}
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button onClick={() => setShowProvider(false)} style={{ padding: "9px 20px", background: "#f1f5f9", color: "#374151", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 14 }}>キャンセル</button>
+              <button
+                onClick={changeProvider}
+                disabled={loading || selectedProvider === billing?.provider}
+                style={{ padding: "9px 20px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 14, fontWeight: 600, opacity: selectedProvider === billing?.provider ? .5 : 1 }}
+              >
+                {loading ? "変更中…" : "変更する"}
+              </button>
+            </div>
           </div>
         </div>
-
-        <div style={{ height: 12 }} />
-
-        <div className="card liquid-page" style={{ background: "rgba(15,23,42,.02)", border: "1px solid rgba(15,23,42,.08)", minWidth: 0 }}>
-          <div className="h2" style={{ margin: 0 }}>制限値</div>
-          <div className="small" style={{ opacity: 0.75, marginTop: 6 }}>
-            下段の override が入っていれば、plan master よりそちらを優先して扱う想定です。
-          </div>
-
-          <div className="liquid-scroll-x">
-            <table className="table" style={{ marginTop: 10 }}>
-              <tbody>
-                <tr><th style={{ textAlign: "left", width: 220 }}>ワークスペース数</th><td style={{ textAlign: "left" }}>{fmtLimit(billing?.override?.limits?.workspaces ?? billing?.plan_master?.limits?.workspaces)}</td></tr>
-                <tr><th style={{ textAlign: "left" }}>サイト数</th><td style={{ textAlign: "left" }}>{fmtLimit(billing?.override?.limits?.sites ?? billing?.plan_master?.limits?.sites)}</td></tr>
-                <tr><th style={{ textAlign: "left" }}>シナリオ数</th><td style={{ textAlign: "left" }}>{fmtLimit(billing?.override?.limits?.scenarios ?? billing?.plan_master?.limits?.scenarios)}</td></tr>
-                <tr><th style={{ textAlign: "left" }}>アクション数</th><td style={{ textAlign: "left" }}>{fmtLimit(billing?.override?.limits?.actions ?? billing?.plan_master?.limits?.actions)}</td></tr>
-                <tr><th style={{ textAlign: "left" }}>AIインサイト数</th><td style={{ textAlign: "left" }}>{fmtLimit(billing?.override?.limits?.aiInsights ?? billing?.plan_master?.limits?.aiInsights)}</td></tr>
-                <tr><th style={{ textAlign: "left" }}>メンバー数</th><td style={{ textAlign: "left" }}>{fmtLimit(billing?.override?.limits?.members ?? billing?.plan_master?.limits?.members)}</td></tr>
-              </tbody>
-            </table>
-          </div>
-
-          <div className="small" style={{ marginTop: 8, opacity: 0.72, whiteSpace: "pre-wrap" }}>
-            override note: {billing?.override?.note || "-"}
-          </div>
-        </div>
-      </div>
-
-      <div style={{ height: 24 }} />
+      )}
     </div>
   );
 }

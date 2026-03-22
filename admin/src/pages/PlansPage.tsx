@@ -1,14 +1,10 @@
-
-
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { getAuth, onAuthStateChanged } from "firebase/auth";
+import React, { useCallback, useEffect, useState } from "react";
 import { apiPostJson } from "../firebase";
 
-type PlanCode = "standard" | "premium" | "custom";
-type BillingProvider = "stripe" | "manual";
+type PlanCode = "free" | "pro" | "advanced" | "enterprise";
+type BillingProvider = "stripe" | "misoca" | "manual";
 
 type Limits = {
-  workspaces?: number | null;
   sites?: number | null;
   scenarios?: number | null;
   actions?: number | null;
@@ -23,477 +19,327 @@ type PlanRow = {
   description?: string;
   active?: boolean;
   billing_provider?: BillingProvider;
-  currency?: string;
   price_monthly?: number;
   price_yearly?: number | null;
   limits?: Limits;
   stripe_price_monthly_id?: string | null;
   stripe_price_yearly_id?: string | null;
-  updatedAt?: any;
 };
 
-const API = {
-  list: "/v1/plans/list",
-  upsert: "/v1/plans/upsert",
-};
+const PLAN_DEFS: {
+  code: PlanCode;
+  label: string;
+  color: string;
+  bg: string;
+  border: string;
+  defaultPrice: number;
+  defaultDescription: string;
+  defaultLimits: Limits;
+}[] = [
+  {
+    code: "free",
+    label: "Free",
+    color: "#64748b",
+    bg: "#f8fafc",
+    border: "#e2e8f0",
+    defaultPrice: 0,
+    defaultDescription: "まずは無料で試してみましょう",
+    defaultLimits: { sites: 1, scenarios: 3, actions: 500, aiInsights: 0, members: 1 },
+  },
+  {
+    code: "pro",
+    label: "Pro",
+    color: "#2563eb",
+    bg: "#eff6ff",
+    border: "#bfdbfe",
+    defaultPrice: 13000,
+    defaultDescription: "成長するチームに最適なプラン",
+    defaultLimits: { sites: 5, scenarios: 20, actions: 10000, aiInsights: 100, members: 5 },
+  },
+  {
+    code: "advanced",
+    label: "Advanced",
+    color: "#7c3aed",
+    bg: "#f5f3ff",
+    border: "#ddd6fe",
+    defaultPrice: 39800,
+    defaultDescription: "本格運用向けの高機能プラン",
+    defaultLimits: { sites: 20, scenarios: 100, actions: 100000, aiInsights: 1000, members: 20 },
+  },
+  {
+    code: "enterprise",
+    label: "Enterprise",
+    color: "#b45309",
+    bg: "#fffbeb",
+    border: "#fde68a",
+    defaultPrice: 0,
+    defaultDescription: "大規模組織向けの個別契約プラン",
+    defaultLimits: { sites: null, scenarios: null, actions: null, aiInsights: null, members: null },
+  },
+];
 
-function workspaceKeyForUid(uid: string) {
-  return `cx_admin_workspace_id:${uid}`;
+function numOrNull(v: string): number | null {
+  if (v === "" || v === "無制限") return null;
+  const n = Number(v);
+  return isNaN(n) ? null : n;
 }
-
-function getSelectedWorkspaceIdForUid(uid: string): string {
-  try {
-    return localStorage.getItem(workspaceKeyForUid(uid)) || "";
-  } catch {
-    return "";
-  }
-}
-
-function fmtAnyTs(v: any): string {
-  if (!v) return "-";
-  try {
-    if (typeof v?.toDate === "function") {
-      return v.toDate().toLocaleString("ja-JP");
-    }
-    if (typeof v?.toMillis === "function") {
-      return new Date(v.toMillis()).toLocaleString("ja-JP");
-    }
-    const d = new Date(v);
-    if (!Number.isFinite(d.getTime())) return "-";
-    return d.toLocaleString("ja-JP");
-  } catch {
-    return "-";
-  }
-}
-
-function fmtLimit(v: number | null | undefined): string {
-  if (v == null) return "無制限";
+function displayNum(v: number | null | undefined): string {
+  if (v === null || v === undefined) return "無制限";
   return String(v);
 }
 
-function normalizeLimitInput(v: string): number | null {
-  const t = String(v || "").trim();
-  if (!t) return null;
-  const n = Number(t);
-  if (!Number.isFinite(n) || n < 0) return null;
-  return Math.floor(n);
-}
-
-function defaultLimits(): Required<Limits> {
-  return {
-    workspaces: null,
-    sites: null,
-    scenarios: null,
-    actions: null,
-    aiInsights: null,
-    members: null,
-  };
-}
-
-function normalizeLimits(v: Limits | undefined | null): Required<Limits> {
-  return {
-    workspaces: v?.workspaces ?? null,
-    sites: v?.sites ?? null,
-    scenarios: v?.scenarios ?? null,
-    actions: v?.actions ?? null,
-    aiInsights: v?.aiInsights ?? null,
-    members: v?.members ?? null,
-  };
-}
-
-function planCodeLabel(code: PlanCode | string | undefined) {
-  if (code === "standard") return "standard（標準）";
-  if (code === "premium") return "premium（上位）";
-  if (code === "custom") return "custom（個別契約）";
-  return String(code || "-");
-}
-
-function providerLabel(v: BillingProvider | string | undefined) {
-  if (v === "stripe") return "stripe（自動課金）";
-  if (v === "manual") return "manual（請求書 / 手動管理）";
-  return String(v || "-");
-}
-
-function genPlanId(code: PlanCode) {
-  return `plan_${code}`;
-}
-
 export default function PlansPage() {
-  const [currentUid, setCurrentUid] = useState("");
-  const [workspaceId, setWorkspaceId] = useState("");
-  const [rows, setRows] = useState<PlanRow[]>([]);
+  const [plans, setPlans] = useState<Record<PlanCode, PlanRow>>({} as any);
+  const [editingCode, setEditingCode] = useState<PlanCode | null>(null);
   const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [info, setInfo] = useState("");
-  const [includeInactive, setIncludeInactive] = useState(false);
+  const [saved, setSaved] = useState("");
 
-  const [selectedPlanId, setSelectedPlanId] = useState("");
-  const [planId, setPlanId] = useState(genPlanId("standard"));
-  const [code, setCode] = useState<PlanCode>("standard");
-  const [name, setName] = useState("Standard");
-  const [description, setDescription] = useState("");
-  const [active, setActive] = useState(true);
-  const [billingProvider, setBillingProvider] = useState<BillingProvider>("stripe");
-  const [currency, setCurrency] = useState("JPY");
-  const [priceMonthly, setPriceMonthly] = useState<string>("0");
-  const [priceYearly, setPriceYearly] = useState<string>("");
-  const [stripePriceMonthlyId, setStripePriceMonthlyId] = useState("");
-  const [stripePriceYearlyId, setStripePriceYearlyId] = useState("");
-  const [limits, setLimits] = useState<Required<Limits>>(defaultLimits());
-
-  useEffect(() => {
-    const auth = getAuth();
-    return onAuthStateChanged(auth, (u) => {
-      const uid = u?.uid || "";
-      setCurrentUid(uid);
-      setWorkspaceId(uid ? getSelectedWorkspaceIdForUid(uid) : "");
-    });
-  }, []);
-
-  useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (currentUid && e.key === workspaceKeyForUid(currentUid)) {
-        setWorkspaceId(getSelectedWorkspaceIdForUid(currentUid));
-      }
-    };
-    const onCustom = (e: any) => {
-      const next = e?.detail?.workspaceId;
-      if (typeof next === "string") setWorkspaceId(next);
-    };
-    window.addEventListener("storage", onStorage);
-    window.addEventListener("cx_admin_workspace_changed" as any, onCustom);
-    return () => {
-      window.removeEventListener("storage", onStorage);
-      window.removeEventListener("cx_admin_workspace_changed" as any, onCustom);
-    };
-  }, [currentUid]);
-
-  const applyRow = useCallback((row: PlanRow | null) => {
-    if (!row) {
-      setSelectedPlanId("");
-      setCode("standard");
-      setPlanId(genPlanId("standard"));
-      setName("Standard");
-      setDescription("");
-      setActive(true);
-      setBillingProvider("stripe");
-      setCurrency("JPY");
-      setPriceMonthly("0");
-      setPriceYearly("");
-      setStripePriceMonthlyId("");
-      setStripePriceYearlyId("");
-      setLimits(defaultLimits());
-      return;
-    }
-    setSelectedPlanId(row.plan_id);
-    setCode((row.code || "standard") as PlanCode);
-    setPlanId(row.plan_id || genPlanId((row.code || "standard") as PlanCode));
-    setName(row.name || "");
-    setDescription(row.description || "");
-    setActive(typeof row.active === "boolean" ? row.active : true);
-    setBillingProvider((row.billing_provider || ((row.code || "standard") === "custom" ? "manual" : "stripe")) as BillingProvider);
-    setCurrency(row.currency || "JPY");
-    setPriceMonthly(String(row.price_monthly ?? 0));
-    setPriceYearly(row.price_yearly == null ? "" : String(row.price_yearly));
-    setStripePriceMonthlyId(String(row.stripe_price_monthly_id || ""));
-    setStripePriceYearlyId(String(row.stripe_price_yearly_id || ""));
-    setLimits(normalizeLimits(row.limits));
-  }, []);
+  // 編集フォームの状態
+  const [formName, setFormName] = useState("");
+  const [formDesc, setFormDesc] = useState("");
+  const [formPriceMonthly, setFormPriceMonthly] = useState("");
+  const [formPriceYearly, setFormPriceYearly] = useState("");
+  const [formProvider, setFormProvider] = useState<BillingProvider>("stripe");
+  const [formStripePriceId, setFormStripePriceId] = useState("");
+  const [formActive, setFormActive] = useState(true);
+  const [formLimits, setFormLimits] = useState<Record<keyof Limits, string>>({
+    sites: "", scenarios: "", actions: "", aiInsights: "", members: "",
+  });
 
   const load = useCallback(async () => {
-    if (!workspaceId.trim()) {
-      setRows([]);
-      return;
-    }
-    setLoading(true);
-    setError("");
+    setLoading(true); setError("");
     try {
-      const res = await apiPostJson(API.list, {
-        workspace_id: workspaceId.trim(),
-        include_inactive: includeInactive,
-      });
-      const items = Array.isArray(res?.items) ? (res.items as PlanRow[]) : [];
-      setRows(items);
-      if (!selectedPlanId && items.length) {
-        applyRow(items[0]);
-      } else if (selectedPlanId) {
-        const found = items.find((x) => x.plan_id === selectedPlanId) || null;
-        if (found) applyRow(found);
-      }
-    } catch (e: any) {
-      setError(e?.message || String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [workspaceId, includeInactive, selectedPlanId, applyRow]);
+      const res = await apiPostJson("/v1/plans/list", {});
+      const rows: PlanRow[] = res.plans ?? [];
+      const map: Record<string, PlanRow> = {};
+      for (const r of rows) map[r.code] = r;
+      setPlans(map as any);
+    } catch (e: any) { setError(e.message ?? "取得失敗"); }
+    finally { setLoading(false); }
+  }, []);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
-  const sortedRows = useMemo(() => {
-    return [...rows].sort((a, b) => String(a.code || "").localeCompare(String(b.code || "")));
-  }, [rows]);
+  const openEdit = useCallback((code: PlanCode) => {
+    const def = PLAN_DEFS.find((d) => d.code === code)!;
+    const row = plans[code];
+    setFormName(row?.name ?? def.label);
+    setFormDesc(row?.description ?? def.defaultDescription);
+    setFormPriceMonthly(String(row?.price_monthly ?? def.defaultPrice));
+    setFormPriceYearly(row?.price_yearly != null ? String(row.price_yearly) : "");
+    setFormProvider(row?.billing_provider ?? (code === "enterprise" ? "manual" : "stripe"));
+    setFormStripePriceId(row?.stripe_price_monthly_id ?? "");
+    setFormActive(row?.active !== false);
+    const lim = row?.limits ?? def.defaultLimits;
+    setFormLimits({
+      sites:      displayNum(lim.sites),
+      scenarios:  displayNum(lim.scenarios),
+      actions:    displayNum(lim.actions),
+      aiInsights: displayNum(lim.aiInsights),
+      members:    displayNum(lim.members),
+    });
+    setEditingCode(code);
+    setSaved(""); setError("");
+  }, [plans]);
 
-  function onCodeChange(next: PlanCode) {
-    setCode(next);
-    if (!selectedPlanId || selectedPlanId === planId) {
-      setPlanId(genPlanId(next));
-    }
-    if (next === "custom") {
-      setBillingProvider("manual");
-    }
-  }
-
-  function updateLimit(key: keyof Limits, value: string) {
-    setLimits((prev) => ({ ...prev, [key]: normalizeLimitInput(value) }));
-  }
-
-  async function save() {
-    if (!workspaceId.trim()) {
-      setError("ワークスペースが選択されていません");
-      return;
-    }
-    if (!planId.trim()) {
-      setError("plan_id を入力してください");
-      return;
-    }
-    if (!name.trim()) {
-      setError("プラン名を入力してください");
-      return;
-    }
-
-    setSaving(true);
-    setError("");
-    setInfo("");
+  const save = useCallback(async (code: PlanCode) => {
+    setLoading(true); setError(""); setSaved("");
     try {
-      await apiPostJson(API.upsert, {
-        workspace_id: workspaceId.trim(),
-        plan_id: planId.trim(),
+      await apiPostJson("/v1/plans/upsert", {
+        plan_id: `plan_${code}`,
         code,
-        name: name.trim(),
-        description: description.trim(),
-        active,
-        billing_provider: billingProvider,
-        currency: currency.trim() || "JPY",
-        price_monthly: Number(priceMonthly || 0),
-        price_yearly: priceYearly.trim() ? Number(priceYearly) : null,
-        limits,
-        stripe_price_monthly_id: stripePriceMonthlyId.trim() || null,
-        stripe_price_yearly_id: stripePriceYearlyId.trim() || null,
+        name: formName,
+        description: formDesc,
+        active: formActive,
+        billing_provider: formProvider,
+        price_monthly: Number(formPriceMonthly) || 0,
+        price_yearly: formPriceYearly ? Number(formPriceYearly) : null,
+        stripe_price_monthly_id: formStripePriceId || null,
+        limits: {
+          sites:      numOrNull(formLimits.sites),
+          scenarios:  numOrNull(formLimits.scenarios),
+          actions:    numOrNull(formLimits.actions),
+          aiInsights: numOrNull(formLimits.aiInsights),
+          members:    numOrNull(formLimits.members),
+        },
       });
-      setInfo("保存しました");
+      setSaved(`${formName} を保存しました`);
+      setEditingCode(null);
       await load();
-    } catch (e: any) {
-      setError(e?.message || String(e));
-    } finally {
-      setSaving(false);
-    }
-  }
+    } catch (e: any) { setError(e.message ?? "保存失敗"); }
+    finally { setLoading(false); }
+  }, [formName, formDesc, formActive, formProvider, formPriceMonthly, formPriceYearly, formStripePriceId, formLimits, load]);
 
   return (
-    <div className="container" style={{ minWidth: 0 }}>
-      <div className="page-header">
-        <div className="page-header__meta">
-          <div className="small">Billing / Plans</div>
-          <h1 className="h1">Plans</h1>
-          <div className="small">料金・制限値・課金方式を BO で管理します。</div>
-        </div>
-        <div className="page-header__actions">
-          <button className="btn" onClick={() => applyRow(null)}>
-            新規プラン
-          </button>
-          <button className="btn" onClick={() => void load()} disabled={loading || !workspaceId.trim()}>
-            {loading ? "読込中..." : "再読み込み"}
-          </button>
-        </div>
-      </div>
+    <div style={{ padding: 32 }}>
+      <h2 style={{ margin: "0 0 8px", fontSize: 22, fontWeight: 700 }}>プランマスタ</h2>
+      <p style={{ margin: "0 0 24px", color: "#64748b", fontSize: 14 }}>カードをクリックして各プランを編集できます</p>
 
-      <div className="card" style={{ marginBottom: 12 }}>
-        <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <div className="small">workspace: <code>{workspaceId || "（未選択）"}</code></div>
-          <label className="row" style={{ gap: 8, alignItems: "center" }}>
-            <input type="checkbox" checked={includeInactive} onChange={(e) => setIncludeInactive(e.target.checked)} />
-            <span className="small">非アクティブなプランも表示</span>
-          </label>
-        </div>
-        {error ? <div className="small" style={{ color: "#b91c1c", marginTop: 8 }}>{error}</div> : null}
-        {info ? <div className="small" style={{ color: "#065f46", marginTop: 8 }}>{info}</div> : null}
-      </div>
+      {error && <div style={{ marginBottom: 16, padding: "10px 14px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, color: "#b91c1c", fontSize: 14 }}>{error}</div>}
+      {saved && <div style={{ marginBottom: 16, padding: "10px 14px", background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 6, color: "#166534", fontSize: 14 }}>{saved}</div>}
 
-      <div className="grid grid--2" style={{ alignItems: "start" }}>
-        <div className="card" style={{ minWidth: 0 }}>
-          <div className="h2" style={{ marginTop: 0 }}>プラン一覧</div>
-          <table className="table">
-            <thead>
-              <tr>
-                <th style={{ textAlign: "left" }}>code</th>
-                <th style={{ textAlign: "left" }}>name</th>
-                <th style={{ textAlign: "left" }}>月額</th>
-                <th style={{ textAlign: "left" }}>状態</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedRows.length ? sortedRows.map((row) => (
-                <tr
-                  key={row.plan_id}
-                  onClick={() => applyRow(row)}
-                  style={{ cursor: "pointer", background: row.plan_id === selectedPlanId ? "rgba(59,130,246,.08)" : undefined }}
-                >
-                  <td style={{ textAlign: "left" }}>{planCodeLabel(row.code)}</td>
-                  <td style={{ textAlign: "left" }}>
-                    <div style={{ fontWeight: 700 }}>{row.name || "-"}</div>
-                    <div className="small" style={{ opacity: 0.72 }}><code>{row.plan_id}</code></div>
-                  </td>
-                  <td style={{ textAlign: "left" }}>{row.currency || "JPY"} {row.price_monthly ?? 0}</td>
-                  <td style={{ textAlign: "left" }}>{row.active === false ? "inactive" : "active"}</td>
-                </tr>
-              )) : (
-                <tr>
-                  <td colSpan={4} style={{ textAlign: "left" }}>プランがありません</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 16 }}>
+        {PLAN_DEFS.map((def) => {
+          const row = plans[def.code];
+          const isEditing = editingCode === def.code;
+          const isActive = row?.active !== false;
 
-        <div className="card" style={{ minWidth: 0 }}>
-          <div className="h2" style={{ marginTop: 0 }}>プラン編集</div>
+          return (
+            <div
+              key={def.code}
+              style={{
+                background: "#fff",
+                border: `2px solid ${isEditing ? def.color : def.border}`,
+                borderRadius: 10,
+                overflow: "hidden",
+                transition: "border-color .15s",
+                cursor: isEditing ? "default" : "pointer",
+                opacity: !isActive && !isEditing ? .7 : 1,
+              }}
+              onClick={() => !isEditing && openEdit(def.code)}
+            >
+              {/* カードヘッダー */}
+              <div style={{ background: def.bg, borderBottom: `1px solid ${def.border}`, padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: def.color }}>{def.label}</div>
+                  <div style={{ fontSize: 13, color: "#64748b", marginTop: 2 }}>
+                    {row?.price_monthly != null
+                      ? (row.price_monthly === 0 ? "¥0 / 月" : `¥${row.price_monthly.toLocaleString()} / 月`)
+                      : (def.defaultPrice === 0 ? (def.code === "enterprise" ? "お問い合わせ" : "¥0 / 月") : `¥${def.defaultPrice.toLocaleString()} / 月`)}
+                  </div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{
+                    fontSize: 11, padding: "2px 8px", borderRadius: 10, fontWeight: 600,
+                    background: isActive ? "#dcfce7" : "#f1f5f9",
+                    color: isActive ? "#166534" : "#64748b",
+                  }}>
+                    {isActive ? "有効" : "無効"}
+                  </span>
+                  {!isEditing && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); openEdit(def.code); }}
+                      style={{ padding: "4px 12px", background: def.color, color: "#fff", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12, fontWeight: 600 }}
+                    >
+                      編集
+                    </button>
+                  )}
+                </div>
+              </div>
 
-          <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <div style={{ minWidth: 220 }}>
-              <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>plan_id</div>
-              <input className="input" value={planId} onChange={(e) => setPlanId(e.target.value)} placeholder="plan_standard" />
+              {/* カード本体 — 表示 or 編集 */}
+              <div style={{ padding: "16px 20px" }}>
+                {!isEditing ? (
+                  /* 表示モード */
+                  <div>
+                    <div style={{ fontSize: 13, color: "#374151", marginBottom: 12 }}>{row?.description ?? def.defaultDescription}</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 12, color: "#64748b" }}>
+                      {[
+                        ["サイト数", row?.limits?.sites],
+                        ["シナリオ", row?.limits?.scenarios],
+                        ["アクション", row?.limits?.actions],
+                        ["AI分析", row?.limits?.aiInsights],
+                        ["メンバー", row?.limits?.members],
+                      ].map(([label, val]) => (
+                        <div key={String(label)} style={{ display: "flex", justifyContent: "space-between", padding: "4px 8px", background: "#f8fafc", borderRadius: 4 }}>
+                          <span>{label}</span>
+                          <span style={{ fontWeight: 600, color: "#374151" }}>{val === null || val === undefined ? "無制限" : String(val)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  /* 編集モード */
+                  <div onClick={(e) => e.stopPropagation()}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+                      <div>
+                        <label style={labelStyle}>プラン名</label>
+                        <input value={formName} onChange={(e) => setFormName(e.target.value)} style={inputStyle} />
+                      </div>
+                      <div>
+                        <label style={labelStyle}>プロバイダ</label>
+                        <select value={formProvider} onChange={(e) => setFormProvider(e.target.value as BillingProvider)} style={inputStyle}>
+                          <option value="stripe">Stripe</option>
+                          <option value="misoca">Misoca</option>
+                          <option value="manual">手動</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div style={{ marginBottom: 10 }}>
+                      <label style={labelStyle}>説明文</label>
+                      <input value={formDesc} onChange={(e) => setFormDesc(e.target.value)} style={inputStyle} />
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                      <div>
+                        <label style={labelStyle}>月額（円）</label>
+                        <input type="number" value={formPriceMonthly} onChange={(e) => setFormPriceMonthly(e.target.value)} style={inputStyle} />
+                      </div>
+                      <div>
+                        <label style={labelStyle}>年額（円）</label>
+                        <input type="number" value={formPriceYearly} onChange={(e) => setFormPriceYearly(e.target.value)} placeholder="空欄=なし" style={inputStyle} />
+                      </div>
+                    </div>
+
+                    <div style={{ marginBottom: 10 }}>
+                      <label style={labelStyle}>Stripe Price ID (月額)</label>
+                      <input value={formStripePriceId} onChange={(e) => setFormStripePriceId(e.target.value)} placeholder="price_xxx" style={inputStyle} />
+                    </div>
+
+                    <div style={{ marginBottom: 12 }}>
+                      <label style={{ ...labelStyle, marginBottom: 6 }}>利用制限（空欄=無制限）</label>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                        {(["sites", "scenarios", "actions", "aiInsights", "members"] as (keyof Limits)[]).map((key) => {
+                          const labels: Record<string, string> = { sites: "サイト数", scenarios: "シナリオ", actions: "アクション", aiInsights: "AI分析", members: "メンバー" };
+                          return (
+                            <div key={key}>
+                              <label style={{ fontSize: 11, color: "#94a3b8", display: "block", marginBottom: 2 }}>{labels[key]}</label>
+                              <input
+                                value={formLimits[key]}
+                                onChange={(e) => setFormLimits((prev) => ({ ...prev, [key]: e.target.value }))}
+                                placeholder="無制限"
+                                style={{ ...inputStyle, padding: "6px 10px", fontSize: 13 }}
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
+                        <input type="checkbox" checked={formActive} onChange={(e) => setFormActive(e.target.checked)} />
+                        有効にする
+                      </label>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button
+                        onClick={() => save(def.code)}
+                        disabled={loading}
+                        style={{ flex: 1, padding: "9px 0", background: def.color, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 14, fontWeight: 700 }}
+                      >
+                        {loading ? "保存中…" : "保存する"}
+                      </button>
+                      <button
+                        onClick={() => { setEditingCode(null); setSaved(""); setError(""); }}
+                        style={{ padding: "9px 16px", background: "#f1f5f9", color: "#374151", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 14 }}
+                      >
+                        キャンセル
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
-            <div style={{ minWidth: 220 }}>
-              <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>code</div>
-              <select className="input" value={code} onChange={(e) => onCodeChange(e.target.value as PlanCode)}>
-                <option value="standard">standard</option>
-                <option value="premium">premium</option>
-                <option value="custom">custom</option>
-              </select>
-            </div>
-            <div style={{ minWidth: 220 }}>
-              <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>active</div>
-              <select className="input" value={active ? "true" : "false"} onChange={(e) => setActive(e.target.value === "true")}>
-                <option value="true">true</option>
-                <option value="false">false</option>
-              </select>
-            </div>
-          </div>
-
-          <div style={{ height: 10 }} />
-
-          <div>
-            <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>name</div>
-            <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Standard" style={{ width: "100%" }} />
-          </div>
-
-          <div style={{ height: 10 }} />
-
-          <div>
-            <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>description</div>
-            <textarea className="input" rows={4} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="プランの説明" style={{ width: "100%" }} />
-          </div>
-
-          <div style={{ height: 10 }} />
-
-          <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <div style={{ minWidth: 220 }}>
-              <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>billing provider</div>
-              <select className="input" value={billingProvider} onChange={(e) => setBillingProvider(e.target.value as BillingProvider)}>
-                <option value="stripe">stripe</option>
-                <option value="manual">manual</option>
-              </select>
-            </div>
-            <div style={{ minWidth: 160 }}>
-              <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>currency</div>
-              <input className="input" value={currency} onChange={(e) => setCurrency(e.target.value)} placeholder="JPY" />
-            </div>
-            <div style={{ minWidth: 180 }}>
-              <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>price monthly</div>
-              <input className="input" type="number" value={priceMonthly} onChange={(e) => setPriceMonthly(e.target.value)} min={0} />
-            </div>
-            <div style={{ minWidth: 180 }}>
-              <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>price yearly</div>
-              <input className="input" type="number" value={priceYearly} onChange={(e) => setPriceYearly(e.target.value)} min={0} placeholder="未設定なら空" />
-            </div>
-          </div>
-
-          <div style={{ height: 10 }} />
-
-          <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap", opacity: billingProvider === "stripe" ? 1 : 0.6 }}>
-            <div style={{ minWidth: 280 }}>
-              <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>Stripe monthly price id</div>
-              <input className="input" value={stripePriceMonthlyId} onChange={(e) => setStripePriceMonthlyId(e.target.value)} disabled={billingProvider !== "stripe"} />
-            </div>
-            <div style={{ minWidth: 280 }}>
-              <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>Stripe yearly price id</div>
-              <input className="input" value={stripePriceYearlyId} onChange={(e) => setStripePriceYearlyId(e.target.value)} disabled={billingProvider !== "stripe"} />
-            </div>
-          </div>
-
-          <div style={{ height: 14 }} />
-          <div className="h2" style={{ marginTop: 0 }}>制限値</div>
-
-          <div className="grid grid--2" style={{ gap: 10 }}>
-            <div>
-              <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>ワークスペース数</div>
-              <input className="input" value={limits.workspaces == null ? "" : String(limits.workspaces)} onChange={(e) => updateLimit("workspaces", e.target.value)} placeholder="空欄で無制限" />
-            </div>
-            <div>
-              <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>サイト数</div>
-              <input className="input" value={limits.sites == null ? "" : String(limits.sites)} onChange={(e) => updateLimit("sites", e.target.value)} placeholder="空欄で無制限" />
-            </div>
-            <div>
-              <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>シナリオ数</div>
-              <input className="input" value={limits.scenarios == null ? "" : String(limits.scenarios)} onChange={(e) => updateLimit("scenarios", e.target.value)} placeholder="空欄で無制限" />
-            </div>
-            <div>
-              <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>アクション数</div>
-              <input className="input" value={limits.actions == null ? "" : String(limits.actions)} onChange={(e) => updateLimit("actions", e.target.value)} placeholder="空欄で無制限" />
-            </div>
-            <div>
-              <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>AIインサイト数</div>
-              <input className="input" value={limits.aiInsights == null ? "" : String(limits.aiInsights)} onChange={(e) => updateLimit("aiInsights", e.target.value)} placeholder="空欄で無制限" />
-            </div>
-            <div>
-              <div className="small" style={{ opacity: 0.8, marginBottom: 6 }}>メンバー数</div>
-              <input className="input" value={limits.members == null ? "" : String(limits.members)} onChange={(e) => updateLimit("members", e.target.value)} placeholder="空欄で無制限" />
-            </div>
-          </div>
-
-          <div style={{ height: 14 }} />
-          <div className="page-header__actions">
-            <button className="btn btn--primary" onClick={() => void save()} disabled={saving || !workspaceId.trim()}>
-              {saving ? "保存中..." : "保存"}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div style={{ height: 24 }} />
-
-      <div className="card" style={{ background: "rgba(15,23,42,.02)", border: "1px solid rgba(15,23,42,.08)" }}>
-        <div className="h2" style={{ marginTop: 0 }}>現在選択中のプラン要約</div>
-        <table className="table">
-          <tbody>
-            <tr><th style={{ textAlign: "left", width: 220 }}>plan_id</th><td style={{ textAlign: "left" }}>{planId || "-"}</td></tr>
-            <tr><th style={{ textAlign: "left" }}>code</th><td style={{ textAlign: "left" }}>{planCodeLabel(code)}</td></tr>
-            <tr><th style={{ textAlign: "left" }}>課金方式</th><td style={{ textAlign: "left" }}>{providerLabel(billingProvider)}</td></tr>
-            <tr><th style={{ textAlign: "left" }}>料金（月額）</th><td style={{ textAlign: "left" }}>{currency || "JPY"} {priceMonthly || 0}</td></tr>
-            <tr><th style={{ textAlign: "left" }}>料金（年額）</th><td style={{ textAlign: "left" }}>{priceYearly.trim() ? `${currency || "JPY"} ${priceYearly}` : "-"}</td></tr>
-            <tr><th style={{ textAlign: "left" }}>ワークスペース数</th><td style={{ textAlign: "left" }}>{fmtLimit(limits.workspaces)}</td></tr>
-            <tr><th style={{ textAlign: "left" }}>サイト数</th><td style={{ textAlign: "left" }}>{fmtLimit(limits.sites)}</td></tr>
-            <tr><th style={{ textAlign: "left" }}>シナリオ数</th><td style={{ textAlign: "left" }}>{fmtLimit(limits.scenarios)}</td></tr>
-            <tr><th style={{ textAlign: "left" }}>アクション数</th><td style={{ textAlign: "left" }}>{fmtLimit(limits.actions)}</td></tr>
-            <tr><th style={{ textAlign: "left" }}>AIインサイト数</th><td style={{ textAlign: "left" }}>{fmtLimit(limits.aiInsights)}</td></tr>
-            <tr><th style={{ textAlign: "left" }}>メンバー数</th><td style={{ textAlign: "left" }}>{fmtLimit(limits.members)}</td></tr>
-            <tr><th style={{ textAlign: "left" }}>最終更新日</th><td style={{ textAlign: "left" }}>{fmtAnyTs(sortedRows.find((x) => x.plan_id === selectedPlanId)?.updatedAt)}</td></tr>
-          </tbody>
-        </table>
+          );
+        })}
       </div>
     </div>
   );
 }
+
+const labelStyle: React.CSSProperties = { fontSize: 11, color: "#64748b", display: "block", marginBottom: 3 };
+const inputStyle: React.CSSProperties = { width: "100%", padding: "7px 10px", border: "1px solid #d1d5db", borderRadius: 5, fontSize: 13, boxSizing: "border-box" };
