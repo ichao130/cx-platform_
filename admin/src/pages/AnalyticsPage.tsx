@@ -105,6 +105,30 @@ function StatCard({ label, value, sub, accent }: { label: string; value: string 
   );
 }
 
+// ---- Event badge color ----
+const EVENT_COLOR: Record<string, { bg: string; text: string; label: string }> = {
+  pageview:   { bg: "#f1f5f9", text: "#64748b", label: "PV" },
+  impression: { bg: "#eff6ff", text: "#2563eb", label: "表示" },
+  click:      { bg: "#fffbeb", text: "#d97706", label: "クリック" },
+  click_link: { bg: "#fff7ed", text: "#ea580c", label: "リンク" },
+  conversion: { bg: "#f0fdf4", text: "#16a34a", label: "CV ✓" },
+  close:      { bg: "#f8fafc", text: "#94a3b8", label: "閉じる" },
+  pageleave:  { bg: "#faf5ff", text: "#7c3aed", label: "離脱" },
+};
+
+function EventBadge({ event }: { event: string }) {
+  const c = EVENT_COLOR[event] || { bg: "#f1f5f9", text: "#64748b", label: event };
+  return (
+    <span style={{
+      display: "inline-block", fontSize: 11, fontWeight: 700,
+      padding: "2px 8px", borderRadius: 20,
+      background: c.bg, color: c.text, whiteSpace: "nowrap",
+    }}>
+      {c.label}
+    </span>
+  );
+}
+
 // ---- Live dot ----
 function LiveDot() {
   return (
@@ -154,6 +178,11 @@ export default function AnalyticsPage() {
 
   // ---- stats_daily（ファネル用） ----
   const [statRows, setStatRows] = useState<any[]>([]);
+
+  // ---- 訪問者ジャーニー ----
+  const [journeyLogs, setJourneyLogs] = useState<any[]>([]);
+  const [journeyLoading, setJourneyLoading] = useState(false);
+  const [selectedVid, setSelectedVid] = useState<string | null>(null);
 
   // auth
   useEffect(() => {
@@ -228,6 +257,25 @@ export default function AnalyticsPage() {
       setPvLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
       setPvLoading(false);
     }).catch(() => setPvLoading(false));
+  }, [siteId, dateRange]);
+
+  // ---- 訪問者ジャーニー用ログ（全イベント取得） ----
+  useEffect(() => {
+    if (!siteId) { setJourneyLogs([]); setSelectedVid(null); return; }
+    setJourneyLoading(true);
+    const since = daysAgo(dateRange).toISOString();
+    getDocs(
+      query(
+        collection(db, "logs"),
+        where("site_id", "==", siteId),
+        where("createdAt", ">", since),
+        orderBy("createdAt", "desc"),
+        limit(3000)
+      )
+    ).then((snap) => {
+      setJourneyLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      setJourneyLoading(false);
+    }).catch(() => setJourneyLoading(false));
   }, [siteId, dateRange]);
 
   // ---- stats_daily ----
@@ -338,6 +386,44 @@ export default function AnalyticsPage() {
       .sort((a, b) => String(b.last || "").localeCompare(String(a.last || "")))
       .slice(0, 8);
   }, [recentLogs]);
+
+  // ---- computed: 訪問者リスト（vid別集計） ----
+  const visitorList = useMemo(() => {
+    const map = new Map<string, {
+      vid: string; firstSeen: string; lastSeen: string;
+      pvCount: number; totalDuration: number;
+      hasConversion: boolean; hasImpression: boolean;
+      pages: string[]; eventCount: number;
+    }>();
+    const sorted = [...journeyLogs].sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+    for (const l of sorted) {
+      const vid = l.vid || "unknown";
+      if (!map.has(vid)) {
+        map.set(vid, { vid, firstSeen: l.createdAt || "", lastSeen: l.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, pages: [], eventCount: 0 });
+      }
+      const v = map.get(vid)!;
+      v.lastSeen = l.createdAt || v.lastSeen;
+      v.eventCount++;
+      if (l.event === "pageview") {
+        v.pvCount++;
+        if (l.path && !v.pages.includes(l.path)) v.pages.push(l.path);
+      }
+      if (l.event === "conversion") v.hasConversion = true;
+      if (l.event === "impression") v.hasImpression = true;
+      if (l.event === "pageleave" && l.duration_sec) v.totalDuration += Number(l.duration_sec);
+    }
+    return Array.from(map.values())
+      .sort((a, b) => b.lastSeen.localeCompare(a.lastSeen))
+      .slice(0, 50);
+  }, [journeyLogs]);
+
+  // ---- computed: 選択中訪問者のイベント一覧 ----
+  const selectedJourney = useMemo(() => {
+    if (!selectedVid) return [];
+    return journeyLogs
+      .filter((l) => l.vid === selectedVid)
+      .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+  }, [journeyLogs, selectedVid]);
 
   const selectedSiteName = useMemo(() => {
     const s = sites.find((s) => s.id === siteId);
@@ -621,6 +707,196 @@ export default function AnalyticsPage() {
                     </div>
                   );
                 })}
+              </div>
+            )}
+          </div>
+          {/* ===== Section 6: 訪問者ジャーニー ===== */}
+          <div style={{ marginBottom: 32 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+              <div>
+                <div className="h2" style={{ margin: 0 }}>
+                  訪問者ジャーニー
+                  <span className="small" style={{ fontWeight: 400, opacity: 0.6, marginLeft: 8 }}>（過去{dateRange}日間・匿名ID別）</span>
+                </div>
+                <div className="small" style={{ opacity: 0.55, marginTop: 2 }}>
+                  訪問者を選択すると行動タイムラインが表示されます
+                </div>
+              </div>
+              {journeyLoading && <div className="small" style={{ opacity: 0.5 }}>読み込み中...</div>}
+            </div>
+
+            {visitorList.length === 0 && !journeyLoading ? (
+              <div className="card" style={{ padding: 20, opacity: 0.7 }}>
+                <div className="small">期間内の訪問データがありません</div>
+              </div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: 16, alignItems: "start" }}>
+
+                {/* 左: 訪問者リスト */}
+                <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+                  <div style={{ padding: "12px 16px", borderBottom: "1px solid rgba(15,23,42,.07)", background: "rgba(15,23,42,.02)" }}>
+                    <div className="small" style={{ fontWeight: 700 }}>訪問者 {visitorList.length}人</div>
+                  </div>
+                  <div style={{ maxHeight: 560, overflowY: "auto" }}>
+                    {visitorList.map((v) => {
+                      const isSelected = selectedVid === v.vid;
+                      const durationMin = Math.round(v.totalDuration / 60);
+                      const lastTime = v.lastSeen ? new Date(v.lastSeen).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+                      const vidShort = v.vid.slice(0, 8) + "…";
+                      // vid から色を生成
+                      const hue = v.vid.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360;
+                      return (
+                        <div
+                          key={v.vid}
+                          onClick={() => setSelectedVid(isSelected ? null : v.vid)}
+                          style={{
+                            padding: "12px 16px", cursor: "pointer", borderBottom: "1px solid rgba(15,23,42,.05)",
+                            background: isSelected ? `hsla(${hue},60%,96%,1)` : "transparent",
+                            borderLeft: isSelected ? `3px solid hsl(${hue},60%,50%)` : "3px solid transparent",
+                            transition: "background .15s",
+                          }}
+                        >
+                          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                            {/* アバター */}
+                            <div style={{
+                              width: 32, height: 32, borderRadius: 99, flexShrink: 0,
+                              background: `hsl(${hue},60%,88%)`, color: `hsl(${hue},60%,35%)`,
+                              display: "flex", alignItems: "center", justifyContent: "center",
+                              fontWeight: 800, fontSize: 13,
+                            }}>
+                              {v.vid.slice(0, 1).toUpperCase()}
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+                                <code style={{ fontSize: 11, opacity: 0.7 }}>{vidShort}</code>
+                                {v.hasConversion && (
+                                  <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 20, background: "#f0fdf4", color: "#16a34a" }}>CV</span>
+                                )}
+                                {v.hasImpression && !v.hasConversion && (
+                                  <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 20, background: "#eff6ff", color: "#2563eb" }}>施策</span>
+                                )}
+                              </div>
+                              <div style={{ display: "flex", gap: 8 }}>
+                                <span className="small" style={{ opacity: 0.55 }}>{v.pvCount} PV</span>
+                                {v.totalDuration > 0 && (
+                                  <span className="small" style={{ opacity: 0.55 }}>
+                                    {durationMin > 0 ? `${durationMin}分` : `${v.totalDuration}秒`}滞在
+                                  </span>
+                                )}
+                                <span className="small" style={{ opacity: 0.4 }}>{lastTime}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 右: タイムライン */}
+                <div className="card" style={{ padding: 0, overflow: "hidden", minHeight: 200 }}>
+                  {!selectedVid ? (
+                    <div style={{ padding: 32, textAlign: "center", opacity: 0.5 }}>
+                      <div style={{ fontSize: 32, marginBottom: 8 }}>👈</div>
+                      <div className="small">左の訪問者を選択してください</div>
+                    </div>
+                  ) : (
+                    <>
+                      {/* タイムラインヘッダー */}
+                      <div style={{ padding: "12px 20px", borderBottom: "1px solid rgba(15,23,42,.07)", background: "rgba(15,23,42,.02)", display: "flex", alignItems: "center", gap: 10 }}>
+                        {(() => {
+                          const v = visitorList.find((x) => x.vid === selectedVid);
+                          const hue = selectedVid.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360;
+                          return (
+                            <>
+                              <div style={{ width: 28, height: 28, borderRadius: 99, background: `hsl(${hue},60%,88%)`, color: `hsl(${hue},60%,35%)`, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 12 }}>
+                                {selectedVid.slice(0, 1).toUpperCase()}
+                              </div>
+                              <div>
+                                <div style={{ fontSize: 12, fontWeight: 700 }}><code>{selectedVid}</code></div>
+                                {v && (
+                                  <div className="small" style={{ opacity: 0.55 }}>
+                                    {v.pvCount} ページ閲覧 · {v.eventCount} イベント
+                                    {v.totalDuration > 0 && ` · 計${Math.round(v.totalDuration / 60) > 0 ? Math.round(v.totalDuration / 60) + "分" : v.totalDuration + "秒"}滞在`}
+                                    {v.hasConversion && " · CV達成 ✓"}
+                                  </div>
+                                )}
+                              </div>
+                            </>
+                          );
+                        })()}
+                      </div>
+
+                      {/* タイムライン本体 */}
+                      <div style={{ maxHeight: 520, overflowY: "auto", padding: "16px 20px" }}>
+                        {selectedJourney.length === 0 ? (
+                          <div className="small" style={{ opacity: 0.5 }}>イベントがありません</div>
+                        ) : (
+                          <div style={{ position: "relative" }}>
+                            {/* 縦線 */}
+                            <div style={{ position: "absolute", left: 15, top: 8, bottom: 8, width: 2, background: "rgba(15,23,42,.07)", borderRadius: 99 }} />
+                            <div style={{ display: "grid", gap: 0 }}>
+                              {selectedJourney.map((ev, i) => {
+                                const isConversion = ev.event === "conversion";
+                                const isPageleave = ev.event === "pageleave";
+                                const time = ev.createdAt
+                                  ? new Date(ev.createdAt).toLocaleTimeString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })
+                                  : "—";
+                                const dotColor = isConversion ? "#16a34a" : EVENT_COLOR[ev.event]?.text || "#94a3b8";
+                                return (
+                                  <div key={ev.id || i} style={{ display: "flex", gap: 16, paddingBottom: 16, position: "relative" }}>
+                                    {/* ドット */}
+                                    <div style={{ flexShrink: 0, width: 32, display: "flex", justifyContent: "center", paddingTop: 2 }}>
+                                      <div style={{
+                                        width: isConversion ? 14 : 10, height: isConversion ? 14 : 10,
+                                        borderRadius: 99, background: dotColor,
+                                        border: isConversion ? `2px solid #fff` : "none",
+                                        boxShadow: isConversion ? `0 0 0 3px ${dotColor}40` : "none",
+                                        marginTop: isConversion ? -2 : 0,
+                                        zIndex: 1, position: "relative",
+                                      }} />
+                                    </div>
+                                    {/* コンテンツ */}
+                                    <div style={{
+                                      flex: 1, background: isConversion ? "#f0fdf4" : "rgba(15,23,42,.025)",
+                                      borderRadius: 8, padding: "8px 12px",
+                                      border: isConversion ? "1px solid #bbf7d0" : "1px solid transparent",
+                                    }}>
+                                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+                                        <EventBadge event={ev.event} />
+                                        <span className="small" style={{ opacity: 0.5, fontSize: 11 }}>{time}</span>
+                                      </div>
+                                      {ev.path && (
+                                        <div className="small" style={{ fontWeight: 600, opacity: 0.8, marginBottom: isPageleave || ev.scenario_id ? 4 : 0 }}>
+                                          {ev.path}
+                                        </div>
+                                      )}
+                                      {isPageleave && ev.duration_sec != null && (
+                                        <div className="small" style={{ opacity: 0.55 }}>
+                                          滞在時間: {ev.duration_sec >= 60 ? `${Math.floor(ev.duration_sec / 60)}分${ev.duration_sec % 60}秒` : `${ev.duration_sec}秒`}
+                                        </div>
+                                      )}
+                                      {ev.scenario_id && (
+                                        <div className="small" style={{ opacity: 0.55 }}>
+                                          シナリオ: <code style={{ fontSize: 10 }}>{ev.scenario_id}</code>
+                                        </div>
+                                      )}
+                                      {ev.utm_source && (
+                                        <div className="small" style={{ opacity: 0.55 }}>
+                                          流入: {[ev.utm_source, ev.utm_medium, ev.utm_campaign].filter(Boolean).join(" / ")}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
             )}
           </div>
