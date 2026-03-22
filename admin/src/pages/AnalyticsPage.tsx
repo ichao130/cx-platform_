@@ -129,6 +129,70 @@ function EventBadge({ event }: { event: string }) {
   );
 }
 
+// ---- TrendChart: SVG折れ線グラフ ----
+type TrendLine = { key: string; label: string; color: string };
+type TrendPoint = { day: string; label: string; [key: string]: number | string };
+
+function TrendChart({ data, lines }: { data: TrendPoint[]; lines: TrendLine[] }) {
+  const W = 560, H = 160;
+  const pad = { t: 14, r: 12, b: 28, l: 38 };
+  const iW = W - pad.l - pad.r;
+  const iH = H - pad.t - pad.b;
+  const n = data.length;
+
+  if (n < 2) {
+    return (
+      <div style={{ height: H, display: "flex", alignItems: "center", justifyContent: "center", opacity: 0.4, fontSize: 13 }}>
+        データ不足
+      </div>
+    );
+  }
+
+  const maxVal = Math.max(...data.flatMap((d) => lines.map((l) => Number(d[l.key]) || 0)), 1);
+  const px = (i: number) => pad.l + (i / (n - 1)) * iW;
+  const py = (v: number) => pad.t + iH - (Math.min(v, maxVal) / maxVal) * iH;
+
+  const yTicks = [0, Math.ceil(maxVal / 2), maxVal];
+  const step = Math.max(1, Math.floor(n / 6));
+  const xLabels = data
+    .map((d, i) => (i % step === 0 || i === n - 1 ? { i, label: d.label as string } : null))
+    .filter(Boolean) as { i: number; label: string }[];
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }}>
+      {/* グリッド */}
+      {yTicks.map((v) => (
+        <g key={v}>
+          <line x1={pad.l} x2={W - pad.r} y1={py(v)} y2={py(v)} stroke="rgba(15,23,42,.07)" strokeWidth={1} />
+          <text x={pad.l - 5} y={py(v) + 4} textAnchor="end" fontSize={9} fill="rgba(15,23,42,.38)">
+            {v >= 1000 ? `${(Math.round(v / 100) / 10).toFixed(1)}k` : v}
+          </text>
+        </g>
+      ))}
+      {/* 折れ線 */}
+      {lines.map((line) => {
+        const pts = data.map((d, i) => `${px(i).toFixed(1)},${py(Number(d[line.key]) || 0).toFixed(1)}`).join(" L ");
+        return (
+          <g key={line.key}>
+            <path d={`M ${pts}`} fill="none" stroke={line.color} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" opacity={0.9} />
+            {data.map((d, i) =>
+              Number(d[line.key]) > 0 ? (
+                <circle key={i} cx={px(i)} cy={py(Number(d[line.key]))} r={3.5} fill={line.color} stroke="#fff" strokeWidth={1.5} />
+              ) : null
+            )}
+          </g>
+        );
+      })}
+      {/* X軸ラベル */}
+      {xLabels.map(({ i, label }) => (
+        <text key={i} x={px(i)} y={H - 4} textAnchor="middle" fontSize={9} fill="rgba(15,23,42,.42)">
+          {label}
+        </text>
+      ))}
+    </svg>
+  );
+}
+
 // ---- Live dot ----
 function LiveDot() {
   return (
@@ -370,6 +434,22 @@ export default function AnalyticsPage() {
   // ---- computed: 施策比較テーブル ----
   const comparisonData = useMemo(() => [...funnelData], [funnelData]);
 
+  // ---- computed: 日別トレンド ----
+  const dailyTrend = useMemo<TrendPoint[]>(() => {
+    const result: TrendPoint[] = [];
+    for (let i = dateRange - 1; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const day = isoDay(d);
+      const label = `${d.getMonth() + 1}/${d.getDate()}`;
+      const pv = pvLogs.filter((l) => (l.createdAt || "").startsWith(day)).length;
+      const imp = statRows.filter((r) => r.day === day && r.event === "impression").reduce((s, r) => s + safeNum(r.count), 0);
+      const cv = statRows.filter((r) => r.day === day && r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
+      result.push({ day, label, pv, imp, cv });
+    }
+    return result;
+  }, [pvLogs, statRows, dateRange]);
+
   // ---- computed: 最近のセッション ----
   const sessionData = useMemo(() => {
     const map = new Map<string, { sid: string; vid: string; pages: string[]; events: string[]; start: string; last: string }>();
@@ -517,6 +597,68 @@ export default function AnalyticsPage() {
                 </div>
               )}
             </div>
+          </div>
+
+          {/* ===== Section 1.5: 日別トレンド ===== */}
+          <div style={{ marginBottom: 32 }}>
+            <div className="h2" style={{ marginBottom: 14 }}>
+              日別トレンド <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（過去{dateRange}日間）</span>
+            </div>
+            <div className="card" style={{ padding: 20, background: "#fff" }}>
+              {/* 凡例 */}
+              <div style={{ display: "flex", gap: 20, marginBottom: 14 }}>
+                {[
+                  { key: "pv",  label: "ページビュー", color: "#2563eb" },
+                  { key: "imp", label: "施策表示",     color: "#7c3aed" },
+                  { key: "cv",  label: "CV",           color: "#16a34a" },
+                ].map((l) => (
+                  <div key={l.key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#374151" }}>
+                    <div style={{ width: 24, height: 3, borderRadius: 99, background: l.color }} />
+                    {l.label}
+                  </div>
+                ))}
+              </div>
+              {pvLoading ? (
+                <div className="small" style={{ opacity: 0.5, height: 160, display: "flex", alignItems: "center", justifyContent: "center" }}>読み込み中…</div>
+              ) : (
+                <TrendChart
+                  data={dailyTrend}
+                  lines={[
+                    { key: "pv",  label: "PV",   color: "#2563eb" },
+                    { key: "imp", label: "表示", color: "#7c3aed" },
+                    { key: "cv",  label: "CV",   color: "#16a34a" },
+                  ]}
+                />
+              )}
+            </div>
+
+            {/* 施策別CVトレンド（シナリオがある場合） */}
+            {scenarios.length > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14, marginTop: 14 }}>
+                {scenarios.slice(0, 4).map((sc) => {
+                  const scTrend: TrendPoint[] = dailyTrend.map((d) => {
+                    const scRows = statRows.filter((r) => r.scenarioId === sc.id && r.day === d.day);
+                    const imp = scRows.filter((r) => r.event === "impression").reduce((s, r) => s + safeNum(r.count), 0);
+                    const cv  = scRows.filter((r) => r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
+                    return { ...d, imp, cv };
+                  });
+                  return (
+                    <div key={sc.id} className="card" style={{ padding: 16, background: "#fff" }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: 0.8 }} title={sc.data?.name}>
+                        📊 {sc.data?.name || sc.id}
+                      </div>
+                      <TrendChart
+                        data={scTrend}
+                        lines={[
+                          { key: "imp", label: "表示", color: "#7c3aed" },
+                          { key: "cv",  label: "CV",   color: "#16a34a" },
+                        ]}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* ===== Section 2: 流入元 ===== */}
