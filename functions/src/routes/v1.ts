@@ -3604,7 +3604,64 @@ export function registerV1Routes(app: Express) {
     }
   });
 
+  /* -----------------------------
+     /v1/workspaces/access-override/set  ★プラットフォーム管理者専用
+     - 指定ワークスペースにフルアクセス権限を付与（日数指定）
+  ------------------------------ */
+  app.post("/v1/workspaces/access-override/set", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      requirePlatformAdmin(req);
 
+      const workspace_id = String(req.body?.workspace_id || "").trim();
+      if (!workspace_id) return res.status(400).json({ error: "workspace_id required" });
 
+      const override_until = req.body?.override_until
+        ? String(req.body.override_until)
+        : null;
+      const note = String(req.body?.note || "").trim();
+
+      const db = adminDb();
+      const ref = db.collection("workspace_billing").doc(workspace_id);
+
+      if (override_until) {
+        const until = new Date(override_until);
+        const now = new Date();
+        await ref.set(
+          {
+            access_override_until: until.toISOString(),
+            access_override_active: until > now,
+            access_override_note: note,
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+      } else {
+        // クリア
+        await ref.set(
+          {
+            access_override_until: null,
+            access_override_active: false,
+            access_override_note: "",
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+      }
+
+      return res.json({ ok: true, workspace_id, override_until, note });
+    } catch (e: any) {
+      console.error("[/v1/workspaces/access-override/set] error:", e);
+      return res
+        .status(
+          e?.message === "platform_admin_only"
+            ? 403
+            : e?.message === "missing_authorization" || e?.message === "invalid_token"
+            ? 401
+            : 400
+        )
+        .json({ error: e?.message || "access_override_set_failed" });
+    }
+  });
 
 }
