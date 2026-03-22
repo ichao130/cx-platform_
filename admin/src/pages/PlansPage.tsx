@@ -87,7 +87,7 @@ const PLAN_DEFS: {
     bg: "#f5f3ff",
     price: "¥39,800 / 月",
     description: "大規模運用・マルチサイトに対応。",
-    features: ["Standard の全機能", "A/Bテスト", "カスタムドメイン", "優先サポート", "APIアクセス"],
+    features: ["Standard の全機能", "A/Bテスト", "優先サポート", "APIアクセス"],
     limits: [
       { label: "サイト数", value: "20" },
       { label: "シナリオ数", value: "100" },
