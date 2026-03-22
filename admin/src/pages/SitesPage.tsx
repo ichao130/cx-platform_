@@ -168,7 +168,7 @@ export default function SitesPage() {
   const embedTag = useMemo(() => {
     const safeSiteId = String(id || '').trim();
     const safePublicKey = String(publicKey || '').trim();
-    return `<script\n  src="https://cx-platform-v1.web.app/sdk.js"\n  data-site-id="${safeSiteId}"\n  data-site-key="${safePublicKey}"\n  defer\n></script>`;
+    return `<script\n  src="https://app.mokkeda.com/sdk.js"\n  data-site-id="${safeSiteId}"\n  data-site-key="${safePublicKey}"\n  defer\n></script>`;
   }, [id, publicKey]);
 
   function resetEditor() {
@@ -518,7 +518,7 @@ export default function SitesPage() {
                     border: '1px solid rgba(255,255,255,.06)',
                   }}>
                     <span style={{ color: '#7ec8e3' }}>&lt;script</span>{'\n'}
-                    {'  '}<span style={{ color: '#a8d8a8' }}>src</span><span style={{ color: '#e2f0f5' }}>="</span><span style={{ color: '#ffd580' }}>https://cx-platform-v1.web.app/sdk.js</span><span style={{ color: '#e2f0f5' }}>"</span>{'\n'}
+                    {'  '}<span style={{ color: '#a8d8a8' }}>src</span><span style={{ color: '#e2f0f5' }}>="</span><span style={{ color: '#ffd580' }}>https://app.mokkeda.com/sdk.js</span><span style={{ color: '#e2f0f5' }}>"</span>{'\n'}
                     {'  '}<span style={{ color: '#a8d8a8' }}>data-site-id</span><span style={{ color: '#e2f0f5' }}>="</span><span style={{ color: '#ffd580' }}>{String(id || '').trim()}</span><span style={{ color: '#e2f0f5' }}>"</span>{'\n'}
                     {'  '}<span style={{ color: '#a8d8a8' }}>data-site-key</span><span style={{ color: '#e2f0f5' }}>="</span><span style={{ color: '#ffd580' }}>{String(publicKey || '').trim()}</span><span style={{ color: '#e2f0f5' }}>"</span>{'\n'}
                     {'  '}<span style={{ color: '#a8d8a8' }}>defer</span>{'\n'}
