@@ -1,37 +1,4 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerV1Routes = registerV1Routes;
 const zod_1 = require("zod");
@@ -82,7 +49,7 @@ const LogReqSchema = zod_1.z.object({
     action_id: zod_1.z.string().nullable().optional(),
     template_id: zod_1.z.string().nullable().optional(),
     variant_id: zod_1.z.string().nullable().optional(),
-    event: zod_1.z.enum(["impression", "click", "click_link", "close", "conversion", "pageview", "pageleave"]),
+    event: zod_1.z.enum(["impression", "click", "click_link", "close", "conversion", "pageview"]),
     url: zod_1.z.string().nullable().optional(),
     path: zod_1.z.string().nullable().optional(),
     ref: zod_1.z.string().nullable().optional(),
@@ -91,7 +58,6 @@ const LogReqSchema = zod_1.z.object({
     utm_source: zod_1.z.string().nullable().optional(),
     utm_medium: zod_1.z.string().nullable().optional(),
     utm_campaign: zod_1.z.string().nullable().optional(),
-    duration_sec: zod_1.z.number().int().nonnegative().nullable().optional(),
 });
 const AiInsightReqSchema = zod_1.z.object({
     site_id: zod_1.z.string().min(1),
@@ -183,9 +149,9 @@ const PlanLimitsSchema = zod_1.z.object({
 });
 const WorkspaceBillingUpdateReqSchema = zod_1.z.object({
     workspace_id: zod_1.z.string().min(1),
-    plan: zod_1.z.enum(["free", "standard", "pro", "enterprise"]).optional(),
+    plan: zod_1.z.enum(["standard", "premium", "custom"]).optional(),
     status: zod_1.z.enum(["inactive", "trialing", "active", "past_due", "canceled"]).optional(),
-    provider: zod_1.z.enum(["stripe", "misoca", "manual"]).optional(),
+    provider: zod_1.z.enum(["stripe", "manual"]).optional(),
     trial_days: zod_1.z.number().int().min(0).max(365).optional(),
     trial_ends_at: zod_1.z.string().datetime().optional(),
     current_period_ends_at: zod_1.z.string().datetime().optional(),
@@ -203,11 +169,11 @@ const PlansListReqSchema = zod_1.z.object({
 const PlansUpsertReqSchema = zod_1.z.object({
     workspace_id: zod_1.z.string().min(1),
     plan_id: zod_1.z.string().min(1),
-    code: zod_1.z.enum(["free", "standard", "pro", "enterprise"]),
+    code: zod_1.z.enum(["standard", "premium", "custom"]),
     name: zod_1.z.string().min(1).max(80),
     description: zod_1.z.string().max(2000).optional().default(""),
     active: zod_1.z.boolean().optional().default(true),
-    billing_provider: zod_1.z.enum(["stripe", "misoca", "manual"]),
+    billing_provider: zod_1.z.enum(["stripe", "manual"]),
     currency: zod_1.z.string().min(1).max(8).optional().default("JPY"),
     price_monthly: zod_1.z.number().min(0),
     price_yearly: zod_1.z.number().min(0).nullable().optional(),
@@ -539,13 +505,13 @@ function normalizePlanLimits(input) {
 }
 function normalizeBillingProvider(input, plan) {
     const raw = String(input || "").trim().toLowerCase();
-    if (raw === "stripe" || raw === "misoca" || raw === "manual")
+    if (raw === "stripe" || raw === "manual")
         return raw;
-    return String(plan || "") === "enterprise" ? "manual" : "stripe";
+    return String(plan || "") === "custom" ? "manual" : "stripe";
 }
 function buildBillingResponse(billing, planDoc, overrideDoc) {
     return {
-        plan: billing?.plan || "free",
+        plan: billing?.plan || "standard",
         status: billing?.status || "inactive",
         provider: normalizeBillingProvider(billing?.provider, billing?.plan),
         billing_email: billing?.billing_email || null,
@@ -556,11 +522,6 @@ function buildBillingResponse(billing, planDoc, overrideDoc) {
         stripe_price_id: billing?.stripe_price_id || null,
         custom_limit_override_id: billing?.custom_limit_override_id || null,
         manual_billing_note: billing?.manual_billing_note || "",
-        access_override_until: billing?.access_override_until || null,
-        access_override_note: billing?.access_override_note || "",
-        access_override_active: billing?.access_override_until
-            ? new Date(billing.access_override_until) > new Date()
-            : false,
         plan_master: planDoc
             ? {
                 id: planDoc.id || "",
@@ -591,12 +552,8 @@ function buildBillingResponse(billing, planDoc, overrideDoc) {
 function getRequestUserEmail(req) {
     return String(req?.auth?.email || req?.user?.email || req?.token?.email || "").trim().toLowerCase();
 }
-async function requirePlatformAdmin(req) {
-    // IDトークンを直接デコードしてemailを取得する（req.authにemailがセットされないため）
-    const { verifyIdToken, extractBearerToken } = await Promise.resolve().then(() => __importStar(require("../services/admin")));
-    const token = extractBearerToken(req);
-    const decoded = await verifyIdToken(token);
-    const email = String(decoded?.email || "").trim().toLowerCase();
+function requirePlatformAdmin(req) {
+    const email = getRequestUserEmail(req);
     if (email !== "iwatanabe@branberyheag.com") {
         throw new Error("platform_admin_only");
     }
@@ -657,10 +614,6 @@ const INVITE_FROM_EMAIL = (0, params_1.defineString)("INVITE_FROM_EMAIL");
 const INVITE_BASE_URL = (0, params_1.defineString)("INVITE_BASE_URL");
 const INVITE_TEMPLATE_ALIAS = (0, params_1.defineString)("INVITE_TEMPLATE_ALIAS");
 const INVITE_MESSAGE_STREAM = (0, params_1.defineString)("INVITE_MESSAGE_STREAM");
-const STRIPE_SECRET_KEY = (0, params_1.defineSecret)("STRIPE_SECRET_KEY");
-const STRIPE_WEBHOOK_SECRET = (0, params_1.defineSecret)("STRIPE_WEBHOOK_SECRET");
-const MISOCA_CLIENT_ID = (0, params_1.defineSecret)("MISOCA_CLIENT_ID");
-const MISOCA_CLIENT_SECRET = (0, params_1.defineSecret)("MISOCA_CLIENT_SECRET");
 function parseOriginsEnv(s) {
     return (s || "")
         .split(",")
@@ -802,7 +755,7 @@ function toIsoStringOrEmpty(v) {
 }
 function getInviteBaseUrl() {
     const raw = String(INVITE_BASE_URL.value() || "").trim();
-    return raw || "https://app.mokkeda.com/invite";
+    return raw || "https://cx-platform-v1.web.app/invite";
 }
 function getInviteFromEmail() {
     const raw = String(INVITE_FROM_EMAIL.value() || "").trim();
@@ -1822,7 +1775,7 @@ function registerV1Routes(app) {
         try {
             corsByAdminOrigins(req, res);
             const body = PlansListReqSchema.parse(req.body);
-            await requirePlatformAdmin(req);
+            requirePlatformAdmin(req);
             await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner", "admin"]);
             const db = (0, admin_1.adminDb)();
             const snap = await db.collection("plans").orderBy("code", "asc").get();
@@ -1880,7 +1833,7 @@ function registerV1Routes(app) {
         try {
             corsByAdminOrigins(req, res);
             const body = PlansUpsertReqSchema.parse(req.body);
-            await requirePlatformAdmin(req);
+            requirePlatformAdmin(req);
             await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner", "admin"]);
             const db = (0, admin_1.adminDb)();
             const ref = db.collection("plans").doc(body.plan_id);
@@ -2011,51 +1964,6 @@ function registerV1Routes(app) {
         catch (e) {
             return res.status(403).send(e?.message || "forbidden");
         }
-    });
-    /* -----------------------------
-       /v1/workspaces/usage  ★管理画面専用（ADMIN_ORIGINS）
-       - ワークスペースの現在の使用量を返す（アラート判定用）
-    ------------------------------ */
-    app.post("/v1/workspaces/usage", async (req, res) => {
-        try {
-            corsByAdminOrigins(req, res);
-            const body = zod_1.z.object({ workspace_id: zod_1.z.string().min(1) }).parse(req.body);
-            await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner", "admin", "member", "viewer"]);
-            const db = (0, admin_1.adminDb)();
-            const wid = body.workspace_id;
-            // 並列でカウント取得
-            const [sitesSnap, scenariosSnap, actionsSnap, wSnap] = await Promise.all([
-                db.collection("sites").where("workspaceId", "==", wid).get(),
-                db.collection("scenarios").where("workspaceId", "==", wid).get(),
-                db.collection("actions").where("workspaceId", "==", wid).get(),
-                db.collection("workspaces").doc(wid).get(),
-            ]);
-            // メンバー数は workspaces doc の members フィールド or workspace_members コレクション
-            const ws = wSnap.data();
-            const members = ws?.members || ws?.memberUids || {};
-            const memberCount = typeof members === "object" && !Array.isArray(members)
-                ? Object.keys(members).length
-                : Array.isArray(members) ? members.length : 0;
-            return res.json({
-                ok: true,
-                usage: {
-                    sites: sitesSnap.size,
-                    scenarios: scenariosSnap.size,
-                    actions: actionsSnap.size,
-                    members: memberCount,
-                },
-            });
-        }
-        catch (e) {
-            console.error("[/v1/workspaces/usage] error:", e);
-            return res.status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 400).json({ ok: false, error: "usage_fetch_failed", message: e?.message || String(e) });
-        }
-    });
-    app.options("/v1/workspaces/usage", (req, res) => {
-        corsByAdminOrigins(req, res);
-        res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
-        res.status(204).send("");
     });
     /* -----------------------------
        /v1/workspaces/billing/get  ★管理画面専用（ADMIN_ORIGINS）
@@ -2524,7 +2432,6 @@ function registerV1Routes(app) {
                 utm_source: body.utm_source ?? null,
                 utm_medium: body.utm_medium ?? null,
                 utm_campaign: body.utm_campaign ?? null,
-                duration_sec: body.duration_sec ?? null,
                 createdAt: nowIso,
                 updatedAt: nowIso,
             };
@@ -3193,486 +3100,5 @@ function registerV1Routes(app) {
         catch (e) {
             return res.status(403).send(e?.message || "forbidden");
         }
-    });
-    /* ============================================================
-       アクセス免除（開発者・検証用フルアクセス付与）
-    ============================================================ */
-    /* -----------------------------
-       POST /v1/workspaces/access-override/set
-       - platform admin のみ実行可能
-       - 指定日数フルアクセスを付与（または解除）
-    ------------------------------ */
-    app.post("/v1/workspaces/access-override/set", async (req, res) => {
-        try {
-            corsByAdminOrigins(req, res);
-            const body = zod_1.z.object({
-                workspace_id: zod_1.z.string().min(1),
-                days: zod_1.z.number().int().min(0).max(3650).optional(), // 0で解除
-                note: zod_1.z.string().max(500).optional().default(""),
-                clear: zod_1.z.boolean().optional().default(false),
-            }).parse(req.body);
-            await requirePlatformAdmin(req);
-            const db = (0, admin_1.adminDb)();
-            const now = firestore_1.FieldValue.serverTimestamp();
-            if (body.clear || body.days === 0) {
-                await db.collection("workspace_billing").doc(body.workspace_id).set({
-                    access_override_until: null,
-                    access_override_note: "",
-                    updatedAt: now,
-                }, { merge: true });
-                return res.json({ ok: true, access_override_active: false, access_override_until: null });
-            }
-            const days = body.days ?? 30;
-            const until = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
-            await db.collection("workspace_billing").doc(body.workspace_id).set({
-                access_override_until: until,
-                access_override_note: body.note || `${days}日間アクセス免除`,
-                updatedAt: now,
-            }, { merge: true });
-            return res.json({ ok: true, access_override_active: true, access_override_until: until, days });
-        }
-        catch (e) {
-            console.error("[/v1/workspaces/access-override/set] error:", e);
-            return res.status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401
-                : e?.message === "platform_admin_only" ? 403
-                    : 400).json({ ok: false, error: "access_override_failed", message: e?.message || String(e) });
-        }
-    });
-    app.options("/v1/workspaces/access-override/set", (req, res) => {
-        corsByAdminOrigins(req, res);
-        res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
-        res.status(204).send("");
-    });
-    /* ============================================================
-       STRIPE エンドポイント群
-    ============================================================ */
-    /* -----------------------------
-       POST /v1/stripe/create-checkout-session
-       - Stripe Checkout セッションを作成してURLを返す
-       - workspace_id + plan_id（plans コレクションに stripe_price_monthly_id が必要）
-    ------------------------------ */
-    app.post("/v1/stripe/create-checkout-session", async (req, res) => {
-        try {
-            corsByAdminOrigins(req, res);
-            const body = zod_1.z.object({
-                workspace_id: zod_1.z.string().min(1),
-                plan_id: zod_1.z.string().min(1),
-                success_url: zod_1.z.string().url(),
-                cancel_url: zod_1.z.string().url(),
-                billing_email: zod_1.z.string().email().optional(),
-            }).parse(req.body);
-            await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner"]);
-            const db = (0, admin_1.adminDb)();
-            const planSnap = await db.collection("plans").doc(body.plan_id).get();
-            if (!planSnap.exists)
-                throw new Error("plan_not_found");
-            const plan = planSnap.data();
-            const priceId = plan.stripe_price_monthly_id;
-            if (!priceId)
-                throw new Error("stripe_price_id_not_configured");
-            const Stripe = (await Promise.resolve().then(() => __importStar(require("stripe")))).default;
-            const stripe = new Stripe(STRIPE_SECRET_KEY.value(), { apiVersion: "2026-02-25.clover" });
-            // 既存の stripe_customer_id があれば再利用
-            const billingSnap = await db.collection("workspace_billing").doc(body.workspace_id).get();
-            const existingCustomerId = billingSnap.data()?.stripe_customer_id || undefined;
-            const session = await stripe.checkout.sessions.create({
-                mode: "subscription",
-                payment_method_types: ["card"],
-                customer: existingCustomerId,
-                customer_email: existingCustomerId ? undefined : (body.billing_email || undefined),
-                line_items: [{ price: priceId, quantity: 1 }],
-                success_url: body.success_url,
-                cancel_url: body.cancel_url,
-                metadata: {
-                    workspace_id: body.workspace_id,
-                    plan_id: body.plan_id,
-                    plan_code: plan.code || "",
-                },
-                subscription_data: {
-                    metadata: {
-                        workspace_id: body.workspace_id,
-                        plan_id: body.plan_id,
-                    },
-                },
-            });
-            return res.json({ ok: true, checkout_url: session.url, session_id: session.id });
-        }
-        catch (e) {
-            console.error("[/v1/stripe/create-checkout-session] error:", e);
-            return res.status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401
-                : e?.message === "plan_not_found" ? 404
-                    : 400).json({ ok: false, error: "stripe_checkout_failed", message: e?.message || String(e) });
-        }
-    });
-    app.options("/v1/stripe/create-checkout-session", (req, res) => {
-        corsByAdminOrigins(req, res);
-        res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
-        res.status(204).send("");
-    });
-    /* -----------------------------
-       POST /v1/stripe/create-portal-session
-       - Stripe Customer Portal URL を生成（プラン変更・解約・支払い方法変更）
-    ------------------------------ */
-    app.post("/v1/stripe/create-portal-session", async (req, res) => {
-        try {
-            corsByAdminOrigins(req, res);
-            const body = zod_1.z.object({
-                workspace_id: zod_1.z.string().min(1),
-                return_url: zod_1.z.string().url(),
-            }).parse(req.body);
-            await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner"]);
-            const db = (0, admin_1.adminDb)();
-            const billingSnap = await db.collection("workspace_billing").doc(body.workspace_id).get();
-            const customerId = billingSnap.data()?.stripe_customer_id;
-            if (!customerId)
-                throw new Error("stripe_customer_not_found");
-            const Stripe = (await Promise.resolve().then(() => __importStar(require("stripe")))).default;
-            const stripe = new Stripe(STRIPE_SECRET_KEY.value(), { apiVersion: "2026-02-25.clover" });
-            const session = await stripe.billingPortal.sessions.create({
-                customer: customerId,
-                return_url: body.return_url,
-            });
-            return res.json({ ok: true, portal_url: session.url });
-        }
-        catch (e) {
-            console.error("[/v1/stripe/create-portal-session] error:", e);
-            return res.status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401
-                : e?.message === "stripe_customer_not_found" ? 404
-                    : 400).json({ ok: false, error: "stripe_portal_failed", message: e?.message || String(e) });
-        }
-    });
-    app.options("/v1/stripe/create-portal-session", (req, res) => {
-        corsByAdminOrigins(req, res);
-        res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
-        res.status(204).send("");
-    });
-    /* -----------------------------
-       POST /v1/stripe/webhook
-       - Stripe Webhook ハンドラ（署名検証あり）
-       - checkout.session.completed → billing を active に更新
-       - customer.subscription.updated / deleted → billing を更新
-    ------------------------------ */
-    app.post("/v1/stripe/webhook", async (req, res) => {
-        try {
-            const sig = req.headers["stripe-signature"];
-            if (!sig)
-                return res.status(400).json({ ok: false, error: "missing_stripe_signature" });
-            const Stripe = (await Promise.resolve().then(() => __importStar(require("stripe")))).default;
-            const stripe = new Stripe(STRIPE_SECRET_KEY.value(), { apiVersion: "2026-02-25.clover" });
-            let event;
-            try {
-                event = stripe.webhooks.constructEvent(req.rawBody || req.body, sig, STRIPE_WEBHOOK_SECRET.value());
-            }
-            catch (err) {
-                console.error("[stripe/webhook] signature verification failed:", err.message);
-                return res.status(400).json({ ok: false, error: "signature_verification_failed" });
-            }
-            const db = (0, admin_1.adminDb)();
-            const now = firestore_1.FieldValue.serverTimestamp();
-            if (event.type === "checkout.session.completed") {
-                const session = event.data.object;
-                const workspaceId = session.metadata?.workspace_id;
-                const planId = session.metadata?.plan_id;
-                const planCode = session.metadata?.plan_code;
-                const customerId = session.customer;
-                const subscriptionId = session.subscription;
-                if (workspaceId) {
-                    // プランのprice_idを取得
-                    let stripePriceId = null;
-                    if (subscriptionId) {
-                        try {
-                            const sub = await stripe.subscriptions.retrieve(subscriptionId);
-                            stripePriceId = sub.items?.data?.[0]?.price?.id || null;
-                        }
-                        catch { }
-                    }
-                    await db.collection("workspace_billing").doc(workspaceId).set({
-                        plan: planCode || "free",
-                        status: "active",
-                        provider: "stripe",
-                        stripe_customer_id: customerId || null,
-                        stripe_subscription_id: subscriptionId || null,
-                        stripe_price_id: stripePriceId,
-                        updatedAt: now,
-                    }, { merge: true });
-                }
-            }
-            else if (event.type === "customer.subscription.updated") {
-                const sub = event.data.object;
-                const workspaceId = sub.metadata?.workspace_id;
-                if (workspaceId) {
-                    const stripeStatus = sub.status;
-                    const billingStatus = stripeStatus === "active" ? "active"
-                        : stripeStatus === "trialing" ? "trialing"
-                            : stripeStatus === "past_due" ? "past_due"
-                                : stripeStatus === "canceled" ? "canceled"
-                                    : "inactive";
-                    await db.collection("workspace_billing").doc(workspaceId).set({
-                        status: billingStatus,
-                        stripe_subscription_id: sub.id,
-                        stripe_price_id: sub.items?.data?.[0]?.price?.id || null,
-                        current_period_ends_at: sub.current_period_end
-                            ? new Date(sub.current_period_end * 1000).toISOString()
-                            : null,
-                        updatedAt: now,
-                    }, { merge: true });
-                }
-            }
-            else if (event.type === "customer.subscription.deleted") {
-                const sub = event.data.object;
-                const workspaceId = sub.metadata?.workspace_id;
-                if (workspaceId) {
-                    await db.collection("workspace_billing").doc(workspaceId).set({
-                        status: "canceled",
-                        updatedAt: now,
-                    }, { merge: true });
-                }
-            }
-            else if (event.type === "invoice.payment_failed") {
-                const invoice = event.data.object;
-                const customerId = invoice.customer;
-                // customer ID でワークスペースを検索してステータス更新
-                if (customerId) {
-                    const snap = await db.collection("workspace_billing")
-                        .where("stripe_customer_id", "==", customerId)
-                        .limit(1).get();
-                    if (!snap.empty) {
-                        await snap.docs[0].ref.set({ status: "past_due", updatedAt: now }, { merge: true });
-                    }
-                }
-            }
-            return res.json({ ok: true, received: true });
-        }
-        catch (e) {
-            console.error("[/v1/stripe/webhook] error:", e);
-            return res.status(400).json({ ok: false, error: "webhook_failed", message: e?.message || String(e) });
-        }
-    });
-    /* ============================================================
-       MISOCA エンドポイント群（OAuth 2.0 + 請求書 API）
-    ============================================================ */
-    /* -----------------------------
-       GET /v1/misoca/auth
-       - Misoca OAuth 認可URLへリダイレクト
-       - ?workspace_id=xxx を state に埋め込む
-    ------------------------------ */
-    app.get("/v1/misoca/auth", async (req, res) => {
-        try {
-            corsByAdminOrigins(req, res);
-            const workspaceId = String(req.query.workspace_id || "").trim();
-            if (!workspaceId)
-                return res.status(400).json({ ok: false, error: "workspace_id_required" });
-            await requireWorkspaceAccessByWorkspaceId(req, workspaceId, "billing", ["owner"]);
-            const clientId = MISOCA_CLIENT_ID.value();
-            const redirectUri = encodeURIComponent("https://app.mokkeda.com/api/v1/misoca/callback");
-            const state = Buffer.from(JSON.stringify({ workspace_id: workspaceId })).toString("base64url");
-            const scope = encodeURIComponent("write");
-            const authUrl = `https://app.misoca.jp/oauth2/authorize?response_type=code&client_id=${clientId}&redirect_uri=${redirectUri}&scope=${scope}&state=${state}`;
-            return res.redirect(authUrl);
-        }
-        catch (e) {
-            console.error("[/v1/misoca/auth] error:", e);
-            return res.status(400).send("Misoca OAuth error: " + (e?.message || String(e)));
-        }
-    });
-    /* -----------------------------
-       GET /v1/misoca/callback
-       - Misoca OAuth コールバック
-       - code をトークンと交換して Firestore に保存
-    ------------------------------ */
-    app.get("/v1/misoca/callback", async (req, res) => {
-        try {
-            const code = String(req.query.code || "").trim();
-            const stateRaw = String(req.query.state || "").trim();
-            if (!code)
-                return res.status(400).send("missing code");
-            let workspaceId = "";
-            try {
-                const parsed = JSON.parse(Buffer.from(stateRaw, "base64url").toString("utf8"));
-                workspaceId = parsed.workspace_id || "";
-            }
-            catch {
-                return res.status(400).send("invalid state");
-            }
-            if (!workspaceId)
-                return res.status(400).send("missing workspace_id in state");
-            const clientId = MISOCA_CLIENT_ID.value();
-            const clientSecret = MISOCA_CLIENT_SECRET.value();
-            const redirectUri = "https://app.mokkeda.com/api/v1/misoca/callback";
-            // アクセストークンを取得
-            const tokenRes = await fetch("https://app.misoca.jp/oauth2/token", {
-                method: "POST",
-                headers: { "Content-Type": "application/x-www-form-urlencoded" },
-                body: new URLSearchParams({
-                    grant_type: "authorization_code",
-                    code,
-                    client_id: clientId,
-                    client_secret: clientSecret,
-                    redirect_uri: redirectUri,
-                }).toString(),
-            });
-            if (!tokenRes.ok) {
-                const errText = await tokenRes.text();
-                throw new Error(`token_exchange_failed: ${errText}`);
-            }
-            const tokenData = await tokenRes.json();
-            const accessToken = tokenData.access_token;
-            const refreshToken = tokenData.refresh_token;
-            const expiresIn = Number(tokenData.expires_in || 86400);
-            const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
-            // Firestore に保存
-            const db = (0, admin_1.adminDb)();
-            await db.collection("workspace_misoca_tokens").doc(workspaceId).set({
-                access_token: accessToken,
-                refresh_token: refreshToken || null,
-                expires_at: expiresAt,
-                updatedAt: firestore_1.FieldValue.serverTimestamp(),
-            });
-            // 管理画面のBillingページにリダイレクト
-            return res.redirect("https://app.mokkeda.com/billing?misoca_connected=1");
-        }
-        catch (e) {
-            console.error("[/v1/misoca/callback] error:", e);
-            return res.status(400).send("Misoca callback error: " + (e?.message || String(e)));
-        }
-    });
-    /* -----------------------------
-       POST /v1/misoca/create-invoice
-       - Misoca に請求書を作成する
-    ------------------------------ */
-    app.post("/v1/misoca/create-invoice", async (req, res) => {
-        try {
-            corsByAdminOrigins(req, res);
-            const body = zod_1.z.object({
-                workspace_id: zod_1.z.string().min(1),
-                billing_email: zod_1.z.string().email().optional(),
-                issue_date: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), // "2026-04-01"
-                due_date: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-                items: zod_1.z.array(zod_1.z.object({
-                    name: zod_1.z.string().min(1),
-                    unit_price: zod_1.z.number().min(0),
-                    quantity: zod_1.z.number().int().min(1).default(1),
-                    tax_type: zod_1.z.string().optional().default("tax_8"),
-                })).min(1),
-                note: zod_1.z.string().max(1000).optional(),
-            }).parse(req.body);
-            await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner", "admin"]);
-            // Misoca トークンを取得
-            const db = (0, admin_1.adminDb)();
-            const tokenSnap = await db.collection("workspace_misoca_tokens").doc(body.workspace_id).get();
-            if (!tokenSnap.exists)
-                throw new Error("misoca_not_connected");
-            const tokenData = tokenSnap.data();
-            let accessToken = tokenData.access_token;
-            // トークンの有効期限チェック（期限切れならリフレッシュ）
-            const expiresAt = new Date(tokenData.expires_at || 0);
-            if (expiresAt < new Date(Date.now() + 60000) && tokenData.refresh_token) {
-                const refreshRes = await fetch("https://app.misoca.jp/oauth2/token", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-                    body: new URLSearchParams({
-                        grant_type: "refresh_token",
-                        refresh_token: tokenData.refresh_token,
-                        client_id: MISOCA_CLIENT_ID.value(),
-                        client_secret: MISOCA_CLIENT_SECRET.value(),
-                    }).toString(),
-                });
-                if (refreshRes.ok) {
-                    const refreshData = await refreshRes.json();
-                    accessToken = refreshData.access_token;
-                    const newExpiresAt = new Date(Date.now() + Number(refreshData.expires_in || 86400) * 1000).toISOString();
-                    await db.collection("workspace_misoca_tokens").doc(body.workspace_id).set({
-                        access_token: accessToken,
-                        refresh_token: refreshData.refresh_token || tokenData.refresh_token,
-                        expires_at: newExpiresAt,
-                        updatedAt: firestore_1.FieldValue.serverTimestamp(),
-                    });
-                }
-            }
-            // Misoca API で請求書作成
-            const today = new Date().toISOString().slice(0, 10);
-            const invoicePayload = {
-                invoice: {
-                    issue_date: body.issue_date || today,
-                    due_date: body.due_date || null,
-                    memo: body.note || "",
-                    invoice_items: body.items.map((item) => ({
-                        name: item.name,
-                        unit_price: item.unit_price,
-                        quantity: item.quantity,
-                        tax_type: item.tax_type || "tax_8",
-                    })),
-                },
-            };
-            const createRes = await fetch("https://app.misoca.jp/api/v3/invoice", {
-                method: "POST",
-                headers: {
-                    "Authorization": `Bearer ${accessToken}`,
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify(invoicePayload),
-            });
-            if (!createRes.ok) {
-                const errText = await createRes.text();
-                throw new Error(`misoca_create_failed: ${errText}`);
-            }
-            const invoice = await createRes.json();
-            return res.json({
-                ok: true,
-                invoice_id: invoice.id,
-                invoice_number: invoice.invoice_number,
-                pdf_url: invoice.pdf_url || null,
-                invoice,
-            });
-        }
-        catch (e) {
-            console.error("[/v1/misoca/create-invoice] error:", e);
-            return res.status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401
-                : e?.message === "misoca_not_connected" ? 404
-                    : 400).json({ ok: false, error: "misoca_create_invoice_failed", message: e?.message || String(e) });
-        }
-    });
-    app.options("/v1/misoca/create-invoice", (req, res) => {
-        corsByAdminOrigins(req, res);
-        res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
-        res.status(204).send("");
-    });
-    /* -----------------------------
-       GET /v1/misoca/status
-       - Misoca連携状態を確認（トークン存在・有効期限）
-    ------------------------------ */
-    app.post("/v1/misoca/status", async (req, res) => {
-        try {
-            corsByAdminOrigins(req, res);
-            const body = zod_1.z.object({ workspace_id: zod_1.z.string().min(1) }).parse(req.body);
-            await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner", "admin"]);
-            const db = (0, admin_1.adminDb)();
-            const snap = await db.collection("workspace_misoca_tokens").doc(body.workspace_id).get();
-            if (!snap.exists)
-                return res.json({ ok: true, connected: false });
-            const data = snap.data();
-            const expiresAt = data.expires_at || null;
-            const expired = expiresAt ? new Date(expiresAt) < new Date() : false;
-            return res.json({
-                ok: true,
-                connected: true,
-                expired,
-                expires_at: expiresAt,
-            });
-        }
-        catch (e) {
-            console.error("[/v1/misoca/status] error:", e);
-            return res.status(400).json({ ok: false, error: "misoca_status_failed", message: e?.message || String(e) });
-        }
-    });
-    app.options("/v1/misoca/status", (req, res) => {
-        corsByAdminOrigins(req, res);
-        res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
-        res.status(204).send("");
     });
 }
