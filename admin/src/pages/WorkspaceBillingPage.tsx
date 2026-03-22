@@ -1,8 +1,23 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
-import { apiPostJson, auth } from "../firebase";
+import { collection, onSnapshot } from "firebase/firestore";
+import { apiPostJson, auth, db } from "../firebase";
 
 const PLATFORM_ADMIN_EMAIL = "iwatanabe@branberyheag.com";
+
+type WorkspaceRow = { id: string; name: string };
+
+function workspaceKeyForUid(uid?: string | null) {
+  return uid ? `cx_admin_workspace_id:${uid}` : "cx_admin_workspace_id";
+}
+function readSelectedWorkspaceId(uid?: string | null) {
+  return (
+    window.localStorage.getItem(workspaceKeyForUid(uid)) ||
+    window.localStorage.getItem("cx_admin_workspace_id") ||
+    window.localStorage.getItem("selectedWorkspaceId") ||
+    ""
+  );
+}
 
 type Plan = "free" | "pro" | "advanced" | "enterprise";
 type Status = "inactive" | "trialing" | "active" | "past_due" | "canceled";
@@ -62,9 +77,11 @@ function fmtDate(v: string | null | undefined) {
 }
 
 // ── コンポーネント ──────────────────────────────────────────────
-export default function WorkspaceBillingPage({ workspaceId }: { workspaceId?: string }) {
+export default function WorkspaceBillingPage() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [wsId, setWsId] = useState(workspaceId ?? "");
+  const [currentUid, setCurrentUid] = useState<string | null>(null);
+  const [wsId, setWsId] = useState("");
+  const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([]);
   const [billing, setBilling] = useState<Billing | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -89,8 +106,42 @@ export default function WorkspaceBillingPage({ workspaceId }: { workspaceId?: st
 
   const isPlatformAdmin = useMemo(() => userEmail === PLATFORM_ADMIN_EMAIL, [userEmail]);
 
+  const workspaceName = useMemo(() => {
+    const found = workspaces.find((w) => w.id === wsId);
+    return found?.name || wsId || "（未選択）";
+  }, [workspaces, wsId]);
+
+  // 認証ユーザー取得
   useEffect(() => {
-    return onAuthStateChanged(auth, (u) => setUserEmail(u?.email ?? null));
+    return onAuthStateChanged(auth, (u) => {
+      setUserEmail(u?.email ?? null);
+      setCurrentUid(u?.uid ?? null);
+    });
+  }, []);
+
+  // workspaceId を localStorage + イベントで取得
+  useEffect(() => {
+    const read = () => readSelectedWorkspaceId(currentUid);
+    setWsId(read());
+    const handler = (e: Event) => {
+      const next = (e as CustomEvent)?.detail?.workspaceId;
+      if (next) setWsId(next);
+    };
+    window.addEventListener("cx_admin_workspace_changed", handler);
+    return () => window.removeEventListener("cx_admin_workspace_changed", handler);
+  }, [currentUid]);
+
+  // ワークスペース一覧（名前表示用）
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "workspaces"), (snap) => {
+      setWorkspaces(
+        snap.docs.map((d) => ({
+          id: d.id,
+          name: String(d.data()?.name || d.id),
+        }))
+      );
+    });
+    return unsub;
   }, []);
 
   const load = useCallback(async () => {
@@ -204,25 +255,14 @@ export default function WorkspaceBillingPage({ workspaceId }: { workspaceId?: st
 
   return (
     <div style={{ padding: 32, maxWidth: 800 }}>
-      <h2 style={{ margin: "0 0 24px", fontSize: 22, fontWeight: 700 }}>契約・Billing</h2>
-
-      {/* ワークスペースID入力（workspaceIdがpropsで来ない場合） */}
-      {!workspaceId && (
-        <div style={{ marginBottom: 20, display: "flex", gap: 8 }}>
-          <input
-            value={wsId}
-            onChange={(e) => setWsId(e.target.value)}
-            placeholder="ワークスペースID"
-            style={{ flex: 1, padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 14 }}
-          />
-          <button
-            onClick={load}
-            style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 14 }}
-          >
-            読み込む
-          </button>
+      <div style={{ marginBottom: 24 }}>
+        <h2 style={{ margin: "0 0 4px", fontSize: 22, fontWeight: 700 }}>契約・Billing</h2>
+        <div style={{ fontSize: 14, color: "#64748b" }}>
+          対象ワークスペース：
+          <span style={{ fontWeight: 600, color: "#1e293b" }}>{workspaceName}</span>
+          {wsId && <span style={{ marginLeft: 8, fontSize: 12, color: "#94a3b8" }}>（{wsId}）</span>}
         </div>
-      )}
+      </div>
 
       {error && <div style={{ marginBottom: 16, padding: "10px 14px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, color: "#b91c1c", fontSize: 14 }}>{error}</div>}
       {saved && <div style={{ marginBottom: 16, padding: "10px 14px", background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 6, color: "#166534", fontSize: 14 }}>{saved}</div>}
