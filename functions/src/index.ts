@@ -15,6 +15,10 @@ setGlobalOptions({ region: "asia-northeast1" });
 
 const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
 const POSTMARK_SERVER_TOKEN = defineSecret("POSTMARK_SERVER_TOKEN");
+const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
+const STRIPE_WEBHOOK_SECRET = defineSecret("STRIPE_WEBHOOK_SECRET");
+const MISOCA_CLIENT_ID = defineSecret("MISOCA_CLIENT_ID");
+const MISOCA_CLIENT_SECRET = defineSecret("MISOCA_CLIENT_SECRET");
 
 
 /**
@@ -28,14 +32,18 @@ import { registerV1Routes } from "./routes/v1";
 const app = express();
 app.set("etag", false);
 app.use(cors({ origin: true }));
-app.use(express.json({ limit: "1mb" }));
+// rawBody を保持（Stripe webhook の署名検証で必要）
+app.use(express.json({
+  limit: "1mb",
+  verify: (req: any, _res, buf) => { req.rawBody = buf; },
+}));
 
 app.get("/", (_req, res) => res.status(200).send("ok"));
 registerV1Routes(app);
 export const api = onRequest(
 {
   region: "asia-northeast1",
-  secrets: [OPENAI_API_KEY, POSTMARK_SERVER_TOKEN],
+  secrets: [OPENAI_API_KEY, POSTMARK_SERVER_TOKEN, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, MISOCA_CLIENT_ID, MISOCA_CLIENT_SECRET],
 },
 app
 );

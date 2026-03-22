@@ -16,6 +16,10 @@ const admin_1 = require("./services/admin");
 (0, v2_1.setGlobalOptions)({ region: "asia-northeast1" });
 const OPENAI_API_KEY = (0, params_1.defineSecret)("OPENAI_API_KEY");
 const POSTMARK_SERVER_TOKEN = (0, params_1.defineSecret)("POSTMARK_SERVER_TOKEN");
+const STRIPE_SECRET_KEY = (0, params_1.defineSecret)("STRIPE_SECRET_KEY");
+const STRIPE_WEBHOOK_SECRET = (0, params_1.defineSecret)("STRIPE_WEBHOOK_SECRET");
+const MISOCA_CLIENT_ID = (0, params_1.defineSecret)("MISOCA_CLIENT_ID");
+const MISOCA_CLIENT_SECRET = (0, params_1.defineSecret)("MISOCA_CLIENT_SECRET");
 /**
  * ==========================
  * HTTP API: /api/v1/...
@@ -26,12 +30,16 @@ const v1_1 = require("./routes/v1");
 const app = (0, express_1.default)();
 app.set("etag", false);
 app.use((0, cors_1.default)({ origin: true }));
-app.use(express_1.default.json({ limit: "1mb" }));
+// rawBody を保持（Stripe webhook の署名検証で必要）
+app.use(express_1.default.json({
+    limit: "1mb",
+    verify: (req, _res, buf) => { req.rawBody = buf; },
+}));
 app.get("/", (_req, res) => res.status(200).send("ok"));
 (0, v1_1.registerV1Routes)(app);
 exports.api = (0, https_1.onRequest)({
     region: "asia-northeast1",
-    secrets: [OPENAI_API_KEY, POSTMARK_SERVER_TOKEN],
+    secrets: [OPENAI_API_KEY, POSTMARK_SERVER_TOKEN, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, MISOCA_CLIENT_ID, MISOCA_CLIENT_SECRET],
 }, app);
 /**
  * ==========================
