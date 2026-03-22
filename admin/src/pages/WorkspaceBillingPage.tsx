@@ -2,10 +2,13 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import { apiPostJson, auth } from "../firebase";
 
+const PLATFORM_ADMIN_EMAIL = "iwatanabe@branberyheag.com";
+
 const API_PATHS = {
   get: "/v1/workspaces/billing/get",
   update: "/v1/workspaces/billing/update",
   usage: "/v1/workspaces/usage",
+  accessOverride: "/v1/workspaces/access-override/set",
   stripeCheckout: "/v1/stripe/create-checkout-session",
   stripePortal: "/v1/stripe/create-portal-session",
   misocaStatus: "/v1/misoca/status",
@@ -120,6 +123,11 @@ export default function WorkspaceBillingPage() {
   const [misocaStatus, setMisocaStatus] = useState<{ connected: boolean; expired?: boolean; expires_at?: string } | null>(null);
   const [stripeLoading, setStripeLoading] = useState(false);
   const [usage, setUsage] = useState<Usage | null>(null);
+  const [currentUserEmail, setCurrentUserEmail] = useState<string>("");
+  const [overrideDays, setOverrideDays] = useState<number>(30);
+  const [overrideNote, setOverrideNote] = useState<string>("");
+  const [overrideSaving, setOverrideSaving] = useState(false);
+  const isPlatformAdmin = currentUserEmail === PLATFORM_ADMIN_EMAIL;
 
   // form fields
   const [plan, setPlan] = useState<Plan>("free");
@@ -166,6 +174,7 @@ export default function WorkspaceBillingPage() {
       const uid = user?.uid || "";
       setCurrentUid(uid);
       setWorkspaceId(readSelectedWorkspaceId(uid));
+      setCurrentUserEmail(user?.email?.toLowerCase() || "");
     });
   }, []);
 
@@ -451,6 +460,107 @@ export default function WorkspaceBillingPage() {
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* アクセス免除（platform admin のみ） */}
+      {isPlatformAdmin && billing && (
+        <div className="card" style={{ marginBottom: 20, border: "1.5px solid #e0e7ff", background: "#f5f3ff" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <div className="h2" style={{ margin: 0, color: "#4c1d95" }}>🔑 アクセス免除</div>
+            <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 20, background: "#4c1d95", color: "#fff", fontWeight: 700 }}>Admin only</span>
+          </div>
+
+          {/* 現在の状態 */}
+          {billing.access_override_until ? (
+            <div style={{ marginBottom: 12, padding: "10px 14px", borderRadius: 8, background: (billing as any).access_override_active ? "#f0fdf4" : "#fef2f2", border: `1px solid ${(billing as any).access_override_active ? "#bbf7d0" : "#fca5a5"}` }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span style={{ fontWeight: 700, fontSize: 13, color: (billing as any).access_override_active ? "#16a34a" : "#dc2626" }}>
+                  {(billing as any).access_override_active ? "✓ 免除中" : "期限切れ"}
+                </span>
+                <span className="small" style={{ opacity: 0.7 }}>
+                  〜 {new Date(billing.access_override_until).toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" })}
+                </span>
+              </div>
+              {(billing as any).access_override_note && (
+                <div className="small" style={{ opacity: 0.7, marginTop: 4 }}>{(billing as any).access_override_note}</div>
+              )}
+            </div>
+          ) : (
+            <div className="small" style={{ opacity: 0.55, marginBottom: 12 }}>現在アクセス免除は設定されていません</div>
+          )}
+
+          {/* 設定フォーム */}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <div>
+              <div className="small" style={{ opacity: 0.7, marginBottom: 4 }}>日数</div>
+              <div style={{ display: "flex", border: "1px solid #c4b5fd", borderRadius: 8, overflow: "hidden" }}>
+                {[7, 14, 30, 60, 90].map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setOverrideDays(d)}
+                    style={{
+                      padding: "6px 12px", border: "none", cursor: "pointer", fontSize: 13,
+                      background: overrideDays === d ? "#7c3aed" : "transparent",
+                      color: overrideDays === d ? "#fff" : "#4c1d95",
+                      fontWeight: overrideDays === d ? 700 : 400,
+                    }}
+                  >
+                    {d}日
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ flex: "1 1 180px" }}>
+              <div className="small" style={{ opacity: 0.7, marginBottom: 4 }}>メモ（任意）</div>
+              <input
+                className="input"
+                value={overrideNote}
+                onChange={(e) => setOverrideNote(e.target.value)}
+                placeholder="検証用・社内テストなど"
+                style={{ borderColor: "#c4b5fd" }}
+              />
+            </div>
+            <button
+              className="btn"
+              disabled={overrideSaving || !canLoad}
+              onClick={async () => {
+                setOverrideSaving(true);
+                try {
+                  const d = await apiPostJson<any>(API_PATHS.accessOverride, {
+                    workspace_id: workspaceId.trim(),
+                    days: overrideDays,
+                    note: overrideNote || `${overrideDays}日間アクセス免除`,
+                  });
+                  if (!d?.ok) throw new Error(d?.message || "failed");
+                  showToast(`${overrideDays}日間のアクセス免除を設定しました ✓`);
+                  await load();
+                } catch (e: any) { setErr(e?.message || String(e)); }
+                finally { setOverrideSaving(false); }
+              }}
+              style={{ background: "#7c3aed", borderColor: "#7c3aed", color: "#fff" }}
+            >
+              {overrideSaving ? "設定中..." : "免除を設定"}
+            </button>
+            {billing.access_override_until && (
+              <button
+                className="btn btn--ghost btn--sm"
+                disabled={overrideSaving || !canLoad}
+                onClick={async () => {
+                  setOverrideSaving(true);
+                  try {
+                    await apiPostJson<any>(API_PATHS.accessOverride, { workspace_id: workspaceId.trim(), clear: true });
+                    showToast("アクセス免除を解除しました");
+                    await load();
+                  } catch (e: any) { setErr(e?.message || String(e)); }
+                  finally { setOverrideSaving(false); }
+                }}
+              >
+                解除
+              </button>
+            )}
           </div>
         </div>
       )}

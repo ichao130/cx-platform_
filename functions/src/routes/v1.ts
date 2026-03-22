@@ -597,6 +597,11 @@ function buildBillingResponse(billing: any, planDoc?: any, overrideDoc?: any) {
     stripe_price_id: billing?.stripe_price_id || null,
     custom_limit_override_id: billing?.custom_limit_override_id || null,
     manual_billing_note: billing?.manual_billing_note || "",
+    access_override_until: billing?.access_override_until || null,
+    access_override_note: billing?.access_override_note || "",
+    access_override_active: billing?.access_override_until
+      ? new Date(billing.access_override_until) > new Date()
+      : false,
     plan_master: planDoc
       ? {
           id: planDoc.id || "",
@@ -3665,6 +3670,67 @@ export function registerV1Routes(app: Express) {
     } catch (e: any) {
       return res.status(403).send(e?.message || "forbidden");
     }
+  });
+
+  /* ============================================================
+     アクセス免除（開発者・検証用フルアクセス付与）
+  ============================================================ */
+
+  /* -----------------------------
+     POST /v1/workspaces/access-override/set
+     - platform admin のみ実行可能
+     - 指定日数フルアクセスを付与（または解除）
+  ------------------------------ */
+  app.post("/v1/workspaces/access-override/set", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+
+      const body = z.object({
+        workspace_id: z.string().min(1),
+        days: z.number().int().min(0).max(3650).optional(), // 0で解除
+        note: z.string().max(500).optional().default(""),
+        clear: z.boolean().optional().default(false),
+      }).parse(req.body);
+
+      await requirePlatformAdmin(req);
+
+      const db = adminDb();
+      const now = FieldValue.serverTimestamp();
+
+      if (body.clear || body.days === 0) {
+        await db.collection("workspace_billing").doc(body.workspace_id).set({
+          access_override_until: null,
+          access_override_note: "",
+          updatedAt: now,
+        }, { merge: true });
+        return res.json({ ok: true, access_override_active: false, access_override_until: null });
+      }
+
+      const days = body.days ?? 30;
+      const until = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+
+      await db.collection("workspace_billing").doc(body.workspace_id).set({
+        access_override_until: until,
+        access_override_note: body.note || `${days}日間アクセス免除`,
+        updatedAt: now,
+      }, { merge: true });
+
+      return res.json({ ok: true, access_override_active: true, access_override_until: until, days });
+    } catch (e: any) {
+      console.error("[/v1/workspaces/access-override/set] error:", e);
+      return res.status(
+        e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401
+        : e?.message === "platform_admin_only" ? 403
+        : 400
+      ).json({ ok: false, error: "access_override_failed", message: e?.message || String(e) });
+    }
+  });
+
+  app.options("/v1/workspaces/access-override/set", (req, res) => {
+    corsByAdminOrigins(req, res);
+    res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+    res.status(204).send("");
   });
 
   /* ============================================================
