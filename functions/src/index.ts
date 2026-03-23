@@ -38,6 +38,12 @@ app.use(express.json({
   verify: (req: any, _res, buf) => { req.rawBody = buf; },
 }));
 
+// Firebase Hosting 経由（/api/v1/...）と直接URL（/v1/...）の両方に対応
+app.use((req, _res, next) => {
+  if (req.url.startsWith("/api/")) req.url = req.url.slice(4); // "/api" を除去
+  next();
+});
+
 app.get("/", (_req, res) => res.status(200).send("ok"));
 registerV1Routes(app);
 export const api = onRequest(

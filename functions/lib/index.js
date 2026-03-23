@@ -35,6 +35,12 @@ app.use(express_1.default.json({
     limit: "1mb",
     verify: (req, _res, buf) => { req.rawBody = buf; },
 }));
+// Firebase Hosting 経由（/api/v1/...）と直接URL（/v1/...）の両方に対応
+app.use((req, _res, next) => {
+    if (req.url.startsWith("/api/"))
+        req.url = req.url.slice(4); // "/api" を除去
+    next();
+});
 app.get("/", (_req, res) => res.status(200).send("ok"));
 (0, v1_1.registerV1Routes)(app);
 exports.api = (0, https_1.onRequest)({
