@@ -55,6 +55,16 @@ function pct(num: number, denom: number) {
 
 function workspaceKeyForUid(uid: string) {
   return `cx_admin_workspace_id:${uid}`;
+
+function siteKey(workspaceId: string) {
+  return `cx_admin_site_id:${workspaceId}`;
+}
+function readSelectedSiteId(workspaceId: string) {
+  return localStorage.getItem(siteKey(workspaceId)) || "";
+}
+function writeSelectedSiteId(workspaceId: string, siteId: string) {
+  localStorage.setItem(siteKey(workspaceId), siteId);
+}
 }
 
 function readSelectedWorkspaceId(uid?: string) {
@@ -288,7 +298,10 @@ export default function AnalyticsPage() {
     return onSnapshot(q, (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, data: d.data() }));
       setSites(list);
-      if (!siteId && list.length) setSiteId(list[0].id);
+      // localStorage から復元、なければ先頭を選択
+      const saved = readSelectedSiteId(workspaceId);
+      const validId = saved && list.some((s) => s.id === saved) ? saved : list[0]?.id || "";
+      setSiteId(validId);
     });
   }, [workspaceId]);
 
@@ -540,7 +553,10 @@ export default function AnalyticsPage() {
           <select
             className="input"
             value={siteId}
-            onChange={(e) => setSiteId(e.target.value)}
+            onChange={(e) => {
+              setSiteId(e.target.value);
+              writeSelectedSiteId(workspaceId, e.target.value);
+            }}
             style={{ minWidth: 160 }}
           >
             {sites.length === 0 && <option value="">（サイトなし）</option>}
