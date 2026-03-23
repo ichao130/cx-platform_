@@ -34,6 +34,7 @@ type AccessKey =
 type AppRoutesProps = {
   canAccess?: (key: AccessKey) => boolean;
   workspaceRole?: string | null;
+  isPlatformAdmin?: boolean;
 };
 
 function canShow(canAccess: AppRoutesProps["canAccess"], key: AccessKey) {
@@ -59,7 +60,7 @@ function Guard({
   );
 }
 
-export default function AppRoutes({ canAccess, workspaceRole }: AppRoutesProps) {
+export default function AppRoutes({ canAccess, workspaceRole, isPlatformAdmin }: AppRoutesProps) {
   return (
     <div className="container">
       <Routes>
@@ -68,7 +69,7 @@ export default function AppRoutes({ canAccess, workspaceRole }: AppRoutesProps) 
 
         <Route path="/dashboard" element={<Guard allow={canShow(canAccess, "dashboard")} title="ダッシュボード"><DashboardPage /></Guard>} />
         <Route path="/analytics" element={<Guard allow={canShow(canAccess, "analytics")} title="流入計測"><AnalyticsPage /></Guard>} />
-        <Route path="/workspaces" element={<Guard allow={canShow(canAccess, "workspaces")} title="ワークスペース"><WorkspacesPage /></Guard>} />
+        <Route path="/workspaces" element={<Guard allow={isPlatformAdmin || canShow(canAccess, "workspaces")} title="ワークスペース"><WorkspacesPage /></Guard>} />
         <Route path="/sites" element={<Guard allow={canShow(canAccess, "sites")} title="サイト"><SitesPage /></Guard>} />
         <Route path="/scenarios" element={<Guard allow={canShow(canAccess, "scenarios")} title="シナリオ"><ScenariosPage /></Guard>} />
         <Route path="/actions" element={<Guard allow={canShow(canAccess, "actions")} title="アクション"><ActionsPage /></Guard>} />

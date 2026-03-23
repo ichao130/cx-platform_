@@ -475,7 +475,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
             設定
           </div>
           <div style={{ display: "grid", gap: 4 }}>
-            {canShow(canAccess, "workspaces") && <SidebarLink to="/workspaces">ワークスペース</SidebarLink>}
+            {(isPlatformAdmin || canShow(canAccess, "workspaces")) && <SidebarLink to="/workspaces">ワークスペース</SidebarLink>}
             {canShow(canAccess, "members") && <SidebarLink to="/workspace/members">メンバー</SidebarLink>}
             {canShow(canAccess, "billing") && <SidebarLink to="/workspace/billing">契約 / Billing</SidebarLink>}
             {isPlatformAdmin ? <SidebarLink to="/plans">Plans / マスタ管理</SidebarLink> : null}
@@ -1066,7 +1066,7 @@ function AppRoutesGuarded() {
     return <Navigate to="/dashboard" replace />;
   }
 
-  return <AppRoutes />;
+  return <AppRoutes isPlatformAdmin={isPlatformAdmin} />;
 }
 
 export default function App() {
