@@ -2,11 +2,113 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function isSignedIn() { return request.auth != null; }
+    // ── ヘルパー関数 ─────────────────────────────────────────────
 
-    // Admin UI uses Firebase Auth (Google). You can later tighten by workspace membership.
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // workspaces ドキュメントの members マップで確認
+    function isMember(workspaceId) {
+      return isSignedIn() &&
+        get(/databases/$(database)/documents/workspaces/$(workspaceId))
+          .data.members[request.auth.uid] != null;
+    }
+
+    function isOwnerOrAdmin(workspaceId) {
+      return isSignedIn() &&
+        get(/databases/$(database)/documents/workspaces/$(workspaceId))
+          .data.members[request.auth.uid] in ['owner', 'admin'];
+    }
+
+    // ── ユーザー自身のドキュメント ───────────────────────────────
+    match /users/{userId} {
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    // ── ワークスペース ───────────────────────────────────────────
+    // 読み取り: メンバーのみ / 書き込み: API経由（admin SDK）のみ
+    match /workspaces/{workspaceId} {
+      allow read: if isMember(workspaceId);
+      allow write: if false; // Cloud Functions (admin SDK) のみ
+    }
+
+    // ── サイト ───────────────────────────────────────────────────
+    match /sites/{siteId} {
+      allow read: if isSignedIn() && isMember(resource.data.workspaceId);
+      allow write: if false; // Cloud Functions のみ
+    }
+
+    // ── シナリオ ─────────────────────────────────────────────────
+    match /scenarios/{scenarioId} {
+      allow read: if isSignedIn() && isMember(resource.data.workspaceId);
+      allow write: if false; // Cloud Functions のみ
+    }
+
+    // ── アクション ───────────────────────────────────────────────
+    match /actions/{actionId} {
+      allow read: if isSignedIn() && isMember(resource.data.workspaceId);
+      allow write: if false; // Cloud Functions のみ
+    }
+
+    // ── テンプレート（クライアントから直接書き込みあり） ─────────
+    match /templates/{templateId} {
+      allow read: if isSignedIn() && isMember(resource.data.workspaceId);
+      allow create: if isSignedIn() && isMember(request.resource.data.workspaceId);
+      allow update, delete: if isSignedIn() && isMember(resource.data.workspaceId);
+    }
+
+    // ── メディア ─────────────────────────────────────────────────
+    match /media/{mediaId} {
+      allow read: if isSignedIn() && isMember(resource.data.workspaceId);
+      allow create: if isSignedIn() && isMember(request.resource.data.workspaceId);
+      allow update, delete: if isSignedIn() && isMember(resource.data.workspaceId);
+    }
+
+    // ── ログ（SDK → Cloud Functions → admin SDK で書き込み）──────
+    match /logs/{logId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    // ── 日別統計（Cloud Functions が書き込み）────────────────────
+    match /stats_daily/{statId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    // ── プラン（読み取りは認証済み、書き込みはAPIのみ）──────────
+    match /plans/{planId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    // ── 課金情報（オーナー/管理者のみ読み取り）──────────────────
+    match /workspace_billing/{workspaceId} {
+      allow read: if isOwnerOrAdmin(workspaceId);
+      allow write: if false;
+    }
+
+    // ── 利用制限オーバーライド ───────────────────────────────────
+    match /workspace_limit_overrides/{workspaceId} {
+      allow read: if isOwnerOrAdmin(workspaceId);
+      allow write: if false;
+    }
+
+    // ── 招待（トークンで受け入れ可、書き込みはAPIのみ）──────────
+    match /workspace_invites/{inviteId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    // ── Misocaトークン（クライアントからアクセス不可）───────────
+    match /workspace_misoca_tokens/{docId} {
+      allow read, write: if false;
+    }
+
+    // ── 上記以外は全拒否 ─────────────────────────────────────────
     match /{document=**} {
-      allow read, write: if isSignedIn();
+      allow read, write: if false;
     }
   }
 }
