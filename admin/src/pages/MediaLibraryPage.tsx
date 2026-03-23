@@ -162,7 +162,6 @@ export default function MediaPage() {
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const selectedWorkspaceName = useMemo(() => workspaceLabel(workspaces, workspaceId), [workspaces, workspaceId]);
-  const [showJsonId, setShowJsonId] = useState('');
 
   // 最新追加を自動選択したい
   const lastUploadedRef = useRef<{ workspaceId: string; downloadURL: string } | null>(null);
@@ -711,7 +710,7 @@ export default function MediaPage() {
         <div className="list-toolbar">
           <div className="list-toolbar__filters">
             <div className="small" style={{ opacity: 0.74 }}>
-              ファイル名を中心に確認できます。使用中の素材は削除前に参照先を確認してください。確認用JSONは必要な時だけ表示します。
+              ファイル名を中心に確認できます。使用中の素材は削除前に参照先を確認してください。
             </div>
           </div>
         </div>
@@ -726,14 +725,12 @@ export default function MediaPage() {
                 <th style={{ width: 160 }}>種類</th>
                 <th style={{ width: 120 }}>サイズ</th>
                 <th style={{ width: 120 }}>使用数</th>
-                <th style={{ width: 120 }}>詳細</th>
                 <th style={{ width: 200 }}></th>
               </tr>
             </thead>
             <tbody>
             {filtered.map((r) => {
               const used = usedInMap.get(r.id)?.length || 0;
-              const isJsonOpen = showJsonId === r.id;
               return (
                 <React.Fragment key={r.id}>
                   <tr>
@@ -784,11 +781,6 @@ export default function MediaPage() {
                     <td className="small">{fmtSize(r.data.size)}</td>
                     <td className="small">{used ? <b>{used}</b> : <span style={{ opacity: 0.65 }}>0</span>}</td>
                     <td>
-                      <button className="btn" onClick={() => setShowJsonId(isJsonOpen ? '' : r.id)}>
-                        {isJsonOpen ? 'JSONを閉じる' : 'JSONを表示'}
-                      </button>
-                    </td>
-                    <td>
                       <button className="btn" onClick={() => setSelected(r)}>詳細を見る</button>
                       <span style={{ width: 8, display: 'inline-block' }} />
                       <button className="btn btn--danger" onClick={() => {
@@ -799,16 +791,6 @@ export default function MediaPage() {
                       </button>
                     </td>
                   </tr>
-                  {isJsonOpen ? (
-                    <tr>
-                      <td colSpan={8}>
-                        <div className="small" style={{ marginBottom: 8, opacity: 0.74 }}>
-                          確認用JSON（必要な時だけ表示）
-                        </div>
-                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(r.data, null, 2)}</pre>
-                      </td>
-                    </tr>
-                  ) : null}
                 </React.Fragment>
               );
             })}

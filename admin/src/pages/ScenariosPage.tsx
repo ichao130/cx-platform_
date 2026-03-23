@@ -244,8 +244,6 @@ export default function ScenariosPage() {
   const [actionIdToAdd, setActionIdToAdd] = useState("");
   const [variantIdToEdit, setVariantIdToEdit] = useState<string>("A");
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [showJsonId, setShowJsonId] = useState("");
-  const [showModalJson, setShowModalJson] = useState(false);
 
   // schedule
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
@@ -703,13 +701,11 @@ export default function ScenariosPage() {
 
   function openCreateModal() {
     resetForm();
-    setShowModalJson(false);
     setIsModalOpen(true);
   }
 
   function openEditModal(docId: string, s: Scenario) {
     loadScenario(docId, s);
-    setShowModalJson(false);
     setIsModalOpen(true);
   }
 
@@ -914,7 +910,7 @@ export default function ScenariosPage() {
         </div>
 
         <div className="small" style={{ opacity: 0.74, marginBottom: 10 }}>
-          A/B、コンバージョン、アクション数、AIレビュー導線を一覧で確認できます。確認用JSONは必要な時だけ表示します。
+          A/B、コンバージョン、アクション数、AIレビュー導線を一覧で確認できます。
         </div>
         <div className="liquid-scroll-x">
         <table className="table">
@@ -927,7 +923,6 @@ export default function ScenariosPage() {
               <th>A/B</th>
               <th>コンバージョン</th>
               <th>アクション数</th>
-              <th>詳細</th>
               <th>AIツール</th>
               <th></th>
             </tr>
@@ -943,8 +938,6 @@ export default function ScenariosPage() {
                     0
                   )
                 : (r.data.actionRefs || []).length;
-
-              const isJsonOpen = showJsonId === r.id;
 
               return (
                 <Fragment key={r.id}>
@@ -963,11 +956,6 @@ export default function ScenariosPage() {
                     <td>{ab ? "ON" : "OFF"}</td>
                     <td className="small">{goalLabel}</td>
                     <td style={{ textAlign: "center" }}>{actionsCount}</td>
-                    <td>
-                      <button className="btn" onClick={() => setShowJsonId(isJsonOpen ? "" : r.id)}>
-                        {isJsonOpen ? "JSONを閉じる" : "JSONを表示"}
-                      </button>
-                    </td>
                     <td style={{ whiteSpace: "nowrap" }}>
                       <button
                         className="btn"
@@ -1000,18 +988,6 @@ export default function ScenariosPage() {
                     </td>
                   </tr>
 
-                  {isJsonOpen ? (
-                    <tr>
-                      <td colSpan={10}>
-                        <div className="small" style={{ marginBottom: 8, opacity: 0.74 }}>
-                          確認用JSON（必要な時だけ表示）
-                        </div>
-                        <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
-                          {JSON.stringify(r.data, null, 2)}
-                        </pre>
-                      </td>
-                    </tr>
-                  ) : null}
                 </Fragment>
               );
             })}
@@ -1045,13 +1021,10 @@ export default function ScenariosPage() {
                   {rows.some((r) => r.id === id) ? "シナリオを編集" : "シナリオを作成"}
                 </h2>
                 <div className="small">
-                  新規登録・編集はモーダルで行います。条件、A/B、アクション、確認用JSONはここで確認してください。
+                  新規登録・編集はモーダルで行います。条件、A/B、アクションはここで確認してください。
                 </div>
               </div>
               <div className="page-header__actions">
-                <button className="btn" onClick={() => setShowModalJson((v) => !v)}>
-                  {showModalJson ? "JSONを隠す" : "JSONを表示"}
-                </button>
                 <button className="btn" onClick={() => setIsModalOpen(false)}>閉じる</button>
               </div>
             </div>
@@ -1703,15 +1676,6 @@ export default function ScenariosPage() {
               </div>
 
               <div style={{ flex: 1, minWidth: 280 }}>
-                {showModalJson ? (
-                  <>
-                    <div className="h2">確認用JSON（上級者向け）</div>
-                    <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
-                      {JSON.stringify(payload, null, 2)}
-                    </pre>
-                    <div style={{ height: 12 }} />
-                  </>
-                ) : null}
                 <div className="card" style={{ background: "linear-gradient(180deg,#ffffff,#f8fbff)" }}>
                   <div className="h2">この画面の考え方</div>
                   <ul className="small">

@@ -472,8 +472,6 @@ export default function ActionsPage() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const selectedWorkspaceName = useMemo(() => workspaceLabel(workspaces, workspaceId), [workspaces, workspaceId]);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [showJsonId, setShowJsonId] = useState('');
-  const [showModalJson, setShowModalJson] = useState(false);
 
   // toast / delete confirm
   const [toast, setToast] = useState<{ msg: string; type: "success" | "error" } | null>(null);
@@ -544,7 +542,6 @@ export default function ActionsPage() {
 
   function openCreateModal() {
     resetEditor();
-    setShowModalJson(false);
     setIsModalOpen(true);
   }
 
@@ -567,7 +564,6 @@ export default function ActionsPage() {
     setImageMediaId(f.imageMediaId);
     setMediaIds(f.mediaIds);
     setUploadErr("");
-    setShowModalJson(false);
     setIsModalOpen(true);
   }
 
@@ -833,7 +829,7 @@ export default function ActionsPage() {
         <div className="list-toolbar">
           <div className="list-toolbar__filters">
             <div className="small" style={{ opacity: 0.74 }}>
-              名前を中心に一覧化しています。表示位置やメディア設定、確認用JSONは編集時または詳細表示で確認します。
+              名前を中心に一覧化しています。表示位置やメディア設定は編集時に確認します。
             </div>
           </div>
           <div className="list-toolbar__actions">
@@ -871,7 +867,6 @@ export default function ActionsPage() {
                 <th>表示タイプ</th>
                 <th>表示位置</th>
                 <th>メディア</th>
-                <th>詳細</th>
                 <th></th>
               </tr>
             </thead>
@@ -879,7 +874,6 @@ export default function ActionsPage() {
             {rows.map((r) => {
               const ids = Array.isArray(r.data.mediaIds) ? r.data.mediaIds : [];
               const thumbIds = ids.slice(0, 4);
-              const isJsonOpen = showJsonId === r.id;
               const selectorText = r.data.mount?.selector || r.data.selector || "body";
               return (
                 <React.Fragment key={r.id}>
@@ -963,11 +957,6 @@ export default function ActionsPage() {
                       </div>
                     </td>
                     <td>
-                      <button className="btn" onClick={() => setShowJsonId(isJsonOpen ? '' : r.id)}>
-                        {isJsonOpen ? 'JSONを閉じる' : 'JSONを表示'}
-                      </button>
-                    </td>
-                    <td>
                       <button className="btn" onClick={() => openEditModal(r)}>
                         編集
                       </button>
@@ -991,16 +980,6 @@ export default function ActionsPage() {
                       </button>
                     </td>
                   </tr>
-                  {isJsonOpen ? (
-                    <tr>
-                      <td colSpan={7}>
-                        <div className="small" style={{ marginBottom: 8, opacity: 0.74 }}>
-                          確認用JSON（必要な時だけ表示）
-                        </div>
-                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(r.data, null, 2)}</pre>
-                      </td>
-                    </tr>
-                  ) : null}
                 </React.Fragment>
               );
             })}
@@ -1034,12 +1013,9 @@ export default function ActionsPage() {
             <div className="page-header" style={{ marginBottom: 10 }}>
               <div className="page-header__meta">
                 <h2 className="h1" style={{ fontSize: 22 }}>{rows.some((r) => r.id === id) ? 'アクションを編集' : 'アクションを作成'}</h2>
-                <div className="small">新規登録・編集はモーダルで行います。メディア設定や確認用JSONは必要な時だけ確認してください。</div>
+                <div className="small">新規登録・編集はモーダルで行います。メディア設定は必要な時だけ確認してください。</div>
               </div>
               <div className="page-header__actions">
-                <button className="btn" onClick={() => setShowModalJson((v) => !v)}>
-                  {showModalJson ? 'JSONを隠す' : 'JSONを表示'}
-                </button>
                 <button className="btn" onClick={() => { setIsModalOpen(false); setUploadErr(''); }}>
                   閉じる
                 </button>
@@ -1410,16 +1386,6 @@ export default function ActionsPage() {
                   </div>
                 )}
 
-                {showModalJson ? (
-                  <>
-                    <div style={{ height: 14 }} />
-                    <div className="h2">確認用JSON（上級者向け）</div>
-                    <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{JSON.stringify(payload, null, 2)}</pre>
-                    <div className="small" style={{ marginTop: 8 }}>
-                      バナー / トーストでは <code>mount.selector</code> が入っていることを確認してください。
-                    </div>
-                  </>
-                ) : null}
               </div>
             </div>
           </div>

@@ -63,7 +63,6 @@ export default function SitesPage() {
   const [currentUid, setCurrentUid] = useState('');
   const [copyMessage, setCopyMessage] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [showJsonId, setShowJsonId] = useState('');
   const [tagMode, setTagMode] = useState<'direct' | 'gtm'>('direct');
 
   useEffect(() => {
@@ -315,14 +314,12 @@ export default function SitesPage() {
                 <th>ワークスペース</th>
                 <th>対象ドメイン</th>
                 <th>公開キー</th>
-                <th>詳細</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
             {rows.map((r) => {
               const domainSummary = summarizeDomains(r.data.domains || []);
-              const isJsonOpen = showJsonId === r.id;
               return (
                 <Fragment key={r.id}>
                   <tr>
@@ -360,11 +357,6 @@ export default function SitesPage() {
                       )}
                     </td>
                     <td>
-                      <button className="btn" onClick={() => setShowJsonId(isJsonOpen ? '' : r.id)}>
-                        {isJsonOpen ? 'JSONを閉じる' : 'JSONを表示'}
-                      </button>
-                    </td>
-                    <td>
                       <button className="btn" onClick={() => openEditModal(r)}>
                         編集
                       </button>
@@ -374,16 +366,6 @@ export default function SitesPage() {
                       </button>
                     </td>
                   </tr>
-                  {isJsonOpen ? (
-                    <tr>
-                      <td colSpan={6}>
-                        <div className="small" style={{ marginBottom: 8, opacity: 0.74 }}>
-                          確認用JSON（必要な時だけ表示）
-                        </div>
-                        <pre style={{ margin: 0 }}>{JSON.stringify(r.data, null, 2)}</pre>
-                      </td>
-                    </tr>
-                  ) : null}
                 </Fragment>
               );
             })}

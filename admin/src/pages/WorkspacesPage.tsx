@@ -191,7 +191,6 @@ export default function WorkspacesPage() {
   const [accessMatrix, setAccessMatrix] = useState(() => defaultAccessMatrix());
   const [error, setError] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [showJsonId, setShowJsonId] = useState('');
   const [mediaRows, setMediaRows] = useState<MediaRow[]>([]);
   const [isLogoPickerOpen, setIsLogoPickerOpen] = useState(false);
   const [logoSearch, setLogoSearch] = useState('');
@@ -465,7 +464,6 @@ export default function WorkspacesPage() {
               <th>ワークスペース</th>
               <th>初期設定</th>
               <th>権限サマリー</th>
-              <th>詳細</th>
               <th></th>
             </tr>
           </thead>
@@ -473,7 +471,6 @@ export default function WorkspacesPage() {
             {rows.map((r) => {
               const accessSummary = summarizeAccess(r.data.defaults?.access);
               const isSelected = selectedWorkspaceId === r.id;
-              const isJsonOpen = showJsonId === r.id;
               return (
                 <Fragment key={r.id}>
                   <tr>
@@ -525,14 +522,6 @@ export default function WorkspacesPage() {
                     </td>
                     <td>
                       <button
-                        className="btn"
-                        onClick={() => setShowJsonId(isJsonOpen ? '' : r.id)}
-                      >
-                        {isJsonOpen ? 'JSONを閉じる' : 'JSONを表示'}
-                      </button>
-                    </td>
-                    <td>
-                      <button
                         className={"btn " + (isSelected ? 'btn--primary' : '')}
                         onClick={() => {
                           setSelectedWorkspaceId(r.id, currentUid);
@@ -551,16 +540,6 @@ export default function WorkspacesPage() {
                       </button>
                     </td>
                   </tr>
-                  {isJsonOpen ? (
-                    <tr>
-                      <td colSpan={5}>
-                        <div className="small" style={{ marginBottom: 8, opacity: 0.74 }}>
-                          確認用JSON（必要な時だけ表示）
-                        </div>
-                        <pre style={{ margin: 0 }}>{JSON.stringify(r.data, null, 2)}</pre>
-                      </td>
-                    </tr>
-                  ) : null}
                 </Fragment>
               );
             })}
