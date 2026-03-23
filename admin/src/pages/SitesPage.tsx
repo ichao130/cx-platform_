@@ -64,6 +64,7 @@ export default function SitesPage() {
   const [copyMessage, setCopyMessage] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [showJsonId, setShowJsonId] = useState('');
+  const [tagMode, setTagMode] = useState<'direct' | 'gtm'>('direct');
 
   useEffect(() => {
     return onAuthStateChanged(getAuth(), (user) => {
@@ -168,8 +169,11 @@ export default function SitesPage() {
   const embedTag = useMemo(() => {
     const safeSiteId = String(id || '').trim();
     const safePublicKey = String(publicKey || '').trim();
+    if (tagMode === 'gtm') {
+      return `<script>\n(function() {\n  var s = document.createElement('script');\n  s.src = 'https://app.mokkeda.com/sdk.js';\n  s.setAttribute('data-site-id', '${safeSiteId}');\n  s.setAttribute('data-site-key', '${safePublicKey}');\n  document.head.appendChild(s);\n})();\n</script>`;
+    }
     return `<script\n  src="https://app.mokkeda.com/sdk.js"\n  data-site-id="${safeSiteId}"\n  data-site-key="${safePublicKey}"\n  defer\n></script>`;
-  }, [id, publicKey]);
+  }, [id, publicKey, tagMode]);
 
   function resetEditor() {
     setId(genId('site'));
@@ -483,8 +487,30 @@ export default function SitesPage() {
                 <div className="card" style={{ background: 'var(--panel2)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
                     <div>
-                      <div className="h2" style={{ marginBottom: 2 }}>埋め込みタグ</div>
-                      <div className="small">サイトの {'<head>'} 内にこのタグを貼り付けてください</div>
+                      <div className="h2" style={{ marginBottom: 6 }}>埋め込みタグ</div>
+                      {/* タブ切り替え */}
+                      <div style={{ display: 'flex', gap: 0, background: 'rgba(0,0,0,.15)', borderRadius: 8, padding: 3, width: 'fit-content' }}>
+                        {(['direct', 'gtm'] as const).map((mode) => (
+                          <button
+                            key={mode}
+                            onClick={() => setTagMode(mode)}
+                            style={{
+                              padding: '4px 14px',
+                              borderRadius: 6,
+                              border: 'none',
+                              cursor: 'pointer',
+                              fontSize: 12,
+                              fontWeight: 600,
+                              background: tagMode === mode ? '#fff' : 'transparent',
+                              color: tagMode === mode ? '#1e293b' : 'rgba(255,255,255,.6)',
+                              boxShadow: tagMode === mode ? '0 1px 3px rgba(0,0,0,.15)' : 'none',
+                              transition: 'all .15s',
+                            }}
+                          >
+                            {mode === 'direct' ? '直接埋め込み' : 'タグマネージャー'}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                     <button
                       className="btn btn--primary"
@@ -503,6 +529,12 @@ export default function SitesPage() {
                       )}
                     </button>
                   </div>
+                  {/* 説明文 */}
+                  <div className="small" style={{ marginBottom: 8, opacity: 0.7 }}>
+                    {tagMode === 'direct'
+                      ? 'サイトの <head> 内に直接貼り付けてください'
+                      : 'GTM の「カスタムHTML」タグとして貼り付けてください'}
+                  </div>
                   <pre style={{
                     margin: 0,
                     padding: '16px',
@@ -517,12 +549,28 @@ export default function SitesPage() {
                     cursor: 'text',
                     border: '1px solid rgba(255,255,255,.06)',
                   }}>
-                    <span style={{ color: '#7ec8e3' }}>&lt;script</span>{'\n'}
-                    {'  '}<span style={{ color: '#a8d8a8' }}>src</span><span style={{ color: '#e2f0f5' }}>="</span><span style={{ color: '#ffd580' }}>https://app.mokkeda.com/sdk.js</span><span style={{ color: '#e2f0f5' }}>"</span>{'\n'}
-                    {'  '}<span style={{ color: '#a8d8a8' }}>data-site-id</span><span style={{ color: '#e2f0f5' }}>="</span><span style={{ color: '#ffd580' }}>{String(id || '').trim()}</span><span style={{ color: '#e2f0f5' }}>"</span>{'\n'}
-                    {'  '}<span style={{ color: '#a8d8a8' }}>data-site-key</span><span style={{ color: '#e2f0f5' }}>="</span><span style={{ color: '#ffd580' }}>{String(publicKey || '').trim()}</span><span style={{ color: '#e2f0f5' }}>"</span>{'\n'}
-                    {'  '}<span style={{ color: '#a8d8a8' }}>defer</span>{'\n'}
-                    <span style={{ color: '#7ec8e3' }}>&gt;&lt;/script&gt;</span>
+                    {tagMode === 'direct' ? (
+                      <>
+                        <span style={{ color: '#7ec8e3' }}>&lt;script</span>{'\n'}
+                        {'  '}<span style={{ color: '#a8d8a8' }}>src</span><span style={{ color: '#e2f0f5' }}>="</span><span style={{ color: '#ffd580' }}>https://app.mokkeda.com/sdk.js</span><span style={{ color: '#e2f0f5' }}>"</span>{'\n'}
+                        {'  '}<span style={{ color: '#a8d8a8' }}>data-site-id</span><span style={{ color: '#e2f0f5' }}>="</span><span style={{ color: '#ffd580' }}>{String(id || '').trim()}</span><span style={{ color: '#e2f0f5' }}>"</span>{'\n'}
+                        {'  '}<span style={{ color: '#a8d8a8' }}>data-site-key</span><span style={{ color: '#e2f0f5' }}>="</span><span style={{ color: '#ffd580' }}>{String(publicKey || '').trim()}</span><span style={{ color: '#e2f0f5' }}>"</span>{'\n'}
+                        {'  '}<span style={{ color: '#a8d8a8' }}>defer</span>{'\n'}
+                        <span style={{ color: '#7ec8e3' }}>&gt;&lt;/script&gt;</span>
+                      </>
+                    ) : (
+                      <>
+                        <span style={{ color: '#7ec8e3' }}>&lt;script&gt;</span>{'\n'}
+                        <span style={{ color: '#94a3b8' }}>{'(function() {'}</span>{'\n'}
+                        {'  '}<span style={{ color: '#94a3b8' }}>var s = </span><span style={{ color: '#a8d8a8' }}>document</span><span style={{ color: '#94a3b8' }}>.createElement(</span><span style={{ color: '#ffd580' }}>'script'</span><span style={{ color: '#94a3b8' }}>);</span>{'\n'}
+                        {'  '}<span style={{ color: '#94a3b8' }}>s.src = </span><span style={{ color: '#ffd580' }}>'https://app.mokkeda.com/sdk.js'</span><span style={{ color: '#94a3b8' }}>;</span>{'\n'}
+                        {'  '}<span style={{ color: '#94a3b8' }}>s.setAttribute(</span><span style={{ color: '#ffd580' }}>'data-site-id'</span><span style={{ color: '#94a3b8' }}>, </span><span style={{ color: '#ffd580' }}>'{String(id || '').trim()}'</span><span style={{ color: '#94a3b8' }}>);</span>{'\n'}
+                        {'  '}<span style={{ color: '#94a3b8' }}>s.setAttribute(</span><span style={{ color: '#ffd580' }}>'data-site-key'</span><span style={{ color: '#94a3b8' }}>, </span><span style={{ color: '#ffd580' }}>'{String(publicKey || '').trim()}'</span><span style={{ color: '#94a3b8' }}>);</span>{'\n'}
+                        {'  '}<span style={{ color: '#a8d8a8' }}>document</span><span style={{ color: '#94a3b8' }}>.head.appendChild(s);</span>{'\n'}
+                        <span style={{ color: '#94a3b8' }}>{'})();'}</span>{'\n'}
+                        <span style={{ color: '#7ec8e3' }}>&lt;/script&gt;</span>
+                      </>
+                    )}
                   </pre>
                   {copyMessage === 'コピーに失敗しました' && (
                     <div className="small" style={{ marginTop: 8, color: 'var(--danger)' }}>
