@@ -1,7 +1,20 @@
 import React, { Fragment, useEffect, useMemo, useState } from 'react';
 import { collection, doc, onSnapshot, orderBy, query, setDoc, deleteDoc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { onAuthStateChanged } from 'firebase/auth';
+import { db, auth } from '../firebase';
 import { genId } from '../components/id';
+
+function workspaceKeyForUid(uid?: string | null) {
+  return uid ? `cx_admin_workspace_id:${uid}` : 'cx_admin_workspace_id';
+}
+function readSelectedWorkspaceId(uid?: string | null) {
+  return (
+    window.localStorage.getItem(workspaceKeyForUid(uid)) ||
+    window.localStorage.getItem('cx_admin_workspace_id') ||
+    window.localStorage.getItem('selectedWorkspaceId') ||
+    ''
+  );
+}
 
 type TemplateDoc = {
   workspaceId: string;
@@ -136,9 +149,9 @@ const DEFAULTS: Record<TemplateDoc['type'], { html: string; css: string }> = {
 };
 
 export default function TemplatesPage() {
+  const [currentUid, setCurrentUid] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<Array<{ id: string; data?: { name?: string } }>>([]);
   const [rows, setRows] = useState<Array<{ id: string; data: TemplateDoc }>>([]);
-
 
   const [id, setId] = useState(() => genId('tpl'));
   const [workspaceId, setWorkspaceId] = useState('');
@@ -160,9 +173,21 @@ export default function TemplatesPage() {
     cta_url_text: '詳細を見る',
   });
 
+  // 認証ユーザー取得
   useEffect(() => {
-    if (!workspaceId && workspaces.length) setWorkspaceId(workspaces[0].id);
-  }, [workspaces, workspaceId]);
+    return onAuthStateChanged(auth, (u) => setCurrentUid(u?.uid ?? null));
+  }, []);
+
+  // localStorageからワークスペースIDを自動取得
+  useEffect(() => {
+    setWorkspaceId(readSelectedWorkspaceId(currentUid));
+    const handler = (e: Event) => {
+      const next = (e as CustomEvent)?.detail?.workspaceId;
+      if (next) setWorkspaceId(next);
+    };
+    window.addEventListener('cx_admin_workspace_changed', handler);
+    return () => window.removeEventListener('cx_admin_workspace_changed', handler);
+  }, [currentUid]);
 
   useEffect(() => {
     // When type changes and we're creating a new template, preload defaults
@@ -189,7 +214,6 @@ export default function TemplatesPage() {
 
   function openCreateModal() {
     resetEditor();
-    if (!workspaceId && workspaces.length) setWorkspaceId(workspaces[0].id);
     setIsModalOpen(true);
   }
 
@@ -241,19 +265,6 @@ export default function TemplatesPage() {
             </div>
           </div>
           <div className="list-toolbar__actions">
-            <div style={{ minWidth: 240 }}>
-              <div className="h2">ワークスペース</div>
-              <select className="input" value={workspaceId} onChange={(e) => setWorkspaceId(e.target.value)}>
-                {workspaces.map((w) => {
-                  const label = workspaceLabel(workspaces, w.id);
-                  return (
-                    <option key={w.id} value={w.id}>
-                      {label}{label !== w.id ? ` (${w.id})` : ''}
-                    </option>
-                  );
-                })}
-              </select>
-            </div>
             <button className="btn" onClick={openCreateModal}>作成</button>
           </div>
         </div>
@@ -356,21 +367,8 @@ export default function TemplatesPage() {
                   テンプレートID: <code>{id}</code>
                 </div>
                 <div className="small" style={{ opacity: 0.72, marginBottom: 8 }}>
-                  現在のワークスペース: <b>{selectedWorkspaceName || workspaceId || '（未選択）'}</b>
+                  ワークスペース: <b>{selectedWorkspaceName || workspaceId || '（未選択）'}</b>
                 </div>
-                <div style={{ height: 10 }} />
-
-                <div className="h2">ワークスペース</div>
-                <select className="input" value={workspaceId} onChange={(e) => setWorkspaceId(e.target.value)}>
-                  {workspaces.map((w) => {
-                    const label = workspaceLabel(workspaces, w.id);
-                    return (
-                      <option key={w.id} value={w.id}>
-                        {label}{label !== w.id ? ` (${w.id})` : ''}
-                      </option>
-                    );
-                  })}
-                </select>
                 <div style={{ height: 10 }} />
 
                 <div className="row">
