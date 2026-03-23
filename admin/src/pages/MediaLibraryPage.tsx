@@ -12,8 +12,30 @@ import {
 import { db, apiPostJson } from "../firebase";
 import { uploadMediaToWorkspace } from "../lib/media";
 
+/* =========================
+ * Site helpers
+ * ========================= */
+function siteKeyForWs(workspaceId: string) {
+  return `cx_admin_site_id:${workspaceId}`;
+}
+function readSelectedSiteId(workspaceId: string) {
+  try {
+    return localStorage.getItem(siteKeyForWs(workspaceId)) || "";
+  } catch {
+    return "";
+  }
+}
+function writeSelectedSiteId(workspaceId: string, siteId: string) {
+  try {
+    localStorage.setItem(siteKeyForWs(workspaceId), siteId);
+  } catch {
+    // ignore
+  }
+}
+
 type MediaDoc = {
   workspaceId: string;
+  siteId?: string | null;
   storagePath: string;
   downloadURL: string;
   originalName?: string;
@@ -96,14 +118,14 @@ function writeSelectedWorkspaceId(workspaceId: string, uid?: string) {
   }
 }
 
-function mediaCacheKey(workspaceId: string) {
-  return `cx_admin_media_cache:${workspaceId}`;
+function mediaCacheKey(siteId: string) {
+  return `cx_admin_media_cache_site:${siteId}`;
 }
 
-function readMediaCache(workspaceId?: string): Row<MediaDoc>[] {
-  if (!workspaceId) return [];
+function readMediaCache(siteId?: string): Row<MediaDoc>[] {
+  if (!siteId) return [];
   try {
-    const raw = sessionStorage.getItem(mediaCacheKey(workspaceId));
+    const raw = sessionStorage.getItem(mediaCacheKey(siteId));
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -113,17 +135,17 @@ function readMediaCache(workspaceId?: string): Row<MediaDoc>[] {
   }
 }
 
-function writeMediaCache(workspaceId: string, rows: Row<MediaDoc>[]) {
+function writeMediaCache(siteId: string, rows: Row<MediaDoc>[]) {
   try {
-    sessionStorage.setItem(mediaCacheKey(workspaceId), JSON.stringify(rows));
+    sessionStorage.setItem(mediaCacheKey(siteId), JSON.stringify(rows));
   } catch {
     // ignore
   }
 }
 
-function removeMediaFromCache(workspaceId: string, mediaId: string) {
-  const nextRows = readMediaCache(workspaceId).filter((row) => String(row.id) !== String(mediaId));
-  writeMediaCache(workspaceId, nextRows);
+function removeMediaFromCache(siteId: string, mediaId: string) {
+  const nextRows = readMediaCache(siteId).filter((row) => String(row.id) !== String(mediaId));
+  writeMediaCache(siteId, nextRows);
 }
 
 function mergeMediaRows(primary: Row<MediaDoc>[], secondary: Row<MediaDoc>[]) {
@@ -147,6 +169,9 @@ export default function MediaPage() {
   const [workspaceId, setWorkspaceId] = useState("");
   const [currentUid, setCurrentUid] = useState("");
 
+  const [siteId, setSiteId] = useState("");
+  const [sites, setSites] = useState<Array<{ id: string; data: { name?: string; siteName?: string } }>>([]);
+
   const [mediaRows, setMediaRows] = useState<Row<MediaDoc>[]>([]);
   const [actionRows, setActionRows] = useState<Row<ActionDoc>[]>([]);
 
@@ -162,6 +187,10 @@ export default function MediaPage() {
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const selectedWorkspaceName = useMemo(() => workspaceLabel(workspaces, workspaceId), [workspaces, workspaceId]);
+  const siteName = useMemo(() => {
+    const s = sites.find((s) => s.id === siteId);
+    return s?.data?.name || s?.data?.siteName || siteId || "（未選択）";
+  }, [sites, siteId]);
 
   // 最新追加を自動選択したい
   const lastUploadedRef = useRef<{ workspaceId: string; downloadURL: string } | null>(null);
@@ -234,16 +263,43 @@ export default function MediaPage() {
     }
   }, [workspaces, workspaceId, currentUid]);
 
+  // Load sites for current workspace
+  useEffect(() => {
+    if (!workspaceId) { setSites([]); setSiteId(""); return; }
+    setSiteId(readSelectedSiteId(workspaceId));
+    const q = query(collection(db, "sites"), where("workspaceId", "==", workspaceId));
+    return onSnapshot(q, (snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, data: d.data() as any }));
+      setSites(list);
+      setSiteId((prev) => prev || list[0]?.id || "");
+    });
+  }, [workspaceId]);
+
+  // Listen for site changes from other pages
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const next = (e as CustomEvent)?.detail?.siteId;
+      if (next) setSiteId(next);
+    };
+    window.addEventListener("cx_admin_site_changed", handler);
+    return () => window.removeEventListener("cx_admin_site_changed", handler);
+  }, []);
+
+  // Persist siteId to localStorage
+  useEffect(() => {
+    if (workspaceId && siteId) writeSelectedSiteId(workspaceId, siteId);
+  }, [workspaceId, siteId]);
+
   // Media list
   useEffect(() => {
-    if (!workspaceId) {
+    if (!siteId) {
       setMediaRows([]);
       return;
     }
 
     const q = query(
       collection(db, "media"),
-      where("workspaceId", "==", workspaceId),
+      where("siteId", "==", siteId),
       limit(200)
     );
 
@@ -251,10 +307,10 @@ export default function MediaPage() {
       q,
       (snap) => {
         const firestoreRows = snap.docs.map((d) => ({ id: d.id, data: d.data() as MediaDoc }));
-        const cachedRows = readMediaCache(workspaceId);
+        const cachedRows = readMediaCache(siteId);
         const list = mergeMediaRows(firestoreRows, cachedRows);
         setMediaRows(list);
-        writeMediaCache(workspaceId, list);
+        writeMediaCache(siteId, list);
 
         const last = lastUploadedRef.current;
         if (last && last.workspaceId === workspaceId) {
@@ -267,7 +323,7 @@ export default function MediaPage() {
       },
       (err) => console.error(err)
     );
-  }, [workspaceId]);
+  }, [siteId]);
 
   // Actions for usage map
   useEffect(() => {
@@ -332,7 +388,7 @@ export default function MediaPage() {
         const staleTemp = isUnresolvedTempMediaRow(row) && (!createdSec || nowSec - createdSec > 15);
         return !staleTemp;
       });
-      writeMediaCache(workspaceId, nextRows);
+      writeMediaCache(siteId, nextRows);
       return nextRows;
     });
 
@@ -340,7 +396,7 @@ export default function MediaPage() {
       if (!prev) return prev;
       return tempIds.includes(String(prev.id)) ? null : prev;
     });
-  }, [mediaRows, workspaceId]);
+  }, [mediaRows, siteId]);
 
 
   async function onDelete(mediaId: string) {
@@ -353,10 +409,10 @@ export default function MediaPage() {
       if (targetRow && isLocalOnlyOptimisticMediaRow(targetRow)) {
         setMediaRows((prev) => {
           const nextRows = prev.filter((row) => String(row.id) !== String(mediaId));
-          writeMediaCache(workspaceId, nextRows);
+          writeMediaCache(siteId, nextRows);
           return nextRows;
         });
-        removeMediaFromCache(workspaceId, mediaId);
+        removeMediaFromCache(siteId, mediaId);
         setSelected((prev) => (prev && String(prev.id) === String(mediaId) ? null : prev));
         return;
       }
@@ -381,21 +437,21 @@ export default function MediaPage() {
 
       setMediaRows((prev) => {
         const nextRows = prev.filter((row) => String(row.id) !== String(mediaId));
-        writeMediaCache(workspaceId, nextRows);
+        writeMediaCache(siteId, nextRows);
         return nextRows;
       });
 
-      removeMediaFromCache(workspaceId, mediaId);
+      removeMediaFromCache(siteId, mediaId);
       setSelected((prev) => (prev && String(prev.id) === String(mediaId) ? null : prev));
     } catch (e: any) {
       if (e?.message === "media_not_found") {
         setMediaRows((prev) => {
           const nextRows = prev.filter((row) => String(row.id) !== String(mediaId));
-          writeMediaCache(workspaceId, nextRows);
+          writeMediaCache(siteId, nextRows);
           return nextRows;
         });
 
-        removeMediaFromCache(workspaceId, mediaId);
+        removeMediaFromCache(siteId, mediaId);
         setSelected((prev) => (prev && String(prev.id) === String(mediaId) ? null : prev));
         return;
       }
@@ -456,6 +512,7 @@ export default function MediaPage() {
               id: mediaId,
               data: {
                 workspaceId: String(rowData.workspaceId || workspaceId),
+                siteId: String(rowData.siteId || siteId || ""),
                 storagePath,
                 downloadURL,
                 originalName: String(rowData.originalName || file.name || ""),
@@ -483,7 +540,7 @@ export default function MediaPage() {
       if (optimisticRows.length) {
         setMediaRows((prev) => {
           const nextRows = mergeMediaRows(optimisticRows, prev);
-          writeMediaCache(workspaceId, nextRows);
+          writeMediaCache(siteId, nextRows);
           return nextRows;
         });
 
@@ -511,6 +568,9 @@ export default function MediaPage() {
                 {' '}<span style={{ opacity: 0.62 }}> / ID: <code>{workspaceId}</code></span>
               </React.Fragment>
             ) : null}
+          </div>
+          <div className="small" style={{ opacity: 0.72 }}>
+            対象サイト: <b>{siteName}</b>
           </div>
         </div>
       </div>

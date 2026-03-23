@@ -43,6 +43,7 @@ type ScenarioDoc = {
 
 type ActionDoc = {
   workspaceId: string;
+  siteId?: string;
   action_id?: string;
   type: ActionType;
   templateId?: string;
@@ -77,6 +78,27 @@ type TemplateRow = {
   id: string;
   data: { workspaceId?: string; type?: ActionType; name?: string };
 };
+
+/* =========================
+ * Site helpers
+ * ========================= */
+function siteKeyForWs(workspaceId: string) {
+  return `cx_admin_site_id:${workspaceId}`;
+}
+function readSelectedSiteId(workspaceId: string) {
+  try {
+    return localStorage.getItem(siteKeyForWs(workspaceId)) || "";
+  } catch {
+    return "";
+  }
+}
+function writeSelectedSiteId(workspaceId: string, siteId: string) {
+  try {
+    localStorage.setItem(siteKeyForWs(workspaceId), siteId);
+  } catch {
+    // ignore
+  }
+}
 
 type MediaDoc = {
   workspaceId: string;
@@ -187,6 +209,7 @@ function modeLabel(v: MountMode) {
 /** フォーム→保存 payload（mount + mediaIds + primary image_media_id） */
 function buildActionPayload(form: {
   workspaceId: string;
+  siteId?: string;
   type: ActionType;
   selector: string;
   placement: MountPlacement;
@@ -201,6 +224,7 @@ function buildActionPayload(form: {
 
   const base: ActionDoc = {
     workspaceId: form.workspaceId,
+    siteId: form.siteId || undefined,
     type: form.type,
     templateId: form.templateId.trim() || undefined,
     mediaIds,
@@ -233,11 +257,11 @@ function buildActionPayload(form: {
  * ========================= */
 function MediaPickerModal(props: {
   open: boolean;
-  workspaceId: string;
+  siteId: string;
   onClose: () => void;
   onPick: (row: { id: string; data: MediaDoc }) => void; // add one
 }) {
-  const { open, workspaceId, onClose, onPick } = props;
+  const { open, siteId, onClose, onPick } = props;
   const [qText, setQText] = React.useState("");
   const [rows, setRows] = React.useState<Array<{ id: string; data: MediaDoc }>>([]);
   const [loading, setLoading] = React.useState(false);
@@ -245,7 +269,7 @@ function MediaPickerModal(props: {
 
   React.useEffect(() => {
     if (!open) return;
-    if (!workspaceId) return;
+    if (!siteId) return;
 
     let cancelled = false;
     (async () => {
@@ -255,7 +279,7 @@ function MediaPickerModal(props: {
         // index不要の確実版：where + limit
         const ref = query(
           collection(db, "media"),
-          where("workspaceId", "==", workspaceId),
+          where("siteId", "==", siteId),
           limit(50)
         );
         const snap = await getDocs(ref);
@@ -275,7 +299,7 @@ function MediaPickerModal(props: {
     return () => {
       cancelled = true;
     };
-  }, [open, workspaceId]);
+  }, [open, siteId]);
 
   if (!open) return null;
 
@@ -428,6 +452,10 @@ export default function ActionsPage() {
   // media cache (by id) for thumbnails (no indexes needed)
   const [mediaById, setMediaById] = useState<Record<string, MediaDoc>>({});
 
+  // ---- site state ----
+  const [siteId, setSiteId] = useState("");
+  const [sites, setSites] = useState<Array<{ id: string; data: { name?: string; siteName?: string } }>>([]);
+
   // ---- form state ----
   const [id, setId] = useState(() => genId("act"));
   const [workspaceId, setWorkspaceId] = useState("");
@@ -471,6 +499,10 @@ export default function ActionsPage() {
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const selectedWorkspaceName = useMemo(() => workspaceLabel(workspaces, workspaceId), [workspaces, workspaceId]);
+  const siteName = useMemo(() => {
+    const s = sites.find((s) => s.id === siteId);
+    return s?.data?.name || s?.data?.siteName || siteId || "（未選択）";
+  }, [sites, siteId]);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   // toast / delete confirm
@@ -520,6 +552,33 @@ export default function ActionsPage() {
     if (!workspaceId || !currentUid) return;
     writeSelectedWorkspaceId(workspaceId, currentUid);
   }, [workspaceId, currentUid]);
+
+  // Load sites for current workspace
+  useEffect(() => {
+    if (!workspaceId) { setSites([]); setSiteId(""); return; }
+    setSiteId(readSelectedSiteId(workspaceId));
+    const q = query(collection(db, "sites"), where("workspaceId", "==", workspaceId));
+    return onSnapshot(q, (snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, data: d.data() as any }));
+      setSites(list);
+      setSiteId((prev) => prev || list[0]?.id || "");
+    });
+  }, [workspaceId]);
+
+  // Listen for site changes from other pages
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const next = (e as CustomEvent)?.detail?.siteId;
+      if (next) setSiteId(next);
+    };
+    window.addEventListener("cx_admin_site_changed", handler);
+    return () => window.removeEventListener("cx_admin_site_changed", handler);
+  }, []);
+
+  // Persist siteId to localStorage
+  useEffect(() => {
+    if (workspaceId && siteId) writeSelectedSiteId(workspaceId, siteId);
+  }, [workspaceId, siteId]);
 
   function resetEditor() {
     setId(genId("act"));
@@ -601,20 +660,20 @@ export default function ActionsPage() {
   }, [currentUid]);
 
   useEffect(() => {
-    if (!workspaceId) {
+    if (!siteId) {
       setRows([]);
       return;
     }
 
     const q = query(
       collection(db, "actions"),
-      where("workspaceId", "==", workspaceId),
+      where("siteId", "==", siteId),
       orderBy("__name__")
     );
     return onSnapshot(q, (snap) =>
       setRows(snap.docs.map((d) => ({ id: d.id, data: d.data() as ActionDoc })))
     );
-  }, [workspaceId]);
+  }, [siteId]);
 
   useEffect(() => {
     if (!workspaceId) {
@@ -698,6 +757,7 @@ export default function ActionsPage() {
   const payload: ActionDoc = useMemo(() => {
     return buildActionPayload({
       workspaceId,
+      siteId,
       type,
       selector,
       placement,
@@ -716,6 +776,7 @@ export default function ActionsPage() {
     });
   }, [
     workspaceId,
+    siteId,
     type,
     selector,
     placement,
@@ -738,6 +799,7 @@ export default function ActionsPage() {
 
   async function saveToFirestore() {
     if (!workspaceId) { showToast("ワークスペースが未設定です", "error"); return; }
+    if (!siteId) { showToast("サイトが未設定です", "error"); return; }
     const actionId = id.trim();
     if (!actionId) { showToast("アクションIDが未設定です", "error"); return; }
     try {
@@ -816,6 +878,9 @@ export default function ActionsPage() {
                 {' '}<span style={{ opacity: 0.62 }}> / ID: <code>{workspaceId}</code></span>
               </React.Fragment>
             ) : null}
+          </div>
+          <div className="small" style={{ opacity: 0.72 }}>
+            対象サイト: <b>{siteName}</b>
           </div>
         </div>
         <div className="page-header__actions">
@@ -1394,7 +1459,7 @@ export default function ActionsPage() {
 
       <MediaPickerModal
         open={pickerOpen}
-        workspaceId={workspaceId}
+        siteId={siteId}
         onClose={() => setPickerOpen(false)}
         onPick={(row) => {
           setPickerOpen(false);

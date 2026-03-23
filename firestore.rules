@@ -8,7 +8,7 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // workspaces ドキュメントの members マップで確認
+    // workspaces ドキュメントの members マップで確認（単一ドキュメント取得時のみ使用）
     function isMember(workspaceId) {
       return isSignedIn() &&
         get(/databases/$(database)/documents/workspaces/$(workspaceId))
@@ -27,40 +27,43 @@ service cloud.firestore {
     }
 
     // ── ワークスペース ───────────────────────────────────────────
-    // 読み取り: メンバーのみ / 書き込み: API経由（admin SDK）のみ
+    // コレクション全体を取得するクエリがあるため読み取りはログイン済みで許可
+    // 書き込みは API 経由（admin SDK）のみ
     match /workspaces/{workspaceId} {
-      allow read: if isMember(workspaceId);
-      allow write: if false; // Cloud Functions (admin SDK) のみ
+      allow read: if isSignedIn();
+      allow write: if false;
     }
 
     // ── サイト ───────────────────────────────────────────────────
+    // コレクション全体クエリあり → 読み取りはログイン済みで許可
+    // 書き込みは Cloud Functions のみ
     match /sites/{siteId} {
-      allow read: if isSignedIn() && isMember(resource.data.workspaceId);
-      allow write: if false; // Cloud Functions のみ
+      allow read: if isSignedIn();
+      allow write: if false;
     }
 
     // ── シナリオ ─────────────────────────────────────────────────
     match /scenarios/{scenarioId} {
-      allow read: if isSignedIn() && isMember(resource.data.workspaceId);
-      allow write: if false; // Cloud Functions のみ
+      allow read: if isSignedIn();
+      allow write: if false;
     }
 
     // ── アクション ───────────────────────────────────────────────
     match /actions/{actionId} {
-      allow read: if isSignedIn() && isMember(resource.data.workspaceId);
-      allow write: if false; // Cloud Functions のみ
+      allow read: if isSignedIn();
+      allow write: if false;
     }
 
     // ── テンプレート（クライアントから直接書き込みあり） ─────────
     match /templates/{templateId} {
-      allow read: if isSignedIn() && isMember(resource.data.workspaceId);
+      allow read: if isSignedIn();
       allow create: if isSignedIn() && isMember(request.resource.data.workspaceId);
       allow update, delete: if isSignedIn() && isMember(resource.data.workspaceId);
     }
 
-    // ── メディア ─────────────────────────────────────────────────
+    // ── メディア（クライアントから直接書き込みあり） ─────────────
     match /media/{mediaId} {
-      allow read: if isSignedIn() && isMember(resource.data.workspaceId);
+      allow read: if isSignedIn();
       allow create: if isSignedIn() && isMember(request.resource.data.workspaceId);
       allow update, delete: if isSignedIn() && isMember(resource.data.workspaceId);
     }
@@ -83,7 +86,7 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // ── 課金情報（オーナー/管理者のみ読み取り）──────────────────
+    // ── 課金情報（オーナー/管理者のみ）──────────────────────────
     match /workspace_billing/{workspaceId} {
       allow read: if isOwnerOrAdmin(workspaceId);
       allow write: if false;
