@@ -317,16 +317,18 @@ export default function AnalyticsPage() {
   // ---- リアルタイムログ（onSnapshot: 直近50件） ----
   useEffect(() => {
     if (!siteId) { setRecentLogs([]); return; }
-    const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
     const q = query(
       collection(db, "logs"),
       where("site_id", "==", siteId),
-      where("createdAt", ">", since),
       orderBy("createdAt", "desc"),
       limit(50)
     );
     return onSnapshot(q, (snap) => {
-      setRecentLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+      const logs = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() as any }))
+        .filter((l) => (l.createdAt || "") > since);
+      setRecentLogs(logs);
     });
   }, [siteId]);
 
