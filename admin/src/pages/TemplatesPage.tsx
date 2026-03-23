@@ -1,5 +1,5 @@
 import React, { Fragment, useEffect, useMemo, useState } from 'react';
-import { collection, doc, onSnapshot, orderBy, query, setDoc, deleteDoc } from 'firebase/firestore';
+import { collection, doc, onSnapshot, orderBy, query, setDoc, deleteDoc, where } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import { db, auth } from '../firebase';
 import { genId } from '../components/id';
@@ -188,6 +188,19 @@ export default function TemplatesPage() {
     window.addEventListener('cx_admin_workspace_changed', handler);
     return () => window.removeEventListener('cx_admin_workspace_changed', handler);
   }, [currentUid]);
+
+  // テンプレート一覧をリアルタイム取得
+  useEffect(() => {
+    if (!workspaceId) { setRows([]); return; }
+    const q = query(
+      collection(db, 'templates'),
+      where('workspaceId', '==', workspaceId),
+      orderBy('name'),
+    );
+    return onSnapshot(q, (snap) => {
+      setRows(snap.docs.map((d) => ({ id: d.id, data: d.data() as TemplateDoc })));
+    });
+  }, [workspaceId]);
 
   useEffect(() => {
     // When type changes and we're creating a new template, preload defaults
