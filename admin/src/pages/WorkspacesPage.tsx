@@ -484,11 +484,6 @@ export default function WorkspacesPage() {
                           {r.data.tagline || r.data.description}
                         </div>
                       ) : null}
-                      {r.data.logoUrl ? (
-                        <div className="small" style={{ marginTop: 4, opacity: 0.72 }}>
-                          logo: <code>{r.data.logoUrl}</code>
-                        </div>
-                      ) : null}
                       <div className="small" style={{ marginTop: 4, opacity: 0.72, display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span
                           style={{
