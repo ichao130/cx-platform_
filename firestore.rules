@@ -27,31 +27,36 @@ service cloud.firestore {
     }
 
     // ── ワークスペース ───────────────────────────────────────────
-    // コレクション全体を取得するクエリがあるため読み取りはログイン済みで許可
-    // 書き込みは API 経由（admin SDK）のみ
     match /workspaces/{workspaceId} {
       allow read: if isSignedIn();
-      allow write: if false;
+      // 初回ログイン時の自動作成: 自分をownerとして設定する場合のみ許可
+      allow create: if isSignedIn() &&
+        request.resource.data.members[request.auth.uid] == 'owner';
+      // 更新: オーナーまたは管理者のみ
+      allow update: if isOwnerOrAdmin(workspaceId);
+      // 削除: API経由のみ
+      allow delete: if false;
     }
 
     // ── サイト ───────────────────────────────────────────────────
-    // コレクション全体クエリあり → 読み取りはログイン済みで許可
-    // 書き込みは Cloud Functions のみ
     match /sites/{siteId} {
       allow read: if isSignedIn();
-      allow write: if false;
+      allow create: if isSignedIn() && isMember(request.resource.data.workspaceId);
+      allow update, delete: if isSignedIn() && isMember(resource.data.workspaceId);
     }
 
     // ── シナリオ ─────────────────────────────────────────────────
     match /scenarios/{scenarioId} {
       allow read: if isSignedIn();
-      allow write: if false;
+      allow create: if isSignedIn() && isMember(request.resource.data.workspaceId);
+      allow update, delete: if isSignedIn() && isMember(resource.data.workspaceId);
     }
 
     // ── アクション ───────────────────────────────────────────────
     match /actions/{actionId} {
       allow read: if isSignedIn();
-      allow write: if false;
+      allow create: if isSignedIn() && isMember(request.resource.data.workspaceId);
+      allow update, delete: if isSignedIn() && isMember(resource.data.workspaceId);
     }
 
     // ── テンプレート（クライアントから直接書き込みあり） ─────────
