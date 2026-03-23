@@ -341,17 +341,20 @@ function AppShell({ children }: { children: React.ReactNode }) {
   }
 
 
+  const showRail = workspaceRows.length > 1;
+
   return (
     <div
       style={{
         minHeight: "100vh",
         display: "grid",
-        gridTemplateColumns: "76px 280px minmax(0, 1fr)",
+        gridTemplateColumns: showRail ? "76px 280px minmax(0, 1fr)" : "280px minmax(0, 1fr)",
         background: `radial-gradient(circle at 18% 12%, ${selectedWorkspaceTintStrong}, transparent 20%), linear-gradient(180deg, ${selectedWorkspaceTintSoft}, transparent 24%), linear-gradient(180deg,var(--bg),var(--bg2))`,
       }}
     >
       <aside
         style={{
+          display: showRail ? undefined : "none",
           borderRight: "1px solid rgba(15,23,42,.08)",
           background: `linear-gradient(180deg, #173040, #1d4150)`,
           padding: "14px 10px",
