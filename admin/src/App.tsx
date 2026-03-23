@@ -378,7 +378,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
                   height: 52,
                   borderRadius: active ? 18 : 16,
                   border: active ? `2px solid ${accent}` : "1px solid rgba(255,255,255,.08)",
-                  background: active ? hexToRgba(accent, 0.22) : "rgba(255,255,255,.06)",
+                  background: icon.logoUrl ? "#fff" : active ? hexToRgba(accent, 0.22) : "rgba(255,255,255,.06)",
                   color: "#fff",
                   cursor: "pointer",
                   display: "flex",
@@ -418,20 +418,24 @@ function AppShell({ children }: { children: React.ReactNode }) {
           <div
             className="mokkeda-brand-slot"
             style={{
+              width: 40,
+              height: 40,
+              flexShrink: 0,
+              borderRadius: 8,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
               fontSize: 11,
               opacity: selectedWorkspaceLogoUrl ? 1 : 0.75,
               overflow: "hidden",
-              background: selectedWorkspaceLogoUrl ? "#fff" : undefined,
+              background: selectedWorkspaceLogoUrl ? "#fff" : "rgba(255,255,255,.1)",
             }}
           >
             {selectedWorkspaceLogoUrl ? (
               <img
                 src={selectedWorkspaceLogoUrl}
                 alt={selectedWorkspaceName}
-                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                style={{ width: "100%", height: "100%", objectFit: "contain" }}
               />
             ) : (
               "LOGO"
