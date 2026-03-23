@@ -162,7 +162,6 @@ export default function TemplatesPage() {
 
   const selectedWorkspaceName = useMemo(() => workspaceLabel(workspaces, workspaceId), [workspaces, workspaceId]);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [showJsonId, setShowJsonId] = useState('');
 
   const [sample, setSample] = useState<SampleData>({
     title: 'テスト表示',
@@ -297,49 +296,29 @@ export default function TemplatesPage() {
               </tr>
             </thead>
             <tbody>
-            {rows.map((r) => {
-              const isJsonOpen = showJsonId === r.id;
-              return (
-                <Fragment key={r.id}>
-                  <tr>
-                    <td>
-                      <div style={{ fontWeight: 700 }}>{r.data.name || '名称未設定'}</div>
-                      <div className="small" style={{ opacity: 0.72 }}>
-                        ID: <code>{r.id}</code>
-                      </div>
-                    </td>
-                    <td>
-                      <div>{workspaceLabel(workspaces, r.data.workspaceId)}</div>
-                      <div className="small" style={{ opacity: 0.72 }}>
-                        <code>{r.data.workspaceId}</code>
-                      </div>
-                    </td>
-                    <td>{r.data.type === 'modal' ? 'モーダル' : r.data.type === 'banner' ? 'バナー' : 'トースト'}</td>
-                    <td>{r.data.name}</td>
-                    <td>
-                      <button className="btn" onClick={() => setShowJsonId(isJsonOpen ? '' : r.id)}>
-                        {isJsonOpen ? 'JSONを閉じる' : 'JSONを表示'}
-                      </button>
-                    </td>
-                    <td>
-                      <button className="btn" onClick={() => openEditModal(r)}>編集</button>
-                      <span style={{ width: 8, display: 'inline-block' }} />
-                      <button className="btn btn--danger" onClick={() => deleteDoc(doc(db, 'templates', r.id))}>削除</button>
-                    </td>
-                  </tr>
-                  {isJsonOpen ? (
-                    <tr>
-                      <td colSpan={6}>
-                        <div className="small" style={{ marginBottom: 8, opacity: 0.74 }}>
-                          確認用JSON（必要な時だけ表示）
-                        </div>
-                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(r.data, null, 2)}</pre>
-                      </td>
-                    </tr>
-                  ) : null}
-                </Fragment>
-              );
-            })}
+            {rows.map((r) => (
+              <tr key={r.id}>
+                <td>
+                  <div style={{ fontWeight: 700 }}>{r.data.name || '名称未設定'}</div>
+                  <div className="small" style={{ opacity: 0.72 }}>
+                    ID: <code>{r.id}</code>
+                  </div>
+                </td>
+                <td>
+                  <div>{workspaceLabel(workspaces, r.data.workspaceId)}</div>
+                  <div className="small" style={{ opacity: 0.72 }}>
+                    <code>{r.data.workspaceId}</code>
+                  </div>
+                </td>
+                <td>{r.data.type === 'modal' ? 'モーダル' : r.data.type === 'banner' ? 'バナー' : 'トースト'}</td>
+                <td>{r.data.name}</td>
+                <td>
+                  <button className="btn" onClick={() => openEditModal(r)}>編集</button>
+                  <span style={{ width: 8, display: 'inline-block' }} />
+                  <button className="btn btn--danger" onClick={() => deleteDoc(doc(db, 'templates', r.id))}>削除</button>
+                </td>
+              </tr>
+            ))}
             </tbody>
           </table>
         </div>
@@ -460,10 +439,6 @@ export default function TemplatesPage() {
                   />
                 </div>
 
-                <div style={{ height: 12 }} />
-
-                <div className="h2">確認用JSON（上級者向け）</div>
-                <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(payload, null, 2)}</pre>
               </div>
             </div>
           </div>
