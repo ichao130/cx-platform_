@@ -1,5 +1,5 @@
 import React, { Fragment, useEffect, useMemo, useState } from 'react';
-import { collection, doc, onSnapshot, orderBy, query, setDoc, deleteDoc, where } from 'firebase/firestore';
+import { collection, doc, onSnapshot, query, setDoc, deleteDoc, where } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import { db, auth } from '../firebase';
 import { genId } from '../components/id';
@@ -195,11 +195,13 @@ export default function TemplatesPage() {
     const q = query(
       collection(db, 'templates'),
       where('workspaceId', '==', workspaceId),
-      orderBy('name'),
     );
-    return onSnapshot(q, (snap) => {
-      setRows(snap.docs.map((d) => ({ id: d.id, data: d.data() as TemplateDoc })));
-    });
+    return onSnapshot(q,
+      (snap) => {
+        setRows(snap.docs.map((d) => ({ id: d.id, data: d.data() as TemplateDoc })));
+      },
+      (err) => console.error('[TemplatesPage] onSnapshot error:', err),
+    );
   }, [workspaceId]);
 
   useEffect(() => {
