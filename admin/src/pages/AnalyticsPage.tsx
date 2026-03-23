@@ -55,6 +55,7 @@ function pct(num: number, denom: number) {
 
 function workspaceKeyForUid(uid: string) {
   return `cx_admin_workspace_id:${uid}`;
+}
 
 function siteKey(workspaceId: string) {
   return `cx_admin_site_id:${workspaceId}`;
@@ -64,7 +65,6 @@ function readSelectedSiteId(workspaceId: string) {
 }
 function writeSelectedSiteId(workspaceId: string, siteId: string) {
   localStorage.setItem(siteKey(workspaceId), siteId);
-}
 }
 
 function readSelectedWorkspaceId(uid?: string) {
