@@ -593,37 +593,12 @@ function AuthScreen({
         }}
       >
         <div style={{ width: "100%", maxWidth: 420 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 18 }}>
-            <div
-              style={{
-                width: 72,
-                height: 72,
-                borderRadius: 20,
-                background: "rgba(255,255,255,.94)",
-                border: "1px solid rgba(15,23,42,.08)",
-                boxShadow: "0 14px 30px rgba(22,48,71,.08)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                overflow: "hidden",
-                padding: 10,
-                flex: "0 0 auto",
-              }}
-            >
-              <img
-                src="/logo_mokkeda_v1.svg"
-                alt="MOKKEDA"
-                style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
-              />
-            </div>
-            <div>
-              <div className="h1" style={{ margin: 0, fontWeight: 800, fontSize: 26, letterSpacing: "-0.04em", color: "#1f6573" }}>
-                MOKKEDA
-              </div>
-              <div className="small" style={{ color: "#1f6573", opacity: 0.82, marginTop: 2 }}>
-                AI for “Thank You” Moments
-              </div>
-            </div>
+          <div style={{ marginBottom: 28, textAlign: "center" }}>
+            <img
+              src="/logo_mokkeda_v1.svg"
+              alt="MOKKEDA"
+              style={{ width: "100%", maxWidth: 260, height: "auto", display: "inline-block" }}
+            />
           </div>
           <div className="card" style={{ padding: 20 }}>
             <div className="small" style={{ lineHeight: 1.7 }}>{description}</div>
@@ -654,7 +629,7 @@ function AuthScreen({
         <div style={{ position: "relative", width: "100%", maxWidth: 680 }}>
           <div className="card" style={{ padding: 24, background: "rgba(255,255,255,.72)", backdropFilter: "blur(14px)" }}>
             <div className="small" style={{ opacity: 0.72, textTransform: "uppercase", letterSpacing: ".08em" }}>Product concept</div>
-            <div className="h1" style={{ marginTop: 10, marginBottom: 10 }}>AI for “Thank You” Moments</div>
+            <div className="h1" style={{ marginTop: 10, marginBottom: 10 }}>AI for "Thank You" Moments</div>
             <div className="small" style={{ lineHeight: 1.8 }}>
               MOKKEDA は、サイトごとの接客シナリオ、アクション、メディア、AIインサイトを一つの管理画面で扱うための CX プラットフォームです。
               ワークスペースごとに切り替えながら、運用と改善を一気通貫で回せます。
