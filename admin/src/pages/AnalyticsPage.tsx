@@ -9,6 +9,19 @@ import {
   where,
 } from "firebase/firestore";
 import { onAuthStateChanged, getAuth } from "firebase/auth";
+import {
+  AreaChart,
+  Area,
+  ComposedChart,
+  Bar,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from "recharts";
 import { db } from "../firebase";
 
 // ---- helpers ----
@@ -442,10 +455,12 @@ export default function AnalyticsPage() {
       d.setDate(d.getDate() - i);
       const day = isoDay(d);
       const label = `${d.getMonth() + 1}/${d.getDate()}`;
-      const pv = pvLogs.filter((l) => (l.createdAt || "").startsWith(day)).length;
+      const dayPvLogs = pvLogs.filter((l) => (l.createdAt || "").startsWith(day));
+      const pv = dayPvLogs.length;
+      const uv = new Set(dayPvLogs.map((l) => l.vid).filter(Boolean)).size;
       const imp = statRows.filter((r) => r.day === day && r.event === "impression").reduce((s, r) => s + safeNum(r.count), 0);
       const cv = statRows.filter((r) => r.day === day && r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
-      result.push({ day, label, pv, imp, cv });
+      result.push({ day, label, pv, uv, imp, cv });
     }
     return result;
   }, [pvLogs, statRows, dateRange]);
@@ -604,56 +619,86 @@ export default function AnalyticsPage() {
             <div className="h2" style={{ marginBottom: 14 }}>
               日別トレンド <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（過去{dateRange}日間）</span>
             </div>
-            <div className="card" style={{ padding: 20, background: "#fff" }}>
-              {/* 凡例 */}
-              <div style={{ display: "flex", gap: 20, marginBottom: 14 }}>
-                {[
-                  { key: "pv",  label: "ページビュー", color: "#2563eb" },
-                  { key: "imp", label: "施策表示",     color: "#7c3aed" },
-                  { key: "cv",  label: "CV",           color: "#16a34a" },
-                ].map((l) => (
-                  <div key={l.key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#374151" }}>
-                    <div style={{ width: 24, height: 3, borderRadius: 99, background: l.color }} />
-                    {l.label}
-                  </div>
-                ))}
+
+            {pvLoading ? (
+              <div className="card" style={{ padding: 24, textAlign: "center", opacity: 0.5, fontSize: 13 }}>読み込み中…</div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+                {/* ① PV & ユニーク訪問者 */}
+                <div className="card" style={{ padding: "20px 20px 8px", background: "#fff" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#374151", marginBottom: 16 }}>📈 ページビュー / ユニーク訪問者</div>
+                  <ResponsiveContainer width="100%" height={200}>
+                    <AreaChart data={dailyTrend} margin={{ top: 4, right: 12, left: -16, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="gradPv" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#2563eb" stopOpacity={0.18} />
+                          <stop offset="95%" stopColor="#2563eb" stopOpacity={0} />
+                        </linearGradient>
+                        <linearGradient id="gradUv" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#0891b2" stopOpacity={0.12} />
+                          <stop offset="95%" stopColor="#0891b2" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,.06)" />
+                      <XAxis dataKey="label" tick={{ fontSize: 10, fill: "rgba(15,23,42,.45)" }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fontSize: 10, fill: "rgba(15,23,42,.45)" }} axisLine={false} tickLine={false} />
+                      <Tooltip
+                        contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid rgba(15,23,42,.1)", boxShadow: "0 4px 12px rgba(0,0,0,.08)" }}
+                        labelStyle={{ fontWeight: 700, marginBottom: 4 }}
+                      />
+                      <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
+                      <Area type="monotone" dataKey="pv" name="ページビュー" stroke="#2563eb" strokeWidth={2} fill="url(#gradPv)" dot={{ r: 3, fill: "#2563eb", strokeWidth: 0 }} activeDot={{ r: 5 }} />
+                      <Area type="monotone" dataKey="uv" name="ユニーク訪問者" stroke="#0891b2" strokeWidth={2} fill="url(#gradUv)" dot={{ r: 3, fill: "#0891b2", strokeWidth: 0 }} activeDot={{ r: 5 }} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+
+                {/* ② 施策表示 & CV */}
+                <div className="card" style={{ padding: "20px 20px 8px", background: "#fff" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#374151", marginBottom: 16 }}>🔄 施策表示数 / CV数</div>
+                  <ResponsiveContainer width="100%" height={200}>
+                    <ComposedChart data={dailyTrend} margin={{ top: 4, right: 12, left: -16, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,.06)" />
+                      <XAxis dataKey="label" tick={{ fontSize: 10, fill: "rgba(15,23,42,.45)" }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fontSize: 10, fill: "rgba(15,23,42,.45)" }} axisLine={false} tickLine={false} />
+                      <Tooltip
+                        contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid rgba(15,23,42,.1)", boxShadow: "0 4px 12px rgba(0,0,0,.08)" }}
+                        labelStyle={{ fontWeight: 700, marginBottom: 4 }}
+                      />
+                      <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
+                      <Bar dataKey="imp" name="施策表示" fill="#7c3aed" fillOpacity={0.75} radius={[3, 3, 0, 0]} />
+                      <Line type="monotone" dataKey="cv" name="CV" stroke="#16a34a" strokeWidth={2.5} dot={{ r: 3, fill: "#16a34a", strokeWidth: 0 }} activeDot={{ r: 5 }} />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
-              {pvLoading ? (
-                <div className="small" style={{ opacity: 0.5, height: 160, display: "flex", alignItems: "center", justifyContent: "center" }}>読み込み中…</div>
-              ) : (
-                <TrendChart
-                  data={dailyTrend}
-                  lines={[
-                    { key: "pv",  label: "PV",   color: "#2563eb" },
-                    { key: "imp", label: "表示", color: "#7c3aed" },
-                    { key: "cv",  label: "CV",   color: "#16a34a" },
-                  ]}
-                />
-              )}
-            </div>
+            )}
 
             {/* 施策別CVトレンド（シナリオがある場合） */}
-            {scenarios.length > 0 && (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14, marginTop: 14 }}>
+            {!pvLoading && scenarios.length > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
                 {scenarios.slice(0, 4).map((sc) => {
-                  const scTrend: TrendPoint[] = dailyTrend.map((d) => {
+                  const scTrend = dailyTrend.map((d) => {
                     const scRows = statRows.filter((r) => r.scenarioId === sc.id && r.day === d.day);
                     const imp = scRows.filter((r) => r.event === "impression").reduce((s, r) => s + safeNum(r.count), 0);
                     const cv  = scRows.filter((r) => r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
                     return { ...d, imp, cv };
                   });
                   return (
-                    <div key={sc.id} className="card" style={{ padding: 16, background: "#fff" }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: 0.8 }} title={sc.data?.name}>
+                    <div key={sc.id} className="card" style={{ padding: "16px 16px 8px", background: "#fff" }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: 0.8 }} title={sc.data?.name}>
                         📊 {sc.data?.name || sc.id}
                       </div>
-                      <TrendChart
-                        data={scTrend}
-                        lines={[
-                          { key: "imp", label: "表示", color: "#7c3aed" },
-                          { key: "cv",  label: "CV",   color: "#16a34a" },
-                        ]}
-                      />
+                      <ResponsiveContainer width="100%" height={140}>
+                        <ComposedChart data={scTrend} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,.06)" />
+                          <XAxis dataKey="label" tick={{ fontSize: 9, fill: "rgba(15,23,42,.4)" }} axisLine={false} tickLine={false} />
+                          <YAxis tick={{ fontSize: 9, fill: "rgba(15,23,42,.4)" }} axisLine={false} tickLine={false} />
+                          <Tooltip contentStyle={{ fontSize: 11, borderRadius: 6 }} />
+                          <Bar dataKey="imp" name="表示" fill="#7c3aed" fillOpacity={0.65} radius={[2, 2, 0, 0]} />
+                          <Line type="monotone" dataKey="cv" name="CV" stroke="#16a34a" strokeWidth={2} dot={false} />
+                        </ComposedChart>
+                      </ResponsiveContainer>
                     </div>
                   );
                 })}
