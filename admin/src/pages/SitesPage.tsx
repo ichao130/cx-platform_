@@ -152,15 +152,14 @@ export default function SitesPage() {
   }, [workspaces, workspaceId, currentUid]);
 
   useEffect(() => {
-    if (!workspaceId) {
+    if (!currentUid) {
       setRows([]);
       return;
     }
 
     const q = query(
       collection(db, 'sites'),
-      where('workspaceId', '==', workspaceId),
-      orderBy('__name__')
+      where('memberUids', 'array-contains', currentUid)
     );
 
     return onSnapshot(q, (snap) => {
@@ -170,7 +169,7 @@ export default function SitesPage() {
           .map((d) => ({ id: d.id, data: d.data() as Site }))
       );
     });
-  }, [workspaceId]);
+  }, [currentUid]);
 
   const selectedWorkspaceName = useMemo(() => workspaceLabel(workspaces, workspaceId), [workspaces, workspaceId]);
 

@@ -1820,6 +1820,26 @@ export function registerV1Routes(app: Express) {
         { merge: true }
       );
 
+      // ワークスペース内の全サイトに memberUids を追加
+      const sitesSnap = await db.collection("sites")
+        .where("workspaceId", "==", workspaceId)
+        .get();
+
+      if (!sitesSnap.empty) {
+        const batch = db.batch();
+        for (const siteDoc of sitesSnap.docs) {
+          const siteData = siteDoc.data() as any;
+          const currentMemberUids: string[] = siteData.memberUids || [];
+          if (!currentMemberUids.includes(uid)) {
+            batch.update(siteDoc.ref, {
+              memberUids: [...currentMemberUids, uid],
+              updatedAt: now,
+            });
+          }
+        }
+        await batch.commit();
+      }
+
       // invite を accepted に
       await inviteDoc.ref.set(
         {
@@ -1926,6 +1946,16 @@ export function registerV1Routes(app: Express) {
         return res.status(400).json({ ok: false, error: "public_key_already_exists" });
       }
 
+      const wSnap = await db.collection("workspaces").doc(body.workspace_id).get();
+      const wData = (wSnap.data() || {}) as any;
+      const wMembers = (wData.members || {}) as Record<string, string>;
+      const memberUids = Array.from(new Set([
+        uid,
+        ...Object.entries(wMembers)
+          .filter(([, role]) => role === "owner" || role === "admin")
+          .map(([memberId]) => memberId)
+      ]));
+
       await db.collection("sites").doc(siteId).set(
         {
           id: siteId,
@@ -1933,6 +1963,7 @@ export function registerV1Routes(app: Express) {
           name: body.name,
           publicKey,
           domains: body.domains,
+          memberUids,
           createdAt: now,
           updatedAt: now,
           createdBy: uid,
