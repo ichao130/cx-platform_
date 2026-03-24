@@ -917,6 +917,14 @@
       return;
     }
 
+    // 管理者除外: localStorage に cx_no_track=1 がセットされている場合はトラッキングをスキップ
+    try {
+      if (localStorage.getItem("cx_no_track") === "1") {
+        log("[cx] tracking disabled (cx_no_track=1) — admin opt-out active");
+        return;
+      }
+    } catch (e) {}
+
     log("[cx] sdk origin/api", {
       script: script && script.src ? script.src : "",
       apiBase: apiBase

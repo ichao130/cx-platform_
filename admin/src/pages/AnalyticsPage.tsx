@@ -606,6 +606,31 @@ export default function AnalyticsPage() {
         </div>
       </div>
 
+      {/* 管理者除外ブックマークレット */}
+      {siteDomain && (
+        <div className="card" style={{ padding: "12px 16px", marginBottom: 16, background: "rgba(99,102,241,.06)", border: "1px solid rgba(99,102,241,.15)", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 18 }}>🚫</div>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div className="small" style={{ fontWeight: 700, marginBottom: 2 }}>自分の訪問を計測から除外する</div>
+            <div className="small" style={{ opacity: 0.7 }}>
+              下のボタンをブラウザのブックマークバーにドラッグ → サイト閲覧中にクリックで除外ON/OFFを切り替えられます
+            </div>
+          </div>
+          <a
+            href={`javascript:(function(){var k='cx_no_track',v=localStorage.getItem(k)==='1';localStorage.setItem(k,v?'0':'1');alert(v?'✅ 計測を再開しました（除外OFF）':'🚫 管理者として除外しました（除外ON）');})();`}
+            onClick={(e) => e.preventDefault()}
+            className="btn"
+            style={{ flexShrink: 0, background: "rgba(99,102,241,.15)", border: "1px solid rgba(99,102,241,.3)", color: "inherit", textDecoration: "none", cursor: "grab" }}
+            title="ここをブックマークバーにドラッグしてください"
+          >
+            🔖 管理者除外トグル
+          </a>
+          <div className="small" style={{ opacity: 0.55, width: "100%", marginTop: -4 }}>
+            ※ ドメインごとに有効です。<code>{siteDomain}</code> を閲覧中にブックマークをクリックしてください。除外中はSDKのログが一切送信されません。
+          </div>
+        </div>
+      )}
+
       {!siteId && (
         <div className="card" style={{ padding: 24, textAlign: "center", opacity: 0.7 }}>
           <div className="small">サイトを選択してください</div>
