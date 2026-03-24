@@ -560,17 +560,14 @@ export default function MediaPage() {
         <div className="page-header__meta">
           <div className="small" style={{ marginBottom: 6, opacity: 0.7 }}>MOKKEDA / Main</div>
           <h1 className="h1">メディアライブラリ</h1>
-          <div className="small">画像などのメディアをワークスペースごとに管理する画面です。まずは一覧で確認し、必要なときだけ詳細を開きます。</div>
+          <div className="small">画像などのメディアをサイトごとに管理する画面です。まずは一覧で確認し、必要なときだけ詳細を開きます。</div>
           <div className="small" style={{ marginTop: 6, opacity: 0.72 }}>
-            現在のワークスペース: <b>{selectedWorkspaceName || workspaceId || '（未選択）'}</b>
-            {workspaceId ? (
+            現在のサイト: <b>{siteName || '（未選択）'}</b>
+            {siteId ? (
               <React.Fragment>
-                {' '}<span style={{ opacity: 0.62 }}> / ID: <code>{workspaceId}</code></span>
+                {' '}<span style={{ opacity: 0.62 }}> / ID: <code>{siteId}</code></span>
               </React.Fragment>
             ) : null}
-          </div>
-          <div className="small" style={{ opacity: 0.72 }}>
-            対象サイト: <b>{siteName}</b>
           </div>
         </div>
       </div>
@@ -578,25 +575,23 @@ export default function MediaPage() {
       <div className="card" style={{ marginBottom: 14 }}>
         <div className="list-toolbar">
           <div className="list-toolbar__filters" style={{ flex: 1 }}>
-            <div style={{ minWidth: 240, flex: '1 1 260px' }}>
-              <div className="h2">ワークスペース</div>
+            <div style={{ minWidth: 200, flex: '1 1 220px' }}>
+              <div className="h2">サイト</div>
               <select
                 className="input"
-                value={workspaceId}
+                value={siteId}
                 onChange={(e) => {
                   const next = e.target.value;
-                  setWorkspaceId(next);
-                  writeSelectedWorkspaceId(next, currentUid);
+                  setSiteId(next);
+                  writeSelectedSiteId(workspaceId, next);
                 }}
               >
-                {workspaces.map((w) => {
-                  const label = workspaceLabel(workspaces, w.id);
-                  return (
-                    <option key={w.id} value={w.id}>
-                      {label}{label !== w.id ? ` (${w.id})` : ""}
-                    </option>
-                  );
-                })}
+                {sites.length === 0 && <option value="">（サイトなし）</option>}
+                {sites.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.data?.name || s.data?.siteName || s.id}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -619,13 +614,13 @@ export default function MediaPage() {
         onDragEnter={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          if (!workspaceId || uploading) return;
+          if (!siteId || uploading) return;
           setIsDragOver(true);
         }}
         onDragOver={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          if (!workspaceId || uploading) return;
+          if (!siteId || uploading) return;
           if (!isDragOver) setIsDragOver(true);
         }}
         onDragLeave={(e) => {
@@ -639,7 +634,7 @@ export default function MediaPage() {
           e.preventDefault();
           e.stopPropagation();
           setIsDragOver(false);
-          if (!workspaceId || uploading) return;
+          if (!siteId || uploading) return;
           const files = Array.from(e.dataTransfer?.files || []);
           acceptFiles(files);
         }}
@@ -667,7 +662,7 @@ export default function MediaPage() {
             type="file"
             accept="image/*"
             multiple
-            disabled={!workspaceId || uploading}
+            disabled={!siteId || uploading}
             onChange={(e) => {
               const files = Array.from(e.target.files || []);
               acceptFiles(files);
@@ -781,7 +776,7 @@ export default function MediaPage() {
               <tr>
                 <th style={{ width: 70 }}>サムネイル</th>
                 <th>ファイル</th>
-                <th style={{ width: 180 }}>ワークスペース</th>
+                <th style={{ width: 180 }}>サイト</th>
                 <th style={{ width: 160 }}>種類</th>
                 <th style={{ width: 120 }}>サイズ</th>
                 <th style={{ width: 120 }}>使用数</th>
@@ -834,8 +829,8 @@ export default function MediaPage() {
                       </div>
                     </td>
                     <td>
-                      <div>{workspaceLabel(workspaces, r.data.workspaceId)}</div>
-                      <div className="small" style={{ opacity: 0.72 }}><code>{r.data.workspaceId}</code></div>
+                      <div>{sites.find((s) => s.id === (r.data.siteId || ""))?.data?.name || r.data.siteId || "-"}</div>
+                      <div className="small" style={{ opacity: 0.72 }}><code>{r.data.siteId || "-"}</code></div>
                     </td>
                     <td className="small">{contentTypeLabel(r.data.contentType)}</td>
                     <td className="small">{fmtSize(r.data.size)}</td>
@@ -940,9 +935,9 @@ export default function MediaPage() {
                 </div>
 
                 <div style={{ height: 12 }} />
-                <div className="h2">ワークスペース</div>
-                <div>{workspaceLabel(workspaces, selected.data.workspaceId)}</div>
-                <div className="small" style={{ opacity: 0.72 }}><code>{selected.data.workspaceId}</code></div>
+                <div className="h2">サイト</div>
+                <div>{sites.find((s) => s.id === (selected.data.siteId || ""))?.data?.name || selected.data.siteId || "-"}</div>
+                <div className="small" style={{ opacity: 0.72 }}><code>{selected.data.siteId || "-"}</code></div>
 
                 <div style={{ height: 12 }} />
                 <div className="h2">ダウンロードURL</div>
