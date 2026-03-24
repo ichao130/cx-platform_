@@ -68,6 +68,7 @@ export default function SitesPage() {
   const [copyMessage, setCopyMessage] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [tagMode, setTagMode] = useState<'direct' | 'gtm'>('direct');
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     return onAuthStateChanged(getAuth(), (user) => {
@@ -163,7 +164,11 @@ export default function SitesPage() {
     );
 
     return onSnapshot(q, (snap) => {
-      setRows(snap.docs.map((d) => ({ id: d.id, data: d.data() as Site })));
+      setRows(
+        snap.docs
+          .filter((d) => d.data().status !== 'deleted')
+          .map((d) => ({ id: d.id, data: d.data() as Site }))
+      );
     });
   }, [workspaceId]);
 
@@ -243,6 +248,7 @@ export default function SitesPage() {
     }
 
     setError('');
+    setIsSaving(true);
 
     try {
       const isEditing = rows.some((r) => r.id === safeId);
@@ -279,6 +285,8 @@ export default function SitesPage() {
       setIsModalOpen(false);
     } catch (e: any) {
       setError(e?.message || '保存に失敗しました。');
+    } finally {
+      setIsSaving(false);
     }
   }
 
@@ -502,8 +510,8 @@ export default function SitesPage() {
                   <button className="btn" onClick={() => { setIsModalOpen(false); setError(''); setCopyMessage(''); }}>
                     キャンセル
                   </button>
-                  <button className="btn btn--primary" onClick={createOrUpdate}>
-                    {rows.some((r) => r.id === id) ? 'サイトを更新' : 'サイトを作成'}
+                  <button className="btn btn--primary" onClick={createOrUpdate} disabled={isSaving}>
+                    {isSaving ? '保存中...' : rows.some((r) => r.id === id) ? 'サイトを更新' : 'サイトを作成'}
                   </button>
                 </div>
 
