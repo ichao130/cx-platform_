@@ -540,6 +540,20 @@ export default function AnalyticsPage() {
     return String(s?.data?.name || s?.data?.siteName || siteId || "");
   }, [sites, siteId]);
 
+  // サイトのドメイン（URLリンク生成用）
+  const siteDomain = useMemo(() => {
+    const s = sites.find((s) => s.id === siteId);
+    const d = (s?.data?.domains || [])[0] || "";
+    if (!d) return "";
+    return d.startsWith("http") ? d.replace(/\/$/, "") : `https://${d.replace(/\/$/, "")}`;
+  }, [sites, siteId]);
+
+  function toPageUrl(path: string) {
+    if (!siteDomain) return null;
+    const p = path.startsWith("/") ? path : `/${path}`;
+    return `${siteDomain}${p}`;
+  }
+
   return (
     <div style={{ padding: "28px 0 48px" }}>
       {/* ヘッダー */}
@@ -743,10 +757,12 @@ export default function AnalyticsPage() {
                 ) : (
                   <div style={{ display: "grid", gap: 10 }}>
                     {referrerData.map((r) => (
-                      <div key={r.src} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <div className="small" style={{ minWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: 0.82 }} title={r.src}>{r.src}</div>
+                      <div key={r.src} style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                        <div style={{ flex: "0 0 160px", overflow: "hidden" }}>
+                          <div className="small" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: 0.82 }} title={r.src}>{r.src}</div>
+                        </div>
                         <MiniBar value={r.count} max={referrerMax} color="#59b7c6" />
-                        <div className="small" style={{ minWidth: 40, textAlign: "right", fontWeight: 700 }}>{fmtInt(r.count)}</div>
+                        <div className="small" style={{ flex: "0 0 40px", textAlign: "right", fontWeight: 700 }}>{fmtInt(r.count)}</div>
                       </div>
                     ))}
                   </div>
@@ -765,13 +781,31 @@ export default function AnalyticsPage() {
                   <div className="small" style={{ opacity: 0.55 }}>データなし</div>
                 ) : (
                   <div style={{ display: "grid", gap: 10 }}>
-                    {pageData.map((r) => (
-                      <div key={r.path} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <div className="small" style={{ minWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: 0.82 }} title={r.path}>{r.path}</div>
-                        <MiniBar value={r.count} max={pageMax} color="#6366f1" />
-                        <div className="small" style={{ minWidth: 40, textAlign: "right", fontWeight: 700 }}>{fmtInt(r.count)}</div>
-                      </div>
-                    ))}
+                    {pageData.map((r) => {
+                      const href = toPageUrl(r.path);
+                      return (
+                        <div key={r.path} style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                          <div style={{ flex: "0 0 160px", overflow: "hidden" }}>
+                            {href ? (
+                              <a
+                                href={href}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="small"
+                                style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: 0.82, color: "inherit", textDecoration: "underline", textDecorationColor: "rgba(99,102,241,.4)" }}
+                                title={r.path}
+                              >
+                                {r.path}
+                              </a>
+                            ) : (
+                              <div className="small" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: 0.82 }} title={r.path}>{r.path}</div>
+                            )}
+                          </div>
+                          <MiniBar value={r.count} max={pageMax} color="#6366f1" />
+                          <div className="small" style={{ flex: "0 0 40px", textAlign: "right", fontWeight: 700 }}>{fmtInt(r.count)}</div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
