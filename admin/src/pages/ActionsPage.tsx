@@ -872,15 +872,8 @@ export default function ActionsPage() {
           <h1 className="h1">アクション</h1>
           <div className="small">モーダル・バナー・トーストなど、実際に表示する部品を管理する画面です。まずは一覧で確認し、必要なときだけ登録・編集します。</div>
           <div className="small" style={{ marginTop: 6, opacity: 0.72 }}>
-            現在のワークスペース: <b>{selectedWorkspaceName || workspaceId || '（未選択）'}</b>
-            {workspaceId ? (
-              <React.Fragment>
-                {' '}<span style={{ opacity: 0.62 }}> / ID: <code>{workspaceId}</code></span>
-              </React.Fragment>
-            ) : null}
-          </div>
-          <div className="small" style={{ opacity: 0.72 }}>
-            対象サイト: <b>{siteName}</b>
+            対象サイト: <b>{siteName || '（未選択）'}</b>
+            {siteId ? <span style={{ opacity: 0.62 }}> / ID: <code>{siteId}</code></span> : null}
           </div>
         </div>
         <div className="page-header__actions">
@@ -899,24 +892,21 @@ export default function ActionsPage() {
           </div>
           <div className="list-toolbar__actions">
             <div style={{ minWidth: 240 }}>
-              <div className="h2">ワークスペース</div>
+              <div className="h2">サイト</div>
               <select
                 className="input"
-                value={workspaceId}
+                value={siteId}
                 onChange={(e) => {
                   const next = e.target.value;
-                  setWorkspaceId(next);
-                  writeSelectedWorkspaceId(next, currentUid);
+                  setSiteId(next);
+                  writeSelectedSiteId(workspaceId, next);
                 }}
               >
-                {workspaces.map((w) => {
-                  const label = workspaceLabel(workspaces, w.id);
-                  return (
-                    <option key={w.id} value={w.id}>
-                      {label}{label !== w.id ? ` (${w.id})` : ""}
-                    </option>
-                  );
-                })}
+                {sites.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.data?.name || s.id}
+                  </option>
+                ))}
               </select>
             </div>
             <button className="btn" onClick={openCreateModal}>作成</button>
@@ -928,7 +918,7 @@ export default function ActionsPage() {
             <thead>
               <tr>
                 <th>アクション</th>
-                <th>ワークスペース</th>
+                <th>サイト</th>
                 <th>表示タイプ</th>
                 <th>表示位置</th>
                 <th>メディア</th>
@@ -953,9 +943,9 @@ export default function ActionsPage() {
                       </div>
                     </td>
                     <td>
-                      <div>{workspaceLabel(workspaces, r.data.workspaceId)}</div>
+                      <div>{sites.find(s => s.id === r.data.siteId)?.data?.name || r.data.siteId || "-"}</div>
                       <div className="small" style={{ opacity: 0.72 }}>
-                        <code>{r.data.workspaceId}</code>
+                        <code>{r.data.siteId}</code>
                       </div>
                     </td>
                     <td>
@@ -1095,27 +1085,24 @@ export default function ActionsPage() {
                   アクションID: <code>{id}</code>
                 </div>
                 <div className="small" style={{ opacity: 0.72, marginBottom: 8 }}>
-                  現在のワークスペース: <b>{selectedWorkspaceName || workspaceId || "-"}</b>
+                  対象サイト: <b>{siteName || "-"}</b>
                 </div>
 
-                <div className="h2">ワークスペース</div>
+                <div className="h2">サイト</div>
                 <select
                   className="input"
-                  value={workspaceId}
+                  value={siteId}
                   onChange={(e) => {
                     const next = e.target.value;
-                    setWorkspaceId(next);
-                    writeSelectedWorkspaceId(next, currentUid);
+                    setSiteId(next);
+                    writeSelectedSiteId(workspaceId, next);
                   }}
                 >
-                  {workspaces.map((w) => {
-                    const label = workspaceLabel(workspaces, w.id);
-                    return (
-                      <option key={w.id} value={w.id}>
-                        {label}{label !== w.id ? ` (${w.id})` : ""}
-                      </option>
-                    );
-                  })}
+                  {sites.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.data?.name || s.id}
+                    </option>
+                  ))}
                 </select>
 
                 <div style={{ height: 10 }} />
