@@ -263,17 +263,19 @@ export default function MediaPage() {
     }
   }, [workspaces, workspaceId, currentUid]);
 
-  // Load sites for current user
+  // Load sites for current workspace
   useEffect(() => {
-    if (!currentUid) { setSites([]); setSiteId(""); return; }
-    if (workspaceId) setSiteId(readSelectedSiteId(workspaceId));
-    const q = query(collection(db, "sites"), where("memberUids", "array-contains", currentUid));
+    if (!workspaceId) { setSites([]); setSiteId(""); return; }
+    setSiteId(readSelectedSiteId(workspaceId));
+    const q = query(collection(db, "sites"), where("workspaceId", "==", workspaceId));
     return onSnapshot(q, (snap) => {
-      const list = snap.docs.map((d) => ({ id: d.id, data: d.data() as any }));
+      const list = snap.docs
+        .filter((d) => d.data().status !== "deleted")
+        .map((d) => ({ id: d.id, data: d.data() as any }));
       setSites(list);
       setSiteId((prev) => prev || list[0]?.id || "");
     });
-  }, [currentUid, workspaceId]);
+  }, [workspaceId]);
 
   // Listen for site changes from other pages
   useEffect(() => {

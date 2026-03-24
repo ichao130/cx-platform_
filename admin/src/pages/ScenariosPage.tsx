@@ -261,16 +261,18 @@ export default function ScenariosPage() {
   const [urlTarget, setUrlTarget] = useState<"url" | "path">("path");
 
   useEffect(() => {
-    if (!currentUid) {
+    if (!workspaceId) {
       setSites([]);
       return;
     }
-    const q = query(collection(db, "sites"), where("memberUids", "array-contains", currentUid));
+    const q = query(collection(db, "sites"), where("workspaceId", "==", workspaceId));
     return onSnapshot(q, (snap) => {
-      const list = snap.docs.map((d) => ({ id: d.id, data: d.data() }));
+      const list = snap.docs
+        .filter((d) => d.data().status !== "deleted")
+        .map((d) => ({ id: d.id, data: d.data() }));
       setSites(list);
     });
-  }, [currentUid]);
+  }, [workspaceId]);
 
   useEffect(() => {
     return onAuthStateChanged(getAuth(), (user) => {
