@@ -298,90 +298,85 @@
     return { close: close };
   }
 
+  // 画像を事前ロードしてからコールバックを呼ぶ
+  // render 時は 1000ms だけ待ち、キャッシュ済みなら即時反映・未ロードなら即表示
+  function preloadImage(url, callback) {
+    if (!url) { callback(); return; }
+    var done = false;
+    var timeout = setTimeout(function() {
+      if (!done) { done = true; callback(); }
+    }, 1000);
+    var img = new Image();
+    img.onload = img.onerror = function() {
+      if (!done) { done = true; clearTimeout(timeout); callback(); }
+    };
+    img.src = url;
+  }
+
+  // serve レスポンスからすべての画像を先行プリロード（fire-and-forget）
+  function warmupImages(scenarios) {
+    var seen = {};
+    (scenarios || []).forEach(function(s) {
+      (s.actions || []).forEach(function(a) {
+        var url = (a.creative && (a.creative.image_url || a.creative.imageUrl)) || "";
+        if (url && !seen[url]) {
+          seen[url] = true;
+          var img = new Image();
+          img.src = url;
+        }
+      });
+    });
+  }
+
   function renderWithTemplate(action, next, apiBase, ctx, mount) {
     var tpl = action.template;
     if (!tpl || (!tpl.html && !tpl.css)) return false;
 
     var templateId = action.templateId || action.template_id || (tpl && tpl.template_id) || "";
-
-    // mount
-    var hostHandle = null;
-    var rootForInsert = document.body;
-
-    if (mount && mount.selector && (action.type || "modal") !== "modal") {
-      var target = null;
-      try { target = document.querySelector(mount.selector); } catch (e) { target = null; }
-      if (!target) {
-        log("[cx] mount target not found:", mount.selector);
-        return false; // do not show
-      }
-
-      var host = createMountHost(target, mount, templateId);
-      hostHandle = mountRootFor(host, mount);
-      rootForInsert = hostHandle.root || host;
-      ensureTemplateStyle(templateId, tpl.css, hostHandle.shadowRoot || null);
-    } else {
-      // modal/banner/toast -> global
-      ensureTemplateStyle(templateId, tpl.css, null);
-    }
-
     var creative = normalizeCreative(action.creative);
-    var html = renderTemplate(tpl.html, creative);
 
-    var wrapper = document.createElement("div");
-    wrapper.innerHTML = html;
-    var root = wrapper.firstElementChild;
-    if (!root) return false;
+    // 画像を先にプリロードしてから DOM に挿入
+    preloadImage(creative.image_url, function() {
+      // mount
+      var hostHandle = null;
+      var rootForInsert = document.body;
 
-    // insert
-    if (rootForInsert && rootForInsert.appendChild) rootForInsert.appendChild(root);
-    else document.body.appendChild(root);
+      if (mount && mount.selector && (action.type || "modal") !== "modal") {
+        var target = null;
+        try { target = document.querySelector(mount.selector); } catch (e) { target = null; }
+        if (!target) {
+          log("[cx] mount target not found:", mount.selector);
+          return;
+        }
 
-    // impression
-    postLog(apiBase, {
-      site_id: ctx.site_id,
-      scenario_id: ctx.scenario_id,
-      action_id: action.action_id || action.id,
-      template_id: templateId || null,
-      variant_id: ctx.variant_id || null,
-      event: "impression",
-      url: ctx.url,
-      path: ctx.path,
-      ref: ctx.ref,
-      vid: ctx.vid,
-      sid: ctx.sid
-    }, ctx.site_id, ctx.site_key);
-
-    // log clicks to creative.cta_url if present
-    if (creative && creative.cta_url) {
-      var links = root.querySelectorAll('a[href="' + creative.cta_url + '"]');
-      for (var i = 0; i < links.length; i++) {
-        links[i].addEventListener("click", function () {
-          postLog(apiBase, {
-            site_id: ctx.site_id,
-            scenario_id: ctx.scenario_id,
-            action_id: action.action_id || action.id,
-            template_id: templateId || null,
-            variant_id: ctx.variant_id || null,
-            event: "click_link",
-            url: ctx.url,
-            path: ctx.path,
-            ref: ctx.ref,
-            vid: ctx.vid,
-            sid: ctx.sid
-          }, ctx.site_id, ctx.site_key);
-        });
+        var host = createMountHost(target, mount, templateId);
+        hostHandle = mountRootFor(host, mount);
+        rootForInsert = hostHandle.root || host;
+        ensureTemplateStyle(templateId, tpl.css, hostHandle.shadowRoot || null);
+      } else {
+        // modal/banner/toast -> global
+        ensureTemplateStyle(templateId, tpl.css, null);
       }
-    }
 
-    mountAndWireClose(root, function () {
+      var html = renderTemplate(tpl.html, creative);
+
+      var wrapper = document.createElement("div");
+      wrapper.innerHTML = html;
+      var root = wrapper.firstElementChild;
+      if (!root) return;
+
+      // insert
+      if (rootForInsert && rootForInsert.appendChild) rootForInsert.appendChild(root);
+      else document.body.appendChild(root);
+
+      // impression
       postLog(apiBase, {
         site_id: ctx.site_id,
         scenario_id: ctx.scenario_id,
         action_id: action.action_id || action.id,
         template_id: templateId || null,
         variant_id: ctx.variant_id || null,
-        event: "close",
+        event: "impression",
         url: ctx.url,
         path: ctx.path,
         ref: ctx.ref,
@@ -389,8 +384,46 @@
         sid: ctx.sid
       }, ctx.site_id, ctx.site_key);
 
-      if (typeof next === "function") next();
-    }, hostHandle ? hostHandle.remove : null);
+      // log clicks to creative.cta_url if present
+      if (creative && creative.cta_url) {
+        var links = root.querySelectorAll('a[href="' + creative.cta_url + '"]');
+        for (var i = 0; i < links.length; i++) {
+          links[i].addEventListener("click", function () {
+            postLog(apiBase, {
+              site_id: ctx.site_id,
+              scenario_id: ctx.scenario_id,
+              action_id: action.action_id || action.id,
+              template_id: templateId || null,
+              variant_id: ctx.variant_id || null,
+              event: "click_link",
+              url: ctx.url,
+              path: ctx.path,
+              ref: ctx.ref,
+              vid: ctx.vid,
+              sid: ctx.sid
+            }, ctx.site_id, ctx.site_key);
+          });
+        }
+      }
+
+      mountAndWireClose(root, function () {
+        postLog(apiBase, {
+          site_id: ctx.site_id,
+          scenario_id: ctx.scenario_id,
+          action_id: action.action_id || action.id,
+          template_id: templateId || null,
+          variant_id: ctx.variant_id || null,
+          event: "close",
+          url: ctx.url,
+          path: ctx.path,
+          ref: ctx.ref,
+          vid: ctx.vid,
+          sid: ctx.sid
+        }, ctx.site_id, ctx.site_key);
+
+        if (typeof next === "function") next();
+      }, hostHandle ? hostHandle.remove : null);
+    }); // end preloadImage callback
 
     return true;
   }
@@ -404,6 +437,7 @@
 
     var creative = normalizeCreative(action.creative);
 
+    preloadImage(creative.image_url, function() {
     var overlay = document.createElement("div");
     overlay.className = "cx-overlay";
     var modal = document.createElement("div");
@@ -505,6 +539,7 @@
 
     overlay.addEventListener("click", function (e) { if (e.target === overlay) close(); });
     okBtn.addEventListener("click", close);
+    }); // end preloadImage callback
   }
 
   function renderBanner(action, next, apiBase, ctx) {
@@ -1028,6 +1063,9 @@
       .then(function (data) {
         var scenarios = (data && data.scenarios) || [];
         if (!Array.isArray(scenarios) || !scenarios.length) return;
+
+        // stay timer と並行して画像を先読み開始（ロード完了前でも表示は止めない）
+        warmupImages(scenarios);
 
         scenarios.sort(function (a, b) { return Number((b.priority || 0)) - Number((a.priority || 0)); });
         for (var i = 0; i < scenarios.length; i++) {

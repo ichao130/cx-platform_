@@ -1,7 +1,7 @@
 import React, { Fragment, useEffect, useMemo, useState } from "react";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { collection, deleteDoc, doc, limit, onSnapshot, orderBy, query, setDoc, where } from "firebase/firestore";
-import { db } from "../firebase";
+import { db, apiPostJson } from "../firebase";
 import { uploadMediaToWorkspace } from "../lib/media";
 
 type RoleKey = 'owner' | 'admin' | 'member' | 'viewer';
@@ -385,8 +385,19 @@ export default function WorkspacesPage() {
     setError('');
 
     const isNewWorkspace = !editingRow;
-    const docRef = doc(db, 'workspaces', safeId);
-    const payload: Workspace & { members?: Record<string, string>; createdAt?: any; createdBy?: string } = {
+
+    let resolvedId = safeId;
+
+    if (isNewWorkspace) {
+      // 新規: APIを経由してbootstrap（users/{uid}の作成含む）
+      const res = await apiPostJson<{ ok: boolean; workspace_id: string }>('/v1/workspaces/create', { name: safeName });
+      if (!res.ok || !res.workspace_id) throw new Error('ワークスペースの作成に失敗しました');
+      resolvedId = res.workspace_id;
+    }
+
+    // 追加フィールド（ロゴ・説明・設定など）はFirestore直接更新
+    const docRef = doc(db, 'workspaces', resolvedId);
+    const payload: Workspace & { updatedAt?: any } = {
       name: safeName,
       logoUrl: String(logoUrl || '').trim(),
       description: String(description || '').trim(),
@@ -402,20 +413,10 @@ export default function WorkspacesPage() {
         access: accessMatrix,
       },
       updatedAt: new Date(),
-      ...(isNewWorkspace && currentUid
-        ? {
-            members: {
-              [currentUid]: 'owner',
-            },
-            createdAt: new Date(),
-            createdBy: currentUid,
-          }
-        : {}),
     };
-
     await setDoc(docRef, payload, { merge: true });
 
-    const savedId = safeId;
+    const savedId = resolvedId;
     setSelectedWorkspaceId(savedId, currentUid);
     setSelectedWorkspaceIdState(savedId);
     resetEditor();
@@ -535,7 +536,10 @@ export default function WorkspacesPage() {
                         編集
                       </button>
                       <span style={{ width: 8, display: 'inline-block' }} />
-                      <button className="btn btn--danger" onClick={() => deleteDoc(doc(db, 'workspaces', r.id))}>
+                      <button className="btn btn--danger" onClick={() => {
+                        if (!window.confirm(`ワークスペース「${r.data?.name || r.id}」を削除しますか？\nメンバー・サイト情報は残ります。`)) return;
+                        deleteDoc(doc(db, 'workspaces', r.id));
+                      }}>
                         削除
                       </button>
                     </td>

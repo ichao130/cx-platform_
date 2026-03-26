@@ -1,5 +1,5 @@
 // src/pages/MediaPage.tsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import {
   collection,
@@ -172,6 +172,15 @@ export default function MediaPage() {
   const [siteId, setSiteId] = useState("");
   const [sites, setSites] = useState<Array<{ id: string; data: { name?: string; siteName?: string } }>>([]);
 
+  const migratedWs = useRef<Set<string>>(new Set());
+  const runMigration = useCallback(async (wsId: string) => {
+    if (!wsId || migratedWs.current.has(wsId)) return;
+    migratedWs.current.add(wsId);
+    try {
+      await apiPostJson("/v1/sites/migrate-member-uids", { workspace_id: wsId });
+    } catch (e) { /* fire-and-forget */ }
+  }, []);
+
   const [mediaRows, setMediaRows] = useState<Row<MediaDoc>[]>([]);
   const [actionRows, setActionRows] = useState<Row<ActionDoc>[]>([]);
 
@@ -263,11 +272,12 @@ export default function MediaPage() {
     }
   }, [workspaces, workspaceId, currentUid]);
 
-  // Load sites for current workspace
+  // Load sites for current user (memberUids-based)
   useEffect(() => {
-    if (!workspaceId) { setSites([]); setSiteId(""); return; }
-    setSiteId(readSelectedSiteId(workspaceId));
-    const q = query(collection(db, "sites"), where("workspaceId", "==", workspaceId));
+    if (!currentUid) { setSites([]); setSiteId(""); return; }
+    if (workspaceId) runMigration(workspaceId);
+    if (workspaceId) setSiteId(readSelectedSiteId(workspaceId));
+    const q = query(collection(db, "sites"), where("memberUids", "array-contains", currentUid));
     return onSnapshot(q, (snap) => {
       const list = snap.docs
         .filter((d) => d.data().status !== "deleted")
@@ -275,7 +285,7 @@ export default function MediaPage() {
       setSites(list);
       setSiteId((prev) => prev || list[0]?.id || "");
     });
-  }, [workspaceId]);
+  }, [currentUid, workspaceId, runMigration]);
 
   // Listen for site changes from other pages
   useEffect(() => {
@@ -292,16 +302,16 @@ export default function MediaPage() {
     if (workspaceId && siteId) writeSelectedSiteId(workspaceId, siteId);
   }, [workspaceId, siteId]);
 
-  // Media list
+  // Media list（workspaceId ベースで取得し、siteId はクライアントでフィルタ）
   useEffect(() => {
-    if (!siteId) {
+    if (!workspaceId) {
       setMediaRows([]);
       return;
     }
 
     const q = query(
       collection(db, "media"),
-      where("siteId", "==", siteId),
+      where("workspaceId", "==", workspaceId),
       limit(200)
     );
 
@@ -325,7 +335,7 @@ export default function MediaPage() {
       },
       (err) => console.error(err)
     );
-  }, [siteId]);
+  }, [workspaceId]);
 
   // Actions for usage map
   useEffect(() => {
@@ -362,13 +372,15 @@ export default function MediaPage() {
   const filtered = useMemo(() => {
     const key = qText.trim().toLowerCase();
     return mediaRows.filter((r) => {
+      // siteId が設定されている行は現在のサイトと一致するか、siteId 未設定（旧データ）のみ表示
+      if (siteId && r.data.siteId && r.data.siteId !== siteId) return false;
       if (!key) return true;
       const n = (r.data.originalName || "").toLowerCase();
       const id = r.id.toLowerCase();
       const ct = (r.data.contentType || "").toLowerCase();
       return n.includes(key) || id.includes(key) || ct.includes(key);
     });
-  }, [mediaRows, qText]);
+  }, [mediaRows, qText, siteId]);
 
   useEffect(() => {
     if (!workspaceId) return;
@@ -501,7 +513,7 @@ export default function MediaPage() {
     try {
       for (const file of pendingFiles) {
         try {
-          const result: any = await uploadMediaToWorkspace({ workspaceId, file });
+          const result: any = await uploadMediaToWorkspace({ workspaceId, siteId: siteId || undefined, file });
           ok += 1;
 
           const mediaId = String(result?.mediaId || "");

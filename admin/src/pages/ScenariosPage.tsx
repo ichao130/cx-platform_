@@ -1,8 +1,8 @@
-import React, { Fragment, useEffect, useMemo, useState } from "react";
+import React, { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
-import { collection, deleteDoc, doc, onSnapshot, orderBy, query, setDoc, where } from "firebase/firestore";
+import { collection, deleteDoc, deleteField, doc, onSnapshot, orderBy, query, setDoc, updateDoc, where } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
-import { db } from "../firebase";
+import { db, apiPostJson } from "../firebase";
 
 function genId(prefix: string) {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
@@ -195,6 +195,16 @@ export default function ScenariosPage() {
   const [siteId, setSiteId] = useState(() => readSelectedSiteId());
   const [workspaceId, setWorkspaceId] = useState("");
   const [currentUid, setCurrentUid] = useState("");
+
+  const migratedWs = useRef<Set<string>>(new Set());
+  const runMigration = useCallback(async (wsId: string) => {
+    if (!wsId || migratedWs.current.has(wsId)) return;
+    migratedWs.current.add(wsId);
+    try {
+      await apiPostJson("/v1/sites/migrate-member-uids", { workspace_id: wsId });
+    } catch (e) { /* fire-and-forget */ }
+  }, []);
+
   const [name, setName] = useState("New scenario");
   const [status, setStatus] = useState<"active" | "paused">("active");
   const [priority, setPriority] = useState(0);
@@ -244,6 +254,7 @@ export default function ScenariosPage() {
   const [actionIdToAdd, setActionIdToAdd] = useState("");
   const [variantIdToEdit, setVariantIdToEdit] = useState<string>("A");
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
 
   // schedule
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
@@ -261,18 +272,16 @@ export default function ScenariosPage() {
   const [urlTarget, setUrlTarget] = useState<"url" | "path">("path");
 
   useEffect(() => {
-    if (!workspaceId) {
-      setSites([]);
-      return;
-    }
-    const q = query(collection(db, "sites"), where("workspaceId", "==", workspaceId));
+    if (!currentUid) { setSites([]); return; }
+    if (workspaceId) runMigration(workspaceId);
+    const q = query(collection(db, "sites"), where("memberUids", "array-contains", currentUid));
     return onSnapshot(q, (snap) => {
       const list = snap.docs
         .filter((d) => d.data().status !== "deleted")
         .map((d) => ({ id: d.id, data: d.data() }));
       setSites(list);
     });
-  }, [workspaceId]);
+  }, [currentUid, workspaceId, runMigration]);
 
   useEffect(() => {
     return onAuthStateChanged(getAuth(), (user) => {
@@ -651,6 +660,7 @@ export default function ScenariosPage() {
   // Save / Reset / Load
   // -------------------------
   function resetForm() {
+    setCurrentStep(1);
     setId(genId("scn"));
     setName("New scenario");
     setStatus("active");
@@ -696,6 +706,7 @@ export default function ScenariosPage() {
     setScheduleEnabled(false);
     setScheduleStart("");
     setScheduleEnd("");
+    setSavedPayloadStr(null);
   }
 
   function openCreateModal() {
@@ -704,6 +715,7 @@ export default function ScenariosPage() {
   }
 
   function openEditModal(docId: string, s: Scenario) {
+    setCurrentStep(1);
     loadScenario(docId, s);
     setIsModalOpen(true);
   }
@@ -718,7 +730,18 @@ export default function ScenariosPage() {
     if (!workspaceId) { showToast("ワークスペースが未設定です", "error"); return; }
     try {
       const safePayload = stripUndefinedDeep(payload);
-      await setDoc(doc(db, "scenarios", id.trim()), safePayload, { merge: true });
+      const docRef = doc(db, "scenarios", id.trim());
+      await setDoc(docRef, safePayload, { merge: true });
+
+      // merge:true + undefined はフィールドを残してしまうため、
+      // 無効化されたフィールドは deleteField() で明示的に削除する
+      const toDelete: Record<string, any> = {};
+      if (!scheduleEnabled) toDelete.schedule = deleteField();
+      if (!expEnabled) toDelete.experiment = deleteField();
+      if (Object.keys(toDelete).length) {
+        await updateDoc(docRef, toDelete);
+      }
+
       showToast("シナリオを保存しました ✓");
       resetForm();
       setIsModalOpen(false);
@@ -728,6 +751,7 @@ export default function ScenariosPage() {
   }
 
   function loadScenario(docId: string, s: Scenario) {
+    loadingBaseRef.current = true;
     setId(docId);
     setSiteId(s.siteId || "");
     setWorkspaceId(s.workspaceId || "");
@@ -849,11 +873,41 @@ export default function ScenariosPage() {
     return m;
   }, [actionsForWorkspace]);
 
+  const actionMap = useMemo(() => {
+    const m = new Map<string, ActionRow>();
+    for (const a of actionsForWorkspace) m.set(a.id, a);
+    return m;
+  }, [actionsForWorkspace]);
+
   const weightsSum = useMemo(() => {
     if (!expEnabled) return 0;
     return (variants || []).reduce((acc, v) => acc + Number(v.weight ?? 0), 0);
   }, [expEnabled, variants]);
 
+  // ---- 未保存検知 ----
+  const [savedPayloadStr, setSavedPayloadStr] = useState<string | null>(null);
+  const loadingBaseRef = useRef(false);
+
+  const isDirty = useMemo(() => {
+    if (savedPayloadStr === null) return false;
+    return JSON.stringify(stripUndefinedDeep(payload)) !== savedPayloadStr;
+  }, [payload, savedPayloadStr]);
+
+  // loadScenario 後に payload が確定したタイミングでベースを記録
+  useEffect(() => {
+    if (!loadingBaseRef.current) return;
+    loadingBaseRef.current = false;
+    setSavedPayloadStr(JSON.stringify(stripUndefinedDeep(payload)));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payload]);
+
+  // ページ離脱時に警告
+  useEffect(() => {
+    if (!isDirty) return;
+    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [isDirty]);
 
   return (
     <div className="container liquid-page">
@@ -1007,7 +1061,10 @@ export default function ScenariosPage() {
             padding: 24,
             zIndex: 50,
           }}
-          onClick={() => setIsModalOpen(false)}
+          onClick={() => {
+            if (isDirty && !window.confirm("保存されていない変更があります。閉じますか？")) return;
+            setIsModalOpen(false);
+          }}
         >
           <div
             className="card"
@@ -1023,20 +1080,51 @@ export default function ScenariosPage() {
                   新規登録・編集はモーダルで行います。条件、A/B、アクションはここで確認してください。
                 </div>
               </div>
-              <div className="page-header__actions">
-                <button className="btn" onClick={() => setIsModalOpen(false)}>閉じる</button>
+              <div className="page-header__actions" style={{ gap: 8 }}>
+                {isDirty && <span style={{ fontSize: 12, fontWeight: 600, color: "#d97706", padding: "4px 8px", background: "#fffbeb", border: "1px solid #fbbf24", borderRadius: 6 }}>未保存</span>}
+                <button className="btn" onClick={() => {
+                  if (isDirty && !window.confirm("保存されていない変更があります。閉じますか？")) return;
+                  setIsModalOpen(false);
+                }}>閉じる</button>
               </div>
             </div>
 
-            <div className="row liquid-page" style={{ alignItems: "flex-start", flexWrap: "wrap" }}>
-              <div style={{ flex: 1, minWidth: 360 }}>
+            {/* ステップインジケーター */}
+            <div style={{ display: "flex", marginBottom: 24, borderRadius: 8, overflow: "hidden", border: "1.5px solid #e2e8f0" }}>
+              {([
+                { step: 1 as const, label: "① 基本" },
+                { step: 2 as const, label: "② いつ表示？" },
+                { step: 3 as const, label: "③ 誰に表示？" },
+              ]).map(({ step, label }) => (
+                <button
+                  key={step}
+                  onClick={() => setCurrentStep(step)}
+                  style={{
+                    flex: 1,
+                    padding: "10px 0",
+                    background: currentStep === step ? "#2563eb" : "#f8fafc",
+                    color: currentStep === step ? "#fff" : "#94a3b8",
+                    fontWeight: currentStep === step ? 700 : 500,
+                    border: "none",
+                    borderRight: step < 3 ? "1.5px solid #e2e8f0" : "none",
+                    cursor: "pointer",
+                    fontSize: 14,
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {/* STEP 1: 基本 */}
+            {currentStep === 1 && (
+              <div>
                 <div className="h2">シナリオ名</div>
                 <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
-                <div className="small" style={{ opacity: 0.72, marginTop: 6, marginBottom: 6 }}>
+                <div className="small" style={{ opacity: 0.72, marginTop: 4, marginBottom: 10 }}>
                   シナリオID: <code>{id}</code>
                 </div>
 
-                <div style={{ height: 10 }} />
                 <div className="small" style={{ opacity: 0.72, marginBottom: 6 }}>
                   現在のサイト: <b>{selectedSiteName || siteId || "-"}</b> / ワークスペース: <b>{selectedWorkspaceName || workspaceId || "-"}</b>
                 </div>
@@ -1044,10 +1132,7 @@ export default function ScenariosPage() {
                 <select
                   className="input"
                   value={siteId}
-                  onChange={(e) => {
-                    setSiteId(e.target.value);
-                    writeSelectedSiteId(e.target.value);
-                  }}
+                  onChange={(e) => { setSiteId(e.target.value); writeSelectedSiteId(e.target.value); }}
                 >
                   {visibleSites.map((s) => (
                     <option key={s.id} value={s.id}>
@@ -1057,36 +1142,127 @@ export default function ScenariosPage() {
                 </select>
 
                 <div style={{ height: 10 }} />
-                <div className="row">
-                  <div style={{ flex: 1 }}>
-                    <div className="h2">状態</div>
-                    <select className="input" value={status} onChange={(e) => setStatus(e.target.value as any)}>
-                      <option value="active">active（配信中）</option>
-                      <option value="paused">paused（一時停止）</option>
-                    </select>
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div className="h2">優先度</div>
-                    <input
-                      className="input"
-                      type="number"
-                      value={priority}
-                      onChange={(e) => setPriority(Number(e.target.value))}
-                    />
-                  </div>
+                <div className="h2">状態</div>
+                <select className="input" value={status} onChange={(e) => setStatus(e.target.value as any)}>
+                  <option value="active">active（配信中）</option>
+                  <option value="paused">paused（一時停止）</option>
+                </select>
+
+                <div style={{ height: 14 }} />
+                <div className="h2">アクション設定（通常配信）</div>
+                <div className="small" style={{ opacity: 0.72, marginBottom: 8 }}>
+                  A/Bテストは「③ 誰に表示？」で設定できます。
                 </div>
-
+                <div className="row">
+                  <select
+                    className="input"
+                    style={{ flex: 1, maxWidth: 400 }}
+                    value={actionIdToAdd}
+                    onChange={(e) => setActionIdToAdd(e.target.value)}
+                  >
+                    {actionsForWorkspace.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        [{a.data?.type || "modal"}] {a.data?.creative?.title || a.id}
+                      </option>
+                    ))}
+                  </select>
+                  <button className="btn" onClick={addActionRef}>追加</button>
+                </div>
+                {actionIdToAdd && actionMap.get(actionIdToAdd) && (() => {
+                  const a = actionMap.get(actionIdToAdd)!;
+                  const img = a.data?.creative?.image_url || a.data?.creative?.imageUrl;
+                  return (
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8, padding: "8px 10px", background: "rgba(255,255,255,.04)", borderRadius: 8, border: "1px solid rgba(255,255,255,.08)" }}>
+                      {img && <img src={img} alt="" style={{ width: 54, height: 40, objectFit: "cover", borderRadius: 4, flexShrink: 0 }} />}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: 13 }}>{a.data?.creative?.title || a.id}</div>
+                        <div className="small" style={{ opacity: 0.6 }}>{a.data?.type || "modal"} / {a.id}</div>
+                      </div>
+                      <button className="btn" style={{ fontSize: 11, padding: "3px 10px", flexShrink: 0 }} onClick={() => { setIsModalOpen(false); navigate("/actions"); }}>
+                        アクション編集へ
+                      </button>
+                    </div>
+                  );
+                })()}
                 <div style={{ height: 10 }} />
-                <div className="h2">メモ（施策メモ）</div>
-                <textarea
-                  className="input"
-                  style={{ minHeight: 72 }}
-                  value={memo}
-                  onChange={(e) => setMemo(e.target.value)}
-                  placeholder="例：Topページで初回訪問者にクーポン訴求 / Aは画像あり、Bは画像なし…"
-                />
+                {(actionRefs || []).length ? (
+                  <div className="liquid-scroll-x">
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>actionId</th>
+                          <th>enabled</th>
+                          <th>order</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(actionRefs || []).map((r, idx) => (
+                          <tr
+                            key={`${r.actionId}-${idx}`}
+                            draggable
+                            onDragStart={() => setDragIndex(idx)}
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={() => {
+                              if (dragIndex == null) return;
+                              moveAction(dragIndex, idx);
+                              setDragIndex(null);
+                            }}
+                            style={{ opacity: dragIndex === idx ? 0.6 : 1 }}
+                          >
+                            <td>{idx}</td>
+                            <td>
+                              {(() => {
+                                const a = actionMap.get(r.actionId);
+                                const img = a?.data?.creative?.image_url || a?.data?.creative?.imageUrl;
+                                return (
+                                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                    {img && <img src={img} alt="" style={{ width: 36, height: 27, objectFit: "cover", borderRadius: 3, flexShrink: 0 }} />}
+                                    <div>
+                                      <div style={{ fontWeight: 600, fontSize: 13 }}>{actionTitleById.get(r.actionId) || r.actionId}</div>
+                                      <div className="small" style={{ opacity: 0.55 }}>{a?.data?.type || ""} / {r.actionId}</div>
+                                    </div>
+                                  </div>
+                                );
+                              })()}
+                              <button className="btn" style={{ marginTop: 4, fontSize: 11, padding: "2px 8px" }} onClick={() => { setIsModalOpen(false); navigate("/actions"); }}>
+                                アクション編集へ
+                              </button>
+                            </td>
+                            <td>
+                              <input
+                                type="checkbox"
+                                checked={r.enabled ?? true}
+                                onChange={(e) =>
+                                  setActionRefs((cur) =>
+                                    reorder((cur || []).map((x, i) => i === idx ? { ...x, enabled: e.target.checked } : x))
+                                  )
+                                }
+                              />
+                            </td>
+                            <td>
+                              <button className="btn" disabled={idx === 0} onClick={() => moveAction(idx, idx - 1)}>↑</button>
+                              <span style={{ width: 6, display: "inline-block" }} />
+                              <button className="btn" disabled={idx === (actionRefs || []).length - 1} onClick={() => moveAction(idx, idx + 1)}>↓</button>
+                            </td>
+                            <td>
+                              <button className="btn" onClick={() => setActionRefs((cur) => reorder((cur || []).filter((_, i) => i !== idx)))}>削除</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="small">まだアクションが追加されていません（このシナリオでは何も表示されません）。</div>
+                )}
+              </div>
+            )}
 
-                <div style={{ height: 12 }} />
+            {/* STEP 2: いつ表示？ */}
+            {currentStep === 2 && (
+              <div>
                 <div className="h2">表示条件（基本設定）</div>
                 <div className="row">
                   {PAGE_TYPES.map((pt) => (
@@ -1108,43 +1284,23 @@ export default function ScenariosPage() {
                   </label>
                 </div>
 
-                <div style={{ height: 10 }} />
+                <div style={{ height: 14 }} />
                 <div className="h2">URL条件</div>
-
                 <div className="row" style={{ alignItems: "center", gap: 10 }}>
                   <label className="badge" style={{ cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={urlEnabled}
-                      onChange={(e) => setUrlEnabled(e.target.checked)}
-                    />
+                    <input type="checkbox" checked={urlEnabled} onChange={(e) => setUrlEnabled(e.target.checked)} />
                     URL条件を有効化
                   </label>
-
-                  <select
-                    className="input"
-                    style={{ width: 140 }}
-                    disabled={!urlEnabled}
-                    value={urlTarget}
-                    onChange={(e) => setUrlTarget(e.target.value as any)}
-                  >
+                  <select className="input" style={{ width: 140 }} disabled={!urlEnabled} value={urlTarget} onChange={(e) => setUrlTarget(e.target.value as any)}>
                     <option value="path">path</option>
                     <option value="url">url</option>
                   </select>
-
-                  <select
-                    className="input"
-                    style={{ width: 160 }}
-                    disabled={!urlEnabled}
-                    value={urlMode}
-                    onChange={(e) => setUrlMode(e.target.value as any)}
-                  >
+                  <select className="input" style={{ width: 160 }} disabled={!urlEnabled} value={urlMode} onChange={(e) => setUrlMode(e.target.value as any)}>
                     <option value="contains">contains</option>
                     <option value="prefix">prefix</option>
                     <option value="equals">equals</option>
                     <option value="regex">regex</option>
                   </select>
-
                   <input
                     className="input"
                     style={{ flex: 1, minWidth: 220 }}
@@ -1154,20 +1310,18 @@ export default function ScenariosPage() {
                     placeholder="例: /products/  or  ^/collections/.*"
                   />
                 </div>
-
                 <div className="small" style={{ marginTop: 6 }}>
                   例：<code>path + prefix = /products/</code>（商品ページ） / <code>regex = ^/lp/</code>
                 </div>
+                <div className="small" style={{ marginTop: 4, opacity: 0.72 }}>
+                  ※ トップページを指定したい場合は <code>path + equals = /</code> を使ってください。
+                </div>
 
-                <div style={{ height: 12 }} />
+                <div style={{ height: 14 }} />
                 <div className="h2">配信スケジュール</div>
                 <div className="row" style={{ alignItems: "center", gap: 10 }}>
                   <label className="badge" style={{ cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={scheduleEnabled}
-                      onChange={(e) => setScheduleEnabled(e.target.checked)}
-                    />
+                    <input type="checkbox" checked={scheduleEnabled} onChange={(e) => setScheduleEnabled(e.target.checked)} />
                     日時を指定する
                   </label>
                 </div>
@@ -1175,42 +1329,16 @@ export default function ScenariosPage() {
                   <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
                     <div className="row" style={{ alignItems: "center", gap: 10 }}>
                       <span className="small" style={{ minWidth: 80 }}>開始日時</span>
-                      <input
-                        className="input"
-                        type="datetime-local"
-                        value={scheduleStart}
-                        onChange={(e) => setScheduleStart(e.target.value)}
-                        style={{ flex: 1 }}
-                      />
+                      <input className="input" type="datetime-local" value={scheduleStart} onChange={(e) => setScheduleStart(e.target.value)} style={{ flex: 1 }} />
                       {scheduleStart && (
-                        <button
-                          type="button"
-                          className="badge"
-                          style={{ cursor: "pointer" }}
-                          onClick={() => setScheduleStart("")}
-                        >
-                          クリア
-                        </button>
+                        <button type="button" className="badge" style={{ cursor: "pointer" }} onClick={() => setScheduleStart("")}>クリア</button>
                       )}
                     </div>
                     <div className="row" style={{ alignItems: "center", gap: 10 }}>
                       <span className="small" style={{ minWidth: 80 }}>終了日時</span>
-                      <input
-                        className="input"
-                        type="datetime-local"
-                        value={scheduleEnd}
-                        onChange={(e) => setScheduleEnd(e.target.value)}
-                        style={{ flex: 1 }}
-                      />
+                      <input className="input" type="datetime-local" value={scheduleEnd} onChange={(e) => setScheduleEnd(e.target.value)} style={{ flex: 1 }} />
                       {scheduleEnd && (
-                        <button
-                          type="button"
-                          className="badge"
-                          style={{ cursor: "pointer" }}
-                          onClick={() => setScheduleEnd("")}
-                        >
-                          クリア
-                        </button>
+                        <button type="button" className="badge" style={{ cursor: "pointer" }} onClick={() => setScheduleEnd("")}>クリア</button>
                       )}
                     </div>
                     <div className="small" style={{ opacity: 0.72 }}>
@@ -1218,53 +1346,16 @@ export default function ScenariosPage() {
                     </div>
                   </div>
                 )}
+              </div>
+            )}
 
-                <div style={{ height: 12 }} />
-                <div className="h2">コンバージョン条件</div>
-                <div className="row" style={{ alignItems: "center", gap: 10 }}>
-                  <label className="badge" style={{ cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={goalEnabled}
-                      onChange={(e) => setGoalEnabled(e.target.checked)}
-                    />
-                    コンバージョン計測を有効化
-                  </label>
-
-                  <select
-                    className="input"
-                    style={{ width: 180 }}
-                    disabled={!goalEnabled}
-                    value={goalType}
-                    onChange={(e) => setGoalType(e.target.value as any)}
-                  >
-                    {GOAL_TYPES.map((t) => (
-                      <option key={t} value={t}>{t}</option>
-                    ))}
-                  </select>
-
-                  <input
-                    className="input"
-                    style={{ flex: 1, minWidth: 180 }}
-                    disabled={!goalEnabled}
-                    value={goalValue}
-                    onChange={(e) => setGoalValue(e.target.value)}
-                    placeholder="例：/thanks  or  complete"
-                  />
-                </div>
-                <div className="small" style={{ marginTop: 6 }}>
-                  例：<code>path_prefix=/thanks</code> / <code>url_contains=complete</code>
-                </div>
-
-                <div style={{ height: 14 }} />
+            {/* STEP 3: 誰に表示？ */}
+            {currentStep === 3 && (
+              <div>
                 <div className="h2">ターゲット設定（Phase 1）</div>
                 <div className="row" style={{ alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   <label className="badge" style={{ cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={targetingEnabled}
-                      onChange={(e) => setTargetingEnabled(e.target.checked)}
-                    />
+                    <input type="checkbox" checked={targetingEnabled} onChange={(e) => setTargetingEnabled(e.target.checked)} />
                     ターゲット設定を有効化
                   </label>
                 </div>
@@ -1313,14 +1404,7 @@ export default function ScenariosPage() {
                     <option value="equals">equals</option>
                     <option value="startsWith">startsWith</option>
                   </select>
-                  <input
-                    className="input"
-                    style={{ flex: 1, minWidth: 220 }}
-                    disabled={!targetingEnabled}
-                    value={targetUrlValue}
-                    onChange={(e) => setTargetUrlValue(e.target.value)}
-                    placeholder="例: /products/"
-                  />
+                  <input className="input" style={{ flex: 1, minWidth: 220 }} disabled={!targetingEnabled} value={targetUrlValue} onChange={(e) => setTargetUrlValue(e.target.value)} placeholder="例: /products/" />
                 </div>
 
                 <div style={{ height: 10 }} />
@@ -1348,346 +1432,204 @@ export default function ScenariosPage() {
                   </label>
                 </div>
 
-                <div className="small" style={{ marginTop: 6, opacity: 0.72 }}>
-                  まずは「誰に出すか」をここで決めます。発火タイミングやA/B設定とは分けて管理します。
-                </div>
-
                 <div style={{ height: 14 }} />
                 <div className="h2">A/Bテスト設定</div>
-
                 <div className="row" style={{ alignItems: "center", gap: 10 }}>
                   <label className="badge" style={{ cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={expEnabled}
-                      onChange={(e) => setExpEnabled(e.target.checked)}
-                    />
+                    <input type="checkbox" checked={expEnabled} onChange={(e) => setExpEnabled(e.target.checked)} />
                     A/Bテストを有効化
                   </label>
-
                   <div style={{ width: 10 }} />
-
                   <div className="small">固定単位</div>
-                  <select
-                    className="input"
-                    style={{ width: 120 }}
-                    disabled={!expEnabled}
-                    value={expSticky}
-                    onChange={(e) => setExpSticky(e.target.value as any)}
-                  >
+                  <select className="input" style={{ width: 120 }} disabled={!expEnabled} value={expSticky} onChange={(e) => setExpSticky(e.target.value as any)}>
                     <option value="vid">vid</option>
                     <option value="sid">sid</option>
                   </select>
-
                   <div style={{ flex: 1 }} />
-                  {expEnabled ? (
-                    <button className="btn" onClick={normalizeWeightsTo100}>
-                      配分合計を100に調整
-                    </button>
-                  ) : null}
-                  {expEnabled ? (
-                    <button className="btn" onClick={addVariant}>
-                      パターン追加
-                    </button>
-                  ) : null}
+                  {expEnabled ? <button className="btn" onClick={normalizeWeightsTo100}>配分合計を100に調整</button> : null}
+                  {expEnabled ? <button className="btn" onClick={addVariant}>パターン追加</button> : null}
                 </div>
 
                 {expEnabled ? (
                   <>
                     <div style={{ height: 10 }} />
-                    <div className="small">
-                      配分合計：<b>{weightsSum}</b>（目安100）
-                    </div>
-
+                    <div className="small">配分合計：<b>{weightsSum}</b>（目安100）</div>
                     <div style={{ height: 10 }} />
-                    <div className="liquid-scroll-x">
-                    <table className="table">
-                      <thead>
-                        <tr>
-                          <th>variant</th>
-                          <th>name</th>
-                          <th style={{ textAlign: "right" }}>weight</th>
-                          <th>actions</th>
-                          <th></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {variants.map((v) => (
-                          <tr key={v.id} style={{ opacity: v.id === variantIdToEdit ? 1 : 0.85 }}>
-                            <td>
-                              <button
-                                className="btn"
-                                onClick={() => setVariantIdToEdit(v.id)}
-                                style={{ fontWeight: v.id === variantIdToEdit ? 800 : 600 }}
-                              >
-                                {v.id}
-                              </button>
-                            </td>
-                            <td>
-                              <input
-                                className="input"
-                                value={v.name || ""}
-                                onChange={(e) =>
-                                  setVariants((cur) =>
-                                    cur.map((x) => (x.id === v.id ? { ...x, name: e.target.value } : x))
-                                  )
-                                }
-                              />
-                            </td>
-                            <td style={{ textAlign: "right" }}>
-                              <input
-                                className="input"
-                                type="number"
-                                style={{ width: 90, textAlign: "right" }}
-                                value={Number(v.weight ?? 0)}
-                                onChange={(e) =>
-                                  setVariants((cur) =>
-                                    cur.map((x) =>
-                                      x.id === v.id ? { ...x, weight: Number(e.target.value) } : x
-                                    )
-                                  )
-                                }
-                              />
-                            </td>
-                            <td style={{ textAlign: "center" }}>
-                              {(v.actionRefs || []).length}
-                            </td>
-                            <td style={{ textAlign: "right" }}>
-                              <button className="btn btn--danger" onClick={() => removeVariant(v.id)}>
-                                削除
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    </div>
-                    <div style={{ height: 12 }} />
-                    <div className="h2">パターン別アクション：<code>{variantIdToEdit}</code></div>
-
-                    <div className="row">
-                      <select
-                        className="input"
-                        style={{ width: 360, maxWidth: "100%" }}
-                        value={actionIdToAdd}
-                        onChange={(e) => setActionIdToAdd(e.target.value)}
-                      >
-                        {actionsForWorkspace.map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {a.id} — {a.data?.creative?.title || ""}
-                          </option>
-                        ))}
-                      </select>
-                      <button className="btn" onClick={addActionRefToCurrentVariant}>追加</button>
-                    </div>
-
-                    <div style={{ height: 10 }} />
-                    {(currentVariant?.actionRefs || []).length ? (
-                      <div className="liquid-scroll-x">
-                        <table className="table">
-                          <thead>
-                            <tr>
-                              <th>#</th>
-                              <th>actionId</th>
-                              <th>enabled</th>
-                              <th>order</th>
-                              <th></th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                          {(currentVariant?.actionRefs || []).map((r, idx) => (
-                            <tr
-                              key={`${r.actionId}-${idx}`}
-                              draggable
-                              onDragStart={() => setDragIndex(idx)}
-                              onDragOver={(e) => e.preventDefault()}
-                              onDrop={() => {
-                                if (dragIndex == null) return;
-                                moveVariantAction(dragIndex, idx);
-                                setDragIndex(null);
-                              }}
-                              style={{ opacity: dragIndex === idx ? 0.6 : 1 }}
-                            >
-                              <td>{idx}</td>
-                              <td>
-                                <code>{r.actionId}</code>
-                                <div className="small">
-                                  {actionTitleById.get(r.actionId) || ""}
-                                </div>
-                              </td>
-                              <td>
-                                <input
-                                  type="checkbox"
-                                  checked={r.enabled ?? true}
-                                  onChange={(e) =>
-                                    toggleVariantActionEnabled(idx, e.target.checked)
-                                  }
-                                />
-                              </td>
-                              <td>
-                                <button className="btn" disabled={idx === 0} onClick={() => moveVariantAction(idx, idx - 1)}>↑</button>
-                                <span style={{ width: 6, display: "inline-block" }} />
-                                <button
-                                  className="btn"
-                                  disabled={idx === (currentVariant?.actionRefs || []).length - 1}
-                                  onClick={() => moveVariantAction(idx, idx + 1)}
-                                >
-                                  ↓
-                                </button>
-                              </td>
-                              <td>
-                                <button className="btn" onClick={() => removeVariantAction(idx)}>削除</button>
-                              </td>
-                            </tr>
-                          ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    ) : (
-                      <div className="small">
-                        まだアクションが追加されていません（このパターンでは何も表示されません）。
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <div style={{ height: 12 }} />
-                    <div className="h2">アクション設定（通常配信 / 非A/B）</div>
-                    <div className="row">
-                      <select
-                        className="input"
-                        style={{ width: 360, maxWidth: "100%" }}
-                        value={actionIdToAdd}
-                        onChange={(e) => setActionIdToAdd(e.target.value)}
-                      >
-                        {actionsForWorkspace.map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {a.id} — {a.data?.creative?.title || ""}
-                          </option>
-                        ))}
-                      </select>
-                      <button className="btn" onClick={addActionRef}>追加</button>
-                    </div>
-
-                    <div style={{ height: 10 }} />
-                    {(actionRefs || []).length ? (
                     <div className="liquid-scroll-x">
                       <table className="table">
                         <thead>
                           <tr>
-                            <th>#</th>
-                            <th>actionId</th>
-                            <th>enabled</th>
-                            <th>order</th>
+                            <th>variant</th>
+                            <th>name</th>
+                            <th style={{ textAlign: "right" }}>weight</th>
+                            <th>actions</th>
                             <th></th>
                           </tr>
                         </thead>
                         <tbody>
-                          {(actionRefs || []).map((r, idx) => (
-                            <tr
-                              key={`${r.actionId}-${idx}`}
-                              draggable
-                              onDragStart={() => setDragIndex(idx)}
-                              onDragOver={(e) => e.preventDefault()}
-                              onDrop={() => {
-                                if (dragIndex == null) return;
-                                moveAction(dragIndex, idx);
-                                setDragIndex(null);
-                              }}
-                              style={{ opacity: dragIndex === idx ? 0.6 : 1 }}
-                            >
-                              <td>{idx}</td>
+                          {variants.map((v) => (
+                            <tr key={v.id} style={{ opacity: v.id === variantIdToEdit ? 1 : 0.85 }}>
                               <td>
-                                <code>{r.actionId}</code>
-                                <div className="small">
-                                  {actionTitleById.get(r.actionId) || ""}
-                                </div>
-                              </td>
-                              <td>
-                                <input
-                                  type="checkbox"
-                                  checked={r.enabled ?? true}
-                                  onChange={(e) =>
-                                    setActionRefs((cur) =>
-                                      reorder((cur || []).map((x, i) =>
-                                        i === idx ? { ...x, enabled: e.target.checked } : x
-                                      ))
-                                    )
-                                  }
-                                />
-                              </td>
-                              <td>
-                                <button className="btn" disabled={idx === 0} onClick={() => moveAction(idx, idx - 1)}>↑</button>
-                                <span style={{ width: 6, display: "inline-block" }} />
-                                <button
-                                  className="btn"
-                                  disabled={idx === (actionRefs || []).length - 1}
-                                  onClick={() => moveAction(idx, idx + 1)}
-                                >
-                                  ↓
+                                <button className="btn" onClick={() => setVariantIdToEdit(v.id)} style={{ fontWeight: v.id === variantIdToEdit ? 800 : 600 }}>
+                                  {v.id}
                                 </button>
                               </td>
                               <td>
-                                <button
-                                  className="btn"
-                                  onClick={() =>
-                                    setActionRefs((cur) => reorder((cur || []).filter((_, i) => i !== idx)))
-                                  }
-                                >
-                                  削除
-                                </button>
+                                <input className="input" value={v.name || ""} onChange={(e) => setVariants((cur) => cur.map((x) => x.id === v.id ? { ...x, name: e.target.value } : x))} />
+                              </td>
+                              <td style={{ textAlign: "right" }}>
+                                <input className="input" type="number" style={{ width: 90, textAlign: "right" }} value={Number(v.weight ?? 0)} onChange={(e) => setVariants((cur) => cur.map((x) => x.id === v.id ? { ...x, weight: Number(e.target.value) } : x))} />
+                              </td>
+                              <td style={{ fontSize: 12, maxWidth: 160 }}>
+                                {(v.actionRefs || []).length === 0
+                                  ? <span style={{ opacity: 0.4 }}>なし</span>
+                                  : (v.actionRefs || []).map((r, i) => (
+                                    <div key={i} style={{ opacity: 0.85, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                      {actionTitleById.get(r.actionId) || r.actionId}
+                                    </div>
+                                  ))
+                                }
+                              </td>
+                              <td style={{ textAlign: "right" }}>
+                                <button className="btn btn--danger" onClick={() => removeVariant(v.id)}>削除</button>
                               </td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
                     </div>
-                    ) : (
-                      <div className="small">
-                        まだアクションが追加されていません（このシナリオでは何も表示されません）。
+                    <div style={{ height: 12 }} />
+                    <div className="h2">パターン別アクション：<code>{variantIdToEdit}</code></div>
+                    <div className="row">
+                      <select className="input" style={{ flex: 1, maxWidth: 400 }} value={actionIdToAdd} onChange={(e) => setActionIdToAdd(e.target.value)}>
+                        {actionsForWorkspace.map((a) => (
+                          <option key={a.id} value={a.id}>[{a.data?.type || "modal"}] {a.data?.creative?.title || a.id}</option>
+                        ))}
+                      </select>
+                      <button className="btn" onClick={addActionRefToCurrentVariant}>追加</button>
+                    </div>
+                    {actionIdToAdd && actionMap.get(actionIdToAdd) && (() => {
+                      const a = actionMap.get(actionIdToAdd)!;
+                      const img = a.data?.creative?.image_url || a.data?.creative?.imageUrl;
+                      return (
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8, padding: "8px 10px", background: "rgba(255,255,255,.04)", borderRadius: 8, border: "1px solid rgba(255,255,255,.08)" }}>
+                          {img && <img src={img} alt="" style={{ width: 54, height: 40, objectFit: "cover", borderRadius: 4, flexShrink: 0 }} />}
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: 13 }}>{a.data?.creative?.title || a.id}</div>
+                            <div className="small" style={{ opacity: 0.6 }}>{a.data?.type || "modal"} / {a.id}</div>
+                          </div>
+                          <button className="btn" style={{ fontSize: 11, padding: "3px 10px", flexShrink: 0 }} onClick={() => { setIsModalOpen(false); navigate("/actions"); }}>
+                            アクション編集へ
+                          </button>
+                        </div>
+                      );
+                    })()}
+                    <div style={{ height: 10 }} />
+                    {(currentVariant?.actionRefs || []).length ? (
+                      <div className="liquid-scroll-x">
+                        <table className="table">
+                          <thead>
+                            <tr><th>#</th><th>actionId</th><th>enabled</th><th>order</th><th></th></tr>
+                          </thead>
+                          <tbody>
+                            {(currentVariant?.actionRefs || []).map((r, idx) => (
+                              <tr
+                                key={`${r.actionId}-${idx}`}
+                                draggable
+                                onDragStart={() => setDragIndex(idx)}
+                                onDragOver={(e) => e.preventDefault()}
+                                onDrop={() => { if (dragIndex == null) return; moveVariantAction(dragIndex, idx); setDragIndex(null); }}
+                                style={{ opacity: dragIndex === idx ? 0.6 : 1 }}
+                              >
+                                <td>{idx}</td>
+                                <td>
+                                  {(() => {
+                                    const a = actionMap.get(r.actionId);
+                                    const img = a?.data?.creative?.image_url || a?.data?.creative?.imageUrl;
+                                    return (
+                                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                        {img && <img src={img} alt="" style={{ width: 36, height: 27, objectFit: "cover", borderRadius: 3, flexShrink: 0 }} />}
+                                        <div>
+                                          <div style={{ fontWeight: 600, fontSize: 13 }}>{actionTitleById.get(r.actionId) || r.actionId}</div>
+                                          <div className="small" style={{ opacity: 0.55 }}>{a?.data?.type || ""} / {r.actionId}</div>
+                                        </div>
+                                      </div>
+                                    );
+                                  })()}
+                                  <button className="btn" style={{ marginTop: 4, fontSize: 11, padding: "2px 8px" }} onClick={() => { setIsModalOpen(false); navigate("/actions"); }}>
+                                    アクション編集へ
+                                  </button>
+                                </td>
+                                <td><input type="checkbox" checked={r.enabled ?? true} onChange={(e) => toggleVariantActionEnabled(idx, e.target.checked)} /></td>
+                                <td>
+                                  <button className="btn" disabled={idx === 0} onClick={() => moveVariantAction(idx, idx - 1)}>↑</button>
+                                  <span style={{ width: 6, display: "inline-block" }} />
+                                  <button className="btn" disabled={idx === (currentVariant?.actionRefs || []).length - 1} onClick={() => moveVariantAction(idx, idx + 1)}>↓</button>
+                                </td>
+                                <td><button className="btn" onClick={() => removeVariantAction(idx)}>削除</button></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
+                    ) : (
+                      <div className="small">まだアクションが追加されていません（このパターンでは何も表示されません）。</div>
                     )}
                   </>
-                )}
+                ) : null}
 
-                <div className="row" style={{ gap: 10, flexWrap: "wrap", marginTop: 14 }}>
-                  <button className="btn btn--primary" onClick={createOrUpdate}>保存</button>
-                  <button className="btn" onClick={resetForm}>新規作成に戻す</button>
-                  <button
-                    className="btn"
-                    onClick={() => navigate(`/scenarios/${id}/review`)}
-                  >
-                    AIレビューを見る
-                  </button>
-                  <button
-                    className="btn"
-                    onClick={() => navigate(`/scenarios/${id}/ai`)}
-                  >
-                    AIインサイトを見る
-                  </button>
-                  <button className="btn" onClick={() => navigate("/dashboard")}>
-                    ダッシュボードへ
-                  </button>
-                  <button className="btn" onClick={() => navigate("/actions")}>
-                    アクション一覧へ
-                  </button>
+                <div style={{ height: 14 }} />
+                <div className="h2">コンバージョン条件</div>
+                <div className="row" style={{ alignItems: "center", gap: 10 }}>
+                  <label className="badge" style={{ cursor: "pointer" }}>
+                    <input type="checkbox" checked={goalEnabled} onChange={(e) => setGoalEnabled(e.target.checked)} />
+                    コンバージョン計測を有効化
+                  </label>
+                  <select className="input" style={{ width: 180 }} disabled={!goalEnabled} value={goalType} onChange={(e) => setGoalType(e.target.value as any)}>
+                    {GOAL_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                  <input className="input" style={{ flex: 1, minWidth: 180 }} disabled={!goalEnabled} value={goalValue} onChange={(e) => setGoalValue(e.target.value)} placeholder="例：/thanks  or  complete" />
+                </div>
+                <div className="small" style={{ marginTop: 6 }}>
+                  例：<code>path_prefix=/thanks</code> / <code>url_contains=complete</code>
+                </div>
+
+                <div style={{ height: 14 }} />
+                <div className="row" style={{ gap: 10, alignItems: "flex-start" }}>
+                  <div style={{ flex: 1 }}>
+                    <div className="h2">優先度</div>
+                    <input className="input" type="number" value={priority} onChange={(e) => setPriority(Number(e.target.value))} />
+                  </div>
+                  <div style={{ flex: 2 }}>
+                    <div className="h2">メモ（施策メモ）</div>
+                    <textarea className="input" style={{ minHeight: 72 }} value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="例：Topページで初回訪問者にクーポン訴求 / Aは画像あり、Bは画像なし…" />
+                  </div>
                 </div>
               </div>
+            )}
 
-              <div style={{ flex: 1, minWidth: 280 }}>
-                <div className="card" style={{ background: "linear-gradient(180deg,#ffffff,#f8fbff)" }}>
-                  <div className="h2">この画面の考え方</div>
-                  <ul className="small">
-                    <li><b>アクション</b> は表示する部品です。</li>
-                    <li><b>シナリオ</b> は「どの条件で何を出すか」を決めるルールです。</li>
-                    <li><b>A/BテストON</b> のときは、各パターンごとにアクションを設定します。</li>
-                    <li><b>A/BテストOFF</b> のときは、通常配信用のアクションを設定します。</li>
-                    <li>サーバー側で actionRefs をもとに、実際に配信する actions を組み立てます。</li>
-                    <li>コンバージョン条件は、成果地点の計測に使います。</li>
-                  </ul>
-                </div>
+            {/* ナビゲーション */}
+            <div className="row" style={{ gap: 10, marginTop: 24, justifyContent: "space-between", flexWrap: "wrap", borderTop: "1px solid #e2e8f0", paddingTop: 16 }}>
+              <div>
+                {currentStep > 1 && (
+                  <button className="btn" onClick={() => setCurrentStep((s) => (s - 1) as 1 | 2 | 3)}>← 戻る</button>
+                )}
+              </div>
+              <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+                {currentStep === 3 && (
+                  <>
+                    <button className="btn" onClick={() => navigate(`/scenarios/${id}/review`)}>AIレビューを見る</button>
+                    <button className="btn" onClick={() => navigate(`/scenarios/${id}/ai`)}>AIインサイト</button>
+                    <button className="btn" onClick={resetForm}>新規作成に戻す</button>
+                    <button className="btn btn--primary" onClick={createOrUpdate}>保存</button>
+                  </>
+                )}
+                {currentStep < 3 && (
+                  <button className="btn btn--primary" onClick={() => setCurrentStep((s) => (s + 1) as 1 | 2 | 3)}>次へ →</button>
+                )}
               </div>
             </div>
+
           </div>
         </div>
       ) : null}

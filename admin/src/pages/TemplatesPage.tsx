@@ -82,68 +82,83 @@ const DEFAULTS: Record<TemplateDoc['type'], { html: string; css: string }> = {
     html: `
 <div class="cx-overlay" data-cx-close>
   <div class="cx-modal" role="dialog" aria-modal="true">
+    <button class="cx-close" data-cx-close aria-label="閉じる">✕</button>
     {{#if image_url}}<img class="cx-image" src="{{image_url}}" alt="{{title}}" />{{/if}}
-    {{#if title}}<div class="cx-header">{{title}}</div>{{/if}}
-    {{#if body}}<div class="cx-body">{{body}}</div>{{/if}}
-    <div class="cx-footer">
-      {{#if cta_url}}<a class="cx-btn cx-btn--ghost" href="{{cta_url}}" target="_blank" rel="noopener">{{cta_url_text}}</a>{{/if}}
-      <button class="cx-btn cx-btn--primary" data-cx-close>{{cta_text}}</button>
+    <div class="cx-modal__body">
+      {{#if title}}<div class="cx-title">{{title}}</div>{{/if}}
+      {{#if body}}<div class="cx-body">{{body}}</div>{{/if}}
+      {{#if cta_url}}<a class="cx-btn cx-btn--primary" href="{{cta_url}}" target="_blank" rel="noopener">{{cta_url_text}}</a>{{/if}}
+      <button class="cx-btn cx-btn--sub" data-cx-close>{{cta_text}}</button>
     </div>
   </div>
 </div>
 `.trim(),
     css: `
-.cx-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:2147483646;display:flex;align-items:center;justify-content:center;}
-.cx-modal{background:#fff;width:min(520px,92vw);border-radius:16px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.25);font-family:system-ui,-apple-system,Segoe UI,Roboto;}
-.cx-image{width:100%;max-height:260px;object-fit:cover;display:block;}
-.cx-header{padding:18px 20px 8px;font-weight:700;font-size:18px;}
-.cx-body{padding:0 20px 16px;font-size:14px;white-space:pre-wrap;}
-.cx-footer{padding:0 20px 20px;display:flex;justify-content:flex-end;gap:10px;}
-.cx-btn{border:0;border-radius:10px;padding:10px 14px;font-weight:700;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;}
+.cx-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:2147483646;display:flex;align-items:center;justify-content:center;padding:16px;}
+.cx-modal{position:relative;background:#fff;width:min(420px,92vw);border-radius:24px;overflow:hidden;box-shadow:0 32px 80px rgba(0,0,0,.35);font-family:system-ui,-apple-system,Segoe UI,Roboto;}
+.cx-close{position:absolute;top:12px;right:12px;width:32px;height:32px;border-radius:50%;background:rgba(0,0,0,.06);border:none;cursor:pointer;font-size:16px;line-height:1;color:#666;display:flex;align-items:center;justify-content:center;z-index:1;transition:background .15s;}
+.cx-close:hover{background:rgba(0,0,0,.12);}
+.cx-image{width:100%;max-height:220px;object-fit:cover;display:block;}
+.cx-modal__body{padding:24px 20px 20px;}
+.cx-title{font-weight:800;font-size:20px;line-height:1.3;margin-bottom:8px;padding-right:20px;}
+.cx-body{font-size:14px;line-height:1.75;color:#555;white-space:pre-wrap;margin-bottom:20px;}
+.cx-btn{display:block;width:100%;border:none;border-radius:14px;padding:14px;font-weight:700;font-size:15px;cursor:pointer;text-decoration:none;text-align:center;box-sizing:border-box;transition:opacity .15s;}
+.cx-btn+.cx-btn{margin-top:8px;}
 .cx-btn--primary{background:#111;color:#fff;}
-.cx-btn--ghost{background:#eee;color:#111;}
+.cx-btn--primary:hover{opacity:.82;}
+.cx-btn--sub{background:#f1f5f9;color:#666;}
+.cx-btn--sub:hover{background:#e8ecf0;}
 `.trim(),
   },
   banner: {
     html: `
-<div class="cx-banner" data-cx-close>
+<div class="cx-banner">
+  {{#if image_url}}<img class="cx-banner__image" src="{{image_url}}" alt="{{title}}" />{{/if}}
   <div class="cx-banner__inner">
-    <div class="cx-banner__text">
-      {{title}}
+    <div class="cx-banner__content">
+      <div class="cx-banner__title">{{title}}</div>
+      {{#if body}}<div class="cx-banner__body">{{body}}</div>{{/if}}
     </div>
-    {{#if cta_url}}<a class="cx-btn cx-btn--ghost" href="{{cta_url}}" target="_blank" rel="noopener">{{cta_url_text}}</a>{{/if}}
-    <button class="cx-btn cx-btn--primary" data-cx-close>{{cta_text}}</button>
+    <div class="cx-banner__actions">
+      {{#if cta_url}}<a class="cx-btn cx-btn--primary" href="{{cta_url}}" target="_blank" rel="noopener">{{cta_url_text}}</a>{{/if}}
+      <button class="cx-close" data-cx-close aria-label="閉じる">✕</button>
+    </div>
   </div>
 </div>
 `.trim(),
     css: `
-.cx-banner{position:fixed;left:12px;right:12px;bottom:12px;background:#111;color:#fff;border-radius:14px;z-index:2147483646;box-shadow:0 18px 40px rgba(0,0,0,.25);}
-.cx-banner__inner{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:14px;}
-.cx-banner__text{font-weight:700;}
-.cx-btn{border:0;border-radius:10px;padding:10px 14px;font-weight:700;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;}
+.cx-banner{position:fixed;left:12px;right:12px;bottom:12px;background:#111;color:#fff;border-radius:18px;z-index:2147483646;box-shadow:0 20px 48px rgba(0,0,0,.3);overflow:hidden;font-family:system-ui,-apple-system,Segoe UI,Roboto;}
+.cx-banner__image{width:100%;max-height:130px;object-fit:cover;display:block;}
+.cx-banner__inner{display:flex;gap:12px;align-items:center;padding:16px;}
+.cx-banner__content{flex:1;min-width:0;}
+.cx-banner__title{font-weight:700;font-size:15px;line-height:1.3;}
+.cx-banner__body{font-size:12px;opacity:.75;margin-top:4px;line-height:1.5;}
+.cx-banner__actions{display:flex;gap:8px;align-items:center;flex-shrink:0;}
+.cx-btn{border:none;border-radius:10px;padding:10px 16px;font-weight:700;font-size:13px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;transition:opacity .15s;}
 .cx-btn--primary{background:#fff;color:#111;}
-.cx-btn--ghost{background:rgba(255,255,255,.15);color:#fff;}
+.cx-btn--primary:hover{opacity:.88;}
+.cx-close{width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.1);border:none;cursor:pointer;font-size:15px;color:#fff;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .15s;}
+.cx-close:hover{background:rgba(255,255,255,.2);}
 `.trim(),
   },
   toast: {
     html: `
-<div class="cx-toast" data-cx-close>
-  <div class="cx-toast__title">{{title}}</div>
+<div class="cx-toast">
+  <button class="cx-close" data-cx-close aria-label="閉じる">✕</button>
+  {{#if title}}<div class="cx-toast__title">{{title}}</div>{{/if}}
   {{#if body}}<div class="cx-toast__body">{{body}}</div>{{/if}}
-  <div class="cx-toast__footer">
-    {{#if cta_url}}<a class="cx-btn cx-btn--ghost" href="{{cta_url}}" target="_blank" rel="noopener">{{cta_url_text}}</a>{{/if}}
-    <button className="cx-btn cx-btn--primary" data-cx-close>{{cta_text}}</button>
-  </div>
+  {{#if cta_url}}<a class="cx-btn" href="{{cta_url}}" target="_blank" rel="noopener">{{cta_url_text}}</a>{{/if}}
 </div>
 `.trim(),
     css: `
-.cx-toast{position:fixed;right:12px;bottom:12px;max-width:min(420px,92vw);background:#111;color:#fff;border-radius:14px;z-index:2147483646;box-shadow:0 18px 40px rgba(0,0,0,.25);padding:14px;font-family:system-ui,-apple-system,Segoe UI,Roboto;}
-.cx-toast__title{font-weight:800;margin-bottom:6px;}
-.cx-toast__body{opacity:.9;white-space:pre-wrap;margin-bottom:10px;}
-.cx-toast__footer{display:flex;gap:10px;justify-content:flex-end;}
-.cx-btn{border:0;border-radius:10px;padding:10px 14px;font-weight:700;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;}
-.cx-btn--primary{background:#fff;color:#111;}
-.cx-btn--ghost{background:rgba(255,255,255,.15);color:#fff;}
+.cx-toast{position:fixed;right:16px;bottom:16px;max-width:min(300px,92vw);background:#111;color:#fff;border-radius:16px;z-index:2147483646;box-shadow:0 16px 40px rgba(0,0,0,.28);padding:16px 16px 14px;font-family:system-ui,-apple-system,Segoe UI,Roboto;animation:cx-slide-in .25s ease;}
+@keyframes cx-slide-in{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
+.cx-close{position:absolute;top:8px;right:8px;width:24px;height:24px;border-radius:50%;background:rgba(255,255,255,.1);border:none;cursor:pointer;font-size:12px;color:#fff;display:flex;align-items:center;justify-content:center;transition:background .15s;}
+.cx-close:hover{background:rgba(255,255,255,.2);}
+.cx-toast__title{font-weight:800;font-size:14px;line-height:1.3;padding-right:20px;margin-bottom:6px;}
+.cx-toast__body{font-size:13px;opacity:.8;line-height:1.5;white-space:pre-wrap;margin-bottom:12px;}
+.cx-btn{display:block;width:100%;border:none;border-radius:10px;padding:9px;font-weight:700;font-size:13px;cursor:pointer;text-decoration:none;text-align:center;background:rgba(255,255,255,.14);color:#fff;box-sizing:border-box;transition:background .15s;}
+.cx-btn:hover{background:rgba(255,255,255,.22);}
 `.trim(),
   },
 };
@@ -374,10 +389,15 @@ export default function TemplatesPage() {
                       setHtml(DEFAULTS[t].html);
                       setCss(DEFAULTS[t].css);
                     }}>
-                      <option value="modal">modal（モーダル）</option>
-                      <option value="banner">banner（バナー）</option>
-                      <option value="toast">toast（トースト）</option>
+                      <option value="modal">モーダル — 画面中央のポップアップ。クーポン・キャンペーン訴求に。</option>
+                      <option value="banner">バナー — 画面下に固定表示されるフローティングバー。告知・誘導に。</option>
+                      <option value="toast">トースト — 画面右下の小さい通知。邪魔せず伝えたいときに。</option>
                     </select>
+                    <div className="small" style={{ marginTop: 6, opacity: 0.72 }}>
+                      {type === 'modal' && '💡 画面全体を覆うオーバーレイ型。インパクト大。クーポン・初回訴求・アンケートなどに向いています。'}
+                      {type === 'banner' && '💡 ページ下部に常駐する帯型。スクロールしても消えないので告知・セール情報の常時表示に最適。'}
+                      {type === 'toast' && '💡 画面右下にそっと出る小型通知。「クーポンあります」「残り3点」など邪魔にならず伝えたい情報に。'}
+                    </div>
                   </div>
                 </div>
 

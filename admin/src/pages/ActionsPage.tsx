@@ -1,5 +1,5 @@
 // src/pages/ActionsPage.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import {
   collection,
@@ -15,7 +15,7 @@ import {
   where,
 } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
-import { db } from "../firebase";
+import { db, apiPostJson } from "../firebase";
 import { genId } from "../components/id";
 import { uploadImageToWorkspace } from "../lib/storage";
 
@@ -456,6 +456,15 @@ export default function ActionsPage() {
   const [siteId, setSiteId] = useState("");
   const [sites, setSites] = useState<Array<{ id: string; data: { name?: string; siteName?: string } }>>([]);
 
+  const migratedWs = useRef<Set<string>>(new Set());
+  const runMigration = useCallback(async (wsId: string) => {
+    if (!wsId || migratedWs.current.has(wsId)) return;
+    migratedWs.current.add(wsId);
+    try {
+      await apiPostJson("/v1/sites/migrate-member-uids", { workspace_id: wsId });
+    } catch (e) { /* fire-and-forget */ }
+  }, []);
+
   // ---- form state ----
   const [id, setId] = useState(() => genId("act"));
   const [workspaceId, setWorkspaceId] = useState("");
@@ -553,11 +562,12 @@ export default function ActionsPage() {
     writeSelectedWorkspaceId(workspaceId, currentUid);
   }, [workspaceId, currentUid]);
 
-  // Load sites for current workspace
+  // Load sites for current user (memberUids-based)
   useEffect(() => {
-    if (!workspaceId) { setSites([]); setSiteId(""); return; }
-    setSiteId(readSelectedSiteId(workspaceId));
-    const q = query(collection(db, "sites"), where("workspaceId", "==", workspaceId));
+    if (!currentUid) { setSites([]); setSiteId(""); return; }
+    if (workspaceId) runMigration(workspaceId);
+    if (workspaceId) setSiteId(readSelectedSiteId(workspaceId));
+    const q = query(collection(db, "sites"), where("memberUids", "array-contains", currentUid));
     return onSnapshot(q, (snap) => {
       const list = snap.docs
         .filter((d) => d.data().status !== "deleted")
@@ -565,7 +575,7 @@ export default function ActionsPage() {
       setSites(list);
       setSiteId((prev) => prev || list[0]?.id || "");
     });
-  }, [workspaceId]);
+  }, [currentUid, workspaceId, runMigration]);
 
   // Listen for site changes from other pages
   useEffect(() => {
@@ -1191,18 +1201,22 @@ export default function ActionsPage() {
                 <div style={{ height: 10 }} />
                 <div className="row">
                   <div style={{ flex: 1 }}>
-                    <div className="h2">CTAボタン文言</div>
+                    <div className="h2">閉じるボタン文言</div>
                     <input className="input" value={ctaText} onChange={(e) => setCtaText(e.target.value)} />
-                  </div>
-                  <div style={{ flex: 2 }}>
-                    <div className="h2">遷移先URL</div>
-                    <input className="input" value={ctaUrl} onChange={(e) => setCtaUrl(e.target.value)} />
                   </div>
                 </div>
 
                 <div style={{ height: 10 }} />
-                <div className="h2">補助リンク文言（任意）</div>
-                <input className="input" value={ctaUrlText} onChange={(e) => setCtaUrlText(e.target.value)} />
+                <div className="row">
+                  <div style={{ flex: 2 }}>
+                    <div className="h2">リンクURL（任意）</div>
+                    <input className="input" placeholder="https://example.com" value={ctaUrl} onChange={(e) => setCtaUrl(e.target.value)} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div className="h2">リンクボタン文言</div>
+                    <input className="input" value={ctaUrlText} onChange={(e) => setCtaUrlText(e.target.value)} />
+                  </div>
+                </div>
 
                 <div style={{ height: 14 }} />
                 <button className="btn btn--primary" onClick={saveToFirestore}>

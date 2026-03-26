@@ -1558,6 +1558,26 @@ function registerV1Routes(app) {
                 updatedAt: now,
                 createdAt: existingUser.createdAt || now,
             }, { merge: true });
+            // owner/admin のみ全サイトに自動追加。member/viewer はサイトごとに個別追加（/v1/sites/members/add 経由）
+            if (role === "owner" || role === "admin") {
+                const sitesSnap = await db.collection("sites")
+                    .where("workspaceId", "==", workspaceId)
+                    .get();
+                if (!sitesSnap.empty) {
+                    const batch = db.batch();
+                    for (const siteDoc of sitesSnap.docs) {
+                        const siteData = siteDoc.data();
+                        const currentMemberUids = siteData.memberUids || [];
+                        if (!currentMemberUids.includes(uid)) {
+                            batch.update(siteDoc.ref, {
+                                memberUids: [...currentMemberUids, uid],
+                                updatedAt: now,
+                            });
+                        }
+                    }
+                    await batch.commit();
+                }
+            }
             // invite を accepted に
             await inviteDoc.ref.set({
                 status: "accepted",
@@ -1647,12 +1667,22 @@ function registerV1Routes(app) {
             if (!dupSnap.empty) {
                 return res.status(400).json({ ok: false, error: "public_key_already_exists" });
             }
+            const wSnap = await db.collection("workspaces").doc(body.workspace_id).get();
+            const wData = (wSnap.data() || {});
+            const wMembers = (wData.members || {});
+            const memberUids = Array.from(new Set([
+                uid,
+                ...Object.entries(wMembers)
+                    .filter(([, role]) => role === "owner" || role === "admin")
+                    .map(([memberId]) => memberId)
+            ]));
             await db.collection("sites").doc(siteId).set({
                 id: siteId,
                 workspaceId: body.workspace_id,
                 name: body.name,
                 publicKey,
                 domains: body.domains,
+                memberUids,
                 createdAt: now,
                 updatedAt: now,
                 createdBy: uid,
@@ -1728,6 +1758,66 @@ function registerV1Routes(app) {
         }
     });
     /* -----------------------------
+       /v1/sites/migrate-member-uids  ★管理画面専用（ADMIN_ORIGINS）
+       - ワークスペース内の全サイトに memberUids を付与（既存サイトの移行用）
+       - 冪等: 何度呼んでも安全
+    ------------------------------ */
+    app.post("/v1/sites/migrate-member-uids", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const body = zod_1.z.object({ workspace_id: zod_1.z.string().min(1) }).parse(req.body);
+            await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "sites", ["owner", "admin", "member", "viewer"]);
+            const db = (0, admin_1.adminDb)();
+            const wSnap = await db.collection("workspaces").doc(body.workspace_id).get();
+            if (!wSnap.exists)
+                return res.status(404).json({ ok: false, error: "workspace_not_found" });
+            const wMembers = (wSnap.data()?.members || {});
+            const allMemberUids = Object.keys(wMembers);
+            const sitesSnap = await db.collection("sites")
+                .where("workspaceId", "==", body.workspace_id)
+                .get();
+            let migrated = 0;
+            const batchSize = 400;
+            let ops = [];
+            for (const siteDoc of sitesSnap.docs) {
+                const siteData = siteDoc.data();
+                const current = Array.isArray(siteData.memberUids) ? siteData.memberUids : [];
+                const merged = Array.from(new Set([...current, ...allMemberUids]));
+                if (merged.length !== current.length || !siteData.memberUids) {
+                    ops.push({ ref: siteDoc.ref, uids: merged });
+                }
+            }
+            // バッチ書き込み（500件制限対策）
+            for (let i = 0; i < ops.length; i += batchSize) {
+                const batch = db.batch();
+                for (const op of ops.slice(i, i + batchSize)) {
+                    batch.update(op.ref, {
+                        memberUids: op.uids,
+                        updatedAt: firestore_1.FieldValue.serverTimestamp(),
+                    });
+                    migrated++;
+                }
+                await batch.commit();
+            }
+            return res.json({ ok: true, migrated, total: sitesSnap.size });
+        }
+        catch (e) {
+            console.error("[/v1/sites/migrate-member-uids] error:", e);
+            return res.status(500).json({ ok: false, error: "migration_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/sites/migrate-member-uids", (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+            res.status(204).send("");
+        }
+        catch (e) {
+            return res.status(403).send(e?.message || "forbidden");
+        }
+    });
+    /* -----------------------------
        /v1/sites/updateDomains  ★管理画面専用（ADMIN_ORIGINS）
        - site.domains を更新（owner/adminのみ）
     ------------------------------ */
@@ -1757,6 +1847,103 @@ function registerV1Routes(app) {
         }
     });
     app.options("/v1/sites/updateDomains", (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+            res.status(204).send("");
+        }
+        catch (e) {
+            return res.status(403).send(e?.message || "forbidden");
+        }
+    });
+    /* -----------------------------
+       /v1/sites/members/add  ★管理画面専用（ADMIN_ORIGINS）
+       - site の memberUids に uid を追加（owner/admin のみ）
+    ------------------------------ */
+    app.post("/v1/sites/members/add", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const body = zod_1.z.object({ site_id: zod_1.z.string().min(1), uid: zod_1.z.string().min(1) }).parse(req.body);
+            await requireWorkspaceAccessBySiteId(req, body.site_id, "sites", ["owner", "admin"]);
+            const db = (0, admin_1.adminDb)();
+            const siteRef = db.collection("sites").doc(body.site_id);
+            const siteSnap = await siteRef.get();
+            if (!siteSnap.exists) {
+                return res.status(404).json({ ok: false, error: "site_not_found" });
+            }
+            const siteData = (siteSnap.data() || {});
+            const current = Array.isArray(siteData.memberUids) ? siteData.memberUids : [];
+            if (current.includes(body.uid)) {
+                return res.json({ ok: true, already_member: true });
+            }
+            await siteRef.update({
+                memberUids: [...current, body.uid],
+                updatedAt: firestore_1.FieldValue.serverTimestamp(),
+            });
+            return res.json({ ok: true });
+        }
+        catch (e) {
+            console.error("[/v1/sites/members/add] error:", e);
+            return res
+                .status(e?.message === "missing_authorization" || e?.message === "invalid_token"
+                ? 401
+                : String(e?.message || "").startsWith("workspace_access_denied:")
+                    ? 403
+                    : 400)
+                .json({ ok: false, error: "site_member_add_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/sites/members/add", (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+            res.status(204).send("");
+        }
+        catch (e) {
+            return res.status(403).send(e?.message || "forbidden");
+        }
+    });
+    /* -----------------------------
+       /v1/sites/members/remove  ★管理画面専用（ADMIN_ORIGINS）
+       - site の memberUids から uid を削除（owner/admin のみ）
+    ------------------------------ */
+    app.post("/v1/sites/members/remove", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const body = zod_1.z.object({ site_id: zod_1.z.string().min(1), uid: zod_1.z.string().min(1) }).parse(req.body);
+            await requireWorkspaceAccessBySiteId(req, body.site_id, "sites", ["owner", "admin"]);
+            const db = (0, admin_1.adminDb)();
+            const siteRef = db.collection("sites").doc(body.site_id);
+            const siteSnap = await siteRef.get();
+            if (!siteSnap.exists) {
+                return res.status(404).json({ ok: false, error: "site_not_found" });
+            }
+            const siteData = (siteSnap.data() || {});
+            const current = Array.isArray(siteData.memberUids) ? siteData.memberUids : [];
+            const updated = current.filter((u) => u !== body.uid);
+            if (updated.length === current.length) {
+                return res.json({ ok: true, not_member: true });
+            }
+            await siteRef.update({
+                memberUids: updated,
+                updatedAt: firestore_1.FieldValue.serverTimestamp(),
+            });
+            return res.json({ ok: true });
+        }
+        catch (e) {
+            console.error("[/v1/sites/members/remove] error:", e);
+            return res
+                .status(e?.message === "missing_authorization" || e?.message === "invalid_token"
+                ? 401
+                : String(e?.message || "").startsWith("workspace_access_denied:")
+                    ? 403
+                    : 400)
+                .json({ ok: false, error: "site_member_remove_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/sites/members/remove", (req, res) => {
         try {
             corsByAdminOrigins(req, res);
             res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
@@ -2339,11 +2526,20 @@ function registerV1Routes(app) {
                     if (!aSnap.exists)
                         continue;
                     const a = aSnap.data();
+                    // templateId があれば templates コレクションからデータを取得して埋め込む
+                    let template = a.template || null;
+                    if (!template && a.templateId) {
+                        const tSnap = await db.collection("templates").doc(a.templateId).get();
+                        if (tSnap.exists) {
+                            const t = tSnap.data();
+                            template = { template_id: a.templateId, html: t.html || "", css: t.css || "" };
+                        }
+                    }
                     actions.push({
                         action_id: a.id || ref.actionId,
                         type: a.type,
                         creative: a.creative || {},
-                        template: a.template || null,
+                        template,
                         mount: a.mount || null,
                     });
                 }

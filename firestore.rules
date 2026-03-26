@@ -41,6 +41,7 @@ service cloud.firestore {
     // ── サイト ───────────────────────────────────────────────────
     match /sites/{siteId} {
       allow read: if isSignedIn() && (
+        isOwnerOrAdmin(resource.data.workspaceId) ||
         !('memberUids' in resource.data) ||
         request.auth.uid in resource.data.memberUids
       );

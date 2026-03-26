@@ -1,12 +1,8 @@
-import React, { Fragment, useEffect, useMemo, useState } from 'react';
+import React, { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged, getAuth } from 'firebase/auth';
-import { collection, onSnapshot, query, where, orderBy } from 'firebase/firestore';
-import { db } from '../firebase';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
+import { db, apiPostJson } from '../firebase';
 import { genId } from '../components/id';
-
-const API_BASE =
-  (import.meta as any).env?.VITE_API_BASE ||
-  "https://asia-northeast1-cx-platform-v1.cloudfunctions.net/api";
 import { TextAreaList, parseLines } from '../components/forms';
 
 type WorkspaceRow = { id: string; data: any };
@@ -16,7 +12,54 @@ type Site = {
   workspaceId: string;
   domains?: string[];
   publicKey?: string;
+  memberUids?: string[];
 };
+
+type WorkspaceMember = { uid: string; role: string; email: string; displayName: string };
+
+function AddMemberSelect({
+  siteId,
+  currentMemberUids,
+  workspaceMembers,
+  onAdd,
+  loading,
+}: {
+  siteId: string;
+  currentMemberUids: string[];
+  workspaceMembers: WorkspaceMember[];
+  onAdd: (siteId: string, uid: string) => void;
+  loading: string | null;
+}) {
+  const [selectedUid, setSelectedUid] = useState('');
+  const available = workspaceMembers.filter((m) => !currentMemberUids.includes(m.uid));
+  if (!available.length) {
+    return <div className="small" style={{ opacity: 0.6 }}>追加できるメンバーはいません</div>;
+  }
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+      <select
+        className="input"
+        style={{ minWidth: 200 }}
+        value={selectedUid}
+        onChange={(e) => setSelectedUid(e.target.value)}
+      >
+        <option value="">メンバーを選択...</option>
+        {available.map((m) => (
+          <option key={m.uid} value={m.uid}>
+            {m.displayName || m.email || m.uid} ({m.role})
+          </option>
+        ))}
+      </select>
+      <button
+        className="btn btn--primary"
+        disabled={!selectedUid || loading === `${siteId}:${selectedUid}`}
+        onClick={() => { onAdd(siteId, selectedUid); setSelectedUid(''); }}
+      >
+        追加
+      </button>
+    </div>
+  );
+}
 
 function workspaceLabel(workspaces: WorkspaceRow[], workspaceId: string) {
   const row = workspaces.find((w) => w.id === workspaceId);
@@ -69,6 +112,19 @@ export default function SitesPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [tagMode, setTagMode] = useState<'direct' | 'gtm'>('direct');
   const [isSaving, setIsSaving] = useState(false);
+  const [expandedSiteId, setExpandedSiteId] = useState<string | null>(null);
+  const [memberOpLoading, setMemberOpLoading] = useState<string | null>(null);
+  const [workspaceMembers, setWorkspaceMembers] = useState<WorkspaceMember[]>([]);
+  const migratedWs = useRef<Set<string>>(new Set());
+
+  // マイグレーション: workspaceId が変わったら1回だけ実行（冪等）
+  const runMigration = useCallback(async (wsId: string, uid: string) => {
+    if (!wsId || !uid || migratedWs.current.has(wsId)) return;
+    migratedWs.current.add(wsId);
+    try {
+      await apiPostJson('/v1/sites/migrate-member-uids', { workspace_id: wsId });
+    } catch (e) { /* fire-and-forget */ }
+  }, []);
 
   useEffect(() => {
     return onAuthStateChanged(getAuth(), (user) => {
@@ -151,17 +207,23 @@ export default function SitesPage() {
     }
   }, [workspaces, workspaceId, currentUid]);
 
-  useEffect(() => {
-    if (!workspaceId) {
-      setRows([]);
-      return;
-    }
+  // 現在のユーザーのワークスペースロール
+  const currentRole = useMemo(() => {
+    const ws = workspaces.find((w) => w.id === workspaceId);
+    return (ws?.data?.members?.[currentUid] as string) || '';
+  }, [workspaces, workspaceId, currentUid]);
 
-    const q = query(
-      collection(db, 'sites'),
-      where('workspaceId', '==', workspaceId),
-      orderBy('__name__')
-    );
+  useEffect(() => {
+    if (!currentUid || !currentRole) { setRows([]); return; }
+    if (workspaceId) runMigration(workspaceId, currentUid);
+
+    const isAdmin = currentRole === 'owner' || currentRole === 'admin';
+
+    // owner/admin: ワークスペース内の全サイトを取得
+    // member/viewer: 自分が memberUids に含まれるサイトのみ
+    const q = isAdmin && workspaceId
+      ? query(collection(db, 'sites'), where('workspaceId', '==', workspaceId))
+      : query(collection(db, 'sites'), where('memberUids', 'array-contains', currentUid));
 
     return onSnapshot(q, (snap) => {
       setRows(
@@ -170,9 +232,21 @@ export default function SitesPage() {
           .map((d) => ({ id: d.id, data: d.data() as Site }))
       );
     });
-  }, [workspaceId]);
+  }, [currentUid, workspaceId, currentRole, runMigration]);
 
   const selectedWorkspaceName = useMemo(() => workspaceLabel(workspaces, workspaceId), [workspaces, workspaceId]);
+
+  // owner/admin のときワークスペースメンバー一覧を取得
+  useEffect(() => {
+    const isAdmin = currentRole === 'owner' || currentRole === 'admin';
+    if (!workspaceId || !isAdmin) { setWorkspaceMembers([]); return; }
+    apiPostJson<{ ok: boolean; items: WorkspaceMember[] }>(
+      '/v1/workspaces/members/list',
+      { workspace_id: workspaceId }
+    )
+      .then((res) => { if (res.ok) setWorkspaceMembers(res.items || []); })
+      .catch(() => {});
+  }, [workspaceId, currentRole]);
 
   const embedTag = useMemo(() => {
     const safeSiteId = String(id || '').trim();
@@ -223,6 +297,47 @@ export default function SitesPage() {
     }
   }
 
+  async function handleAddSiteMember(siteId: string, uid: string) {
+    if (!uid) return;
+    const key = `${siteId}:${uid}`;
+    setMemberOpLoading(key);
+    try {
+      await apiPostJson('/v1/sites/members/add', { site_id: siteId, uid });
+      // ローカルstateを即時更新（onSnapshotを待たずに反映）
+      setRows((prev) => prev.map((r) =>
+        r.id === siteId
+          ? { ...r, data: { ...r.data, memberUids: Array.from(new Set([...(r.data.memberUids || []), uid])) } }
+          : r
+      ));
+    } catch (e: any) {
+      alert(e?.message || 'メンバーの追加に失敗しました');
+    } finally {
+      setMemberOpLoading(null);
+    }
+  }
+
+  async function handleRemoveSiteMember(siteId: string, uid: string) {
+    if (uid === currentUid) {
+      alert('自分自身をサイトから削除することはできません');
+      return;
+    }
+    const key = `${siteId}:${uid}`;
+    setMemberOpLoading(key);
+    try {
+      await apiPostJson('/v1/sites/members/remove', { site_id: siteId, uid });
+      // ローカルstateを即時更新
+      setRows((prev) => prev.map((r) =>
+        r.id === siteId
+          ? { ...r, data: { ...r.data, memberUids: (r.data.memberUids || []).filter((u) => u !== uid) } }
+          : r
+      ));
+    } catch (e: any) {
+      alert(e?.message || 'メンバーの削除に失敗しました');
+    } finally {
+      setMemberOpLoading(null);
+    }
+  }
+
   async function createOrUpdate() {
     const safeId = String(id || '').trim();
     const safeName = String(name || '').trim();
@@ -252,32 +367,17 @@ export default function SitesPage() {
 
     try {
       const isEditing = rows.some((r) => r.id === safeId);
-      const u = getAuth().currentUser;
-      if (!u) throw new Error("Not signed in");
-      const token = await u.getIdToken(false);
 
       if (isEditing) {
-        // 更新: ドメイン・名前・公開キーを更新
-        const res = await fetch(`${API_BASE}/v1/sites/updateDomains`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ site_id: safeId, domains }),
-        });
-        const j = await res.json();
+        const j = await apiPostJson('/v1/sites/updateDomains', { site_id: safeId, domains });
         if (!j.ok) throw new Error(j.message || j.error || "更新に失敗しました");
       } else {
-        // 新規作成: APIエンドポイント経由（admin SDK でFirestoreルールを回避）
-        const res = await fetch(`${API_BASE}/v1/sites/create`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({
-            workspace_id: safeWorkspaceId,
-            name: safeName,
-            public_key: safePublicKey,
-            domains,
-          }),
+        const j = await apiPostJson('/v1/sites/create', {
+          workspace_id: safeWorkspaceId,
+          name: safeName,
+          public_key: safePublicKey,
+          domains,
         });
-        const j = await res.json();
         if (!j.ok) throw new Error(j.message || j.error || "作成に失敗しました");
       }
 
@@ -399,22 +499,66 @@ export default function SitesPage() {
                         編集
                       </button>
                       <span style={{ width: 8, display: 'inline-block' }} />
+                      {(currentRole === 'owner' || currentRole === 'admin') && (
+                        <>
+                          <button
+                            className="btn"
+                            onClick={() => setExpandedSiteId(expandedSiteId === r.id ? null : r.id)}
+                          >
+                            {expandedSiteId === r.id ? '閉じる' : 'メンバー'}
+                          </button>
+                          <span style={{ width: 8, display: 'inline-block' }} />
+                        </>
+                      )}
                       <button className="btn btn--danger" onClick={async () => {
+                        if (!window.confirm(`サイト「${r.data?.name || r.id}」を削除しますか？`)) return;
                         try {
-                          const u = getAuth().currentUser;
-                          if (!u) return;
-                          const token = await u.getIdToken(false);
-                          await fetch(`${API_BASE}/v1/sites/delete`, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-                            body: JSON.stringify({ site_id: r.id }),
-                          });
+                          await apiPostJson('/v1/sites/delete', { site_id: r.id });
                         } catch (e) { console.error(e); }
                       }}>
                         削除
                       </button>
                     </td>
                   </tr>
+                  {expandedSiteId === r.id && (currentRole === 'owner' || currentRole === 'admin') && (
+                    <tr>
+                      <td colSpan={5} style={{ background: 'var(--panel2, rgba(0,0,0,.04))', padding: '12px 16px' }}>
+                        <div className="h2" style={{ marginBottom: 8 }}>メンバー管理</div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+                          {(r.data.memberUids || []).length === 0 && (
+                            <div className="small" style={{ opacity: 0.6 }}>メンバーが設定されていません</div>
+                          )}
+                          {(r.data.memberUids || []).map((mUid) => {
+                            const m = workspaceMembers.find((wm) => wm.uid === mUid);
+                            const label = m?.displayName || m?.email || mUid;
+                            const key = `${r.id}:${mUid}`;
+                            return (
+                              <span key={mUid} style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'rgba(0,0,0,.08)', borderRadius: 6, padding: '3px 8px', fontSize: 13 }}>
+                                {label}
+                                {mUid !== currentUid && (
+                                  <button
+                                    className="btn btn--danger"
+                                    style={{ padding: '1px 6px', fontSize: 11 }}
+                                    disabled={memberOpLoading === key}
+                                    onClick={() => handleRemoveSiteMember(r.id, mUid)}
+                                  >
+                                    ×
+                                  </button>
+                                )}
+                              </span>
+                            );
+                          })}
+                        </div>
+                        <AddMemberSelect
+                          siteId={r.id}
+                          currentMemberUids={r.data.memberUids || []}
+                          workspaceMembers={workspaceMembers}
+                          onAdd={handleAddSiteMember}
+                          loading={memberOpLoading}
+                        />
+                      </td>
+                    </tr>
+                  )}
                 </Fragment>
               );
             })}
