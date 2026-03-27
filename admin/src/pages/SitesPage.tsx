@@ -3,6 +3,13 @@ import { onAuthStateChanged, getAuth } from 'firebase/auth';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db, apiPostJson } from '../firebase';
 import { genId } from '../components/id';
+
+function genPublicKey() {
+  const d = new Date();
+  const date = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+  const rand = Math.random().toString(36).slice(2, 8).toUpperCase();
+  return `PK${date}-${rand}`;
+}
 import { TextAreaList, parseLines } from '../components/forms';
 
 type WorkspaceRow = { id: string; data: any };
@@ -261,7 +268,7 @@ export default function SitesPage() {
     setId(genId('site'));
     setName('');
     setDomainsText('https://nurihiro.website');
-    setPublicKey('');
+    setPublicKey(genPublicKey());
     setError('');
     setCopyMessage('');
   }
@@ -324,7 +331,12 @@ export default function SitesPage() {
     const key = `${siteId}:${uid}`;
     setMemberOpLoading(key);
     try {
-      await apiPostJson('/v1/sites/members/remove', { site_id: siteId, uid });
+      const res = await apiPostJson<{ ok: boolean; not_member?: boolean }>('/v1/sites/members/remove', { site_id: siteId, uid });
+      if (res.not_member) {
+        console.warn('[remove] uid not found in memberUids:', uid, 'site:', siteId);
+        // Firestoreの実データを強制リロード（onSnapshotが最新値を返す）
+        return;
+      }
       // ローカルstateを即時更新
       setRows((prev) => prev.map((r) =>
         r.id === siteId
@@ -642,8 +654,13 @@ export default function SitesPage() {
 
               <div style={{ flex: 1, minWidth: 280 }}>
                 <div className="h2">公開キー</div>
-                <input className="input" value={publicKey} onChange={(e) => setPublicKey(e.target.value)} placeholder="英数字で入力してください" />
-                <div className="small">設定すると /v1/serve で X-Site-Key が必須になり、より安全に運用できます。</div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input className="input" style={{ flex: 1 }} value={publicKey} onChange={(e) => setPublicKey(e.target.value)} placeholder="英数字で入力してください" readOnly={rows.some((r) => r.id === id)} />
+                  {!rows.some((r) => r.id === id) && (
+                    <button className="btn" style={{ flexShrink: 0 }} onClick={() => setPublicKey(genPublicKey())}>再生成</button>
+                  )}
+                </div>
+                <div className="small">{rows.some((r) => r.id === id) ? '公開キーは変更できません（変更するとSDKの埋め込みタグの更新が必要になります）。' : 'SDKの埋め込みタグに使用します。自動生成されたものをそのまま使えます。'}</div>
                 <div style={{ height: 14 }} />
                 {error ? (
                   <div className="small" style={{ color: 'salmon', marginBottom: 8 }}>

@@ -3,6 +3,8 @@ import { collection, doc, onSnapshot, query, setDoc, deleteDoc, where } from 'fi
 import { onAuthStateChanged } from 'firebase/auth';
 import { db, auth } from '../firebase';
 import { genId } from '../components/id';
+import { useBeforeUnload } from '../hooks/useBeforeUnload';
+import { CodeEditor } from '../components/CodeEditor';
 
 function workspaceKeyForUid(uid?: string | null) {
   return uid ? `cx_admin_workspace_id:${uid}` : 'cx_admin_workspace_id';
@@ -18,7 +20,7 @@ function readSelectedWorkspaceId(uid?: string | null) {
 
 type TemplateDoc = {
   workspaceId: string;
-  type: 'modal' | 'banner' | 'toast';
+  type: 'modal' | 'banner' | 'toast' | 'launcher';
   name: string;
   html: string;
   css: string;
@@ -62,7 +64,8 @@ function buildPreviewSrcDoc(opts: { html: string; css: string; data: Record<stri
       /* make fixed templates visible inside iframe */
       .cx-overlay{position:relative !important;inset:auto !important;min-height:360px;}
       .cx-modal{margin:24px auto;}
-      .cx-banner,.cx-toast{position:relative !important;left:auto !important;right:auto !important;bottom:auto !important;top:auto !important;margin:24px auto;max-width:min(520px,92vw);} 
+      .cx-banner,.cx-toast{position:relative !important;left:auto !important;right:auto !important;bottom:auto !important;top:auto !important;margin:24px auto;max-width:min(520px,92vw);}
+      .cx-launcher-btn{display:inline-flex !important;margin:40px auto;}
     </style>
     <style>${opts.css || ''}</style>
   </head>
@@ -78,6 +81,23 @@ function workspaceLabel(workspaces: Array<{ id: string; data?: { name?: string }
 }
 
 const DEFAULTS: Record<TemplateDoc['type'], { html: string; css: string }> = {
+  launcher: {
+    html: `
+<button class="cx-launcher-btn" data-cx-launcher-open aria-label="{{cta_text}}">
+  {{#if launcher_image_url}}
+  <img class="cx-launcher-btn__img" src="{{launcher_image_url}}" alt="" />
+  {{/if}}
+  {{#if cta_text}}<span class="cx-launcher-btn__label">{{cta_text}}</span>{{/if}}
+</button>
+`.trim(),
+    css: `
+.cx-launcher-btn{display:flex;align-items:center;gap:10px;background:#111;color:#fff;border:none;border-radius:50px;padding:10px 20px 10px 10px;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 4px 20px rgba(0,0,0,.3);font-family:system-ui,-apple-system,Segoe UI,Roboto;white-space:nowrap;transition:transform .15s,box-shadow .15s;}
+.cx-launcher-btn:hover{transform:translateY(-2px);box-shadow:0 8px 28px rgba(0,0,0,.35);}
+.cx-launcher-btn:active{transform:translateY(0);}
+.cx-launcher-btn__img{width:36px;height:36px;border-radius:50%;object-fit:cover;flex-shrink:0;}
+.cx-launcher-btn__label{line-height:1;}
+`.trim(),
+  },
   modal: {
     html: `
 <div class="cx-overlay" data-cx-close>
@@ -177,6 +197,7 @@ export default function TemplatesPage() {
 
   const selectedWorkspaceName = useMemo(() => workspaceLabel(workspaces, workspaceId), [workspaces, workspaceId]);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  useBeforeUnload(isModalOpen);
 
   const [sample, setSample] = useState<SampleData>({
     title: 'テスト表示',
@@ -325,7 +346,7 @@ export default function TemplatesPage() {
                     <code>{r.data.workspaceId}</code>
                   </div>
                 </td>
-                <td>{r.data.type === 'modal' ? 'モーダル' : r.data.type === 'banner' ? 'バナー' : 'トースト'}</td>
+                <td>{r.data.type === 'modal' ? 'モーダル' : r.data.type === 'banner' ? 'バナー' : r.data.type === 'launcher' ? 'ランチャー' : 'トースト'}</td>
                 <td>{r.data.name}</td>
                 <td>
                   <button className="btn" onClick={() => openEditModal(r)}>編集</button>
@@ -351,7 +372,10 @@ export default function TemplatesPage() {
             padding: 24,
             zIndex: 50,
           }}
-          onClick={() => setIsModalOpen(false)}
+          onClick={() => {
+            if (!window.confirm('保存されていない変更があります。閉じますか？')) return;
+            setIsModalOpen(false);
+          }}
         >
           <div
             className="card liquid-page"
@@ -364,7 +388,10 @@ export default function TemplatesPage() {
                 <div className="small">新規登録・編集はモーダルで行います。HTML・CSS・プレビューはここで確認してください。</div>
               </div>
               <div className="page-header__actions">
-                <button className="btn" onClick={() => setIsModalOpen(false)}>閉じる</button>
+                <button className="btn" onClick={() => {
+                  if (!window.confirm('保存されていない変更があります。閉じますか？')) return;
+                  setIsModalOpen(false);
+                }}>閉じる</button>
               </div>
             </div>
 
@@ -392,23 +419,25 @@ export default function TemplatesPage() {
                       <option value="modal">モーダル — 画面中央のポップアップ。クーポン・キャンペーン訴求に。</option>
                       <option value="banner">バナー — 画面下に固定表示されるフローティングバー。告知・誘導に。</option>
                       <option value="toast">トースト — 画面右下の小さい通知。邪魔せず伝えたいときに。</option>
+                      <option value="launcher">ランチャー — 画面隅に常駐するボタン。クリックでモーダルを開く。</option>
                     </select>
                     <div className="small" style={{ marginTop: 6, opacity: 0.72 }}>
                       {type === 'modal' && '💡 画面全体を覆うオーバーレイ型。インパクト大。クーポン・初回訴求・アンケートなどに向いています。'}
                       {type === 'banner' && '💡 ページ下部に常駐する帯型。スクロールしても消えないので告知・セール情報の常時表示に最適。'}
                       {type === 'toast' && '💡 画面右下にそっと出る小型通知。「クーポンあります」「残り3点」など邪魔にならず伝えたい情報に。'}
+                      {type === 'launcher' && '💡 画面隅に常駐するフローティングボタン。差し込み変数: launcher_image_url（ボタン画像）/ cta_text（ボタン文言）。data-cx-launcher-open 属性の要素をクリックするとモーダルが開きます。'}
                     </div>
                   </div>
                 </div>
 
                 <div style={{ height: 10 }} />
                 <div className="h2">HTMLテンプレート</div>
-                <textarea className="input" style={{ minHeight: 240, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }} value={html} onChange={(e) => setHtml(e.target.value)} />
-                <div className="small">差し込み変数：title / body / image_url / cta_text / cta_url / cta_url_text。 <code>{'{{#if key}}...{{/if}}'}</code> も使えます。</div>
+                <CodeEditor value={html} onChange={setHtml} minHeight={240} placeholder="<!-- HTMLをここに書いてください -->" />
+                <div className="small" style={{ marginTop: 6 }}>差し込み変数：title / body / image_url / cta_text / cta_url / cta_url_text。 <code>{'{{#if key}}...{{/if}}'}</code> も使えます。</div>
 
                 <div style={{ height: 10 }} />
                 <div className="h2">CSSスタイル</div>
-                <textarea className="input" style={{ minHeight: 180, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }} value={css} onChange={(e) => setCss(e.target.value)} />
+                <CodeEditor value={css} onChange={setCss} minHeight={180} placeholder="/* CSSをここに書いてください */" />
 
                 <div style={{ height: 14 }} />
                 <button className="btn btn--primary" onClick={createOrUpdate}>保存</button>

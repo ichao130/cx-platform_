@@ -44,7 +44,10 @@ export default function ScenarioAiPage() {
   const [scenarios, setScenarios] = useState<Array<{ id: string; data: ScenarioDoc }>>([]);
   const [scenarioId, setScenarioId] = useState<string>(() => routeScenarioId || "");
 
-  const [day, setDay] = useState<string>(() => isoDay(new Date()));
+  const [dayFrom, setDayFrom] = useState<string>(() => {
+    const d = new Date(); d.setDate(d.getDate() - 6); return isoDay(d);
+  });
+  const [dayTo, setDayTo] = useState<string>(() => isoDay(new Date()));
   const [variantId, setVariantId] = useState<string>("na");
 
   const [loading, setLoading] = useState<string>("");
@@ -199,7 +202,7 @@ export default function ScenarioAiPage() {
 
 
   async function runReview() {
-    if (!siteId || !scenarioId || !day) return;
+    if (!siteId || !scenarioId || !dayFrom || !dayTo) return;
     setErr("");
     setLoading("review");
     try {
@@ -207,7 +210,8 @@ export default function ScenarioAiPage() {
         "/v1/ai/review",
         {
           site_id: siteId,
-          day,
+          day_from: dayFrom,
+          day_to: dayTo,
           scenario_id: scenarioId,
           variant_id: variantId || "na",
         },
@@ -223,7 +227,7 @@ export default function ScenarioAiPage() {
   }
 
   async function runInsight() {
-    if (!siteId || !scenarioId || !day) return;
+    if (!siteId || !scenarioId || !dayFrom || !dayTo) return;
     setErr("");
     setLoading("insight");
     try {
@@ -232,7 +236,7 @@ export default function ScenarioAiPage() {
         "/v1/stats/summary",
         {
           site_id: siteId,
-          day,
+          day: dayTo,  // 終了日を基準に集計
           scope: "scenario",
           scope_id: scenarioId,
           variant_id: variantId || "na",
@@ -244,7 +248,7 @@ export default function ScenarioAiPage() {
         "/v1/ai/insight",
         {
           site_id: siteId,
-          day,
+          day: dayTo,
           scope: "scenario",
           scope_id: scenarioId,
           variant_id: variantId || "na",
@@ -317,8 +321,24 @@ export default function ScenarioAiPage() {
             </div>
           ) : null}
 
-          <div className="h2" style={{ margin: 0 }}>日付</div>
-          <input className="input" type="date" value={day} onChange={(e) => setDay(e.target.value)} />
+          <div className="h2" style={{ margin: 0 }}>期間</div>
+          <input className="input" type="date" value={dayFrom} onChange={(e) => setDayFrom(e.target.value)} style={{ width: 150 }} />
+          <span className="small" style={{ opacity: 0.6 }}>〜</span>
+          <input className="input" type="date" value={dayTo} onChange={(e) => setDayTo(e.target.value)} style={{ width: 150 }} />
+          <div style={{ display: "flex", gap: 6 }}>
+            {[
+              { label: "今日", days: 0 },
+              { label: "7日", days: 6 },
+              { label: "30日", days: 29 },
+            ].map(({ label, days }) => (
+              <button key={label} className="btn btn--sm" onClick={() => {
+                const to = isoDay(new Date());
+                const from = new Date(); from.setDate(from.getDate() - days);
+                setDayFrom(isoDay(from));
+                setDayTo(to);
+              }}>{label}</button>
+            ))}
+          </div>
 
           <div className="h2" style={{ margin: 0 }}>バリエーション</div>
           <input
@@ -369,8 +389,18 @@ export default function ScenarioAiPage() {
         <div className="small" style={{ opacity: 0.75 }}>
           AIがデータを分析し、改善ポイントと次のアクションを提案します。
         </div>
-        {!insight?.ai ? (
+        {!insight ? (
           <div className="small" style={{ opacity: 0.8 }}>まだ生成してません。上の「AI運用アシスタント生成」を押してね。</div>
+        ) : insight.rule?.grade === "need_data" || !insight.ai ? (
+          <div style={{ marginTop: 8 }}>
+            <div className="small" style={{ color: "#f59e0b", fontWeight: 700 }}>
+              📊 データ不足のため分析できません
+            </div>
+            <div className="small" style={{ opacity: 0.7, marginTop: 4 }}>
+              インプレッションが30件以上になると自動的にAI分析が有効になります。<br />
+              現在: <b>{insight.rule?.impressions ?? stats.impressions ?? 0} imp</b>
+            </div>
+          </div>
         ) : (
           <div style={{ marginTop: 10 }}>
             <div style={{ fontWeight: 900, fontSize: 16 }}>🤖 {insight.ai.summary}</div>

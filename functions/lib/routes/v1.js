@@ -16,7 +16,8 @@ const params_1 = require("firebase-functions/params");
 ========================================= */
 const AiReviewReqSchema = zod_1.z.object({
     site_id: zod_1.z.string().min(1),
-    day: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    day_from: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    day_to: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     scenario_id: zod_1.z.string().min(1),
     variant_id: zod_1.z.string().optional().default("na"),
 });
@@ -943,6 +944,7 @@ function registerV1Routes(app) {
         const url = String((req.body?.url ?? req.body?.context?.url_hint ?? req.query?.url ?? "") || "");
         // レスポンス側のCORS
         res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Access-Control-Allow-Credentials", "true");
         res.setHeader("Vary", "Origin");
         // allow判定
         (0, site_1.assertAllowedOrigin)({ allowed, origin, url });
@@ -1781,10 +1783,9 @@ function registerV1Routes(app) {
             let ops = [];
             for (const siteDoc of sitesSnap.docs) {
                 const siteData = siteDoc.data();
-                const current = Array.isArray(siteData.memberUids) ? siteData.memberUids : [];
-                const merged = Array.from(new Set([...current, ...allMemberUids]));
-                if (merged.length !== current.length || !siteData.memberUids) {
-                    ops.push({ ref: siteDoc.ref, uids: merged });
+                // memberUids が未設定のサイトのみ初期化（設定済みは手動管理を尊重して触らない）
+                if (!Array.isArray(siteData.memberUids)) {
+                    ops.push({ ref: siteDoc.ref, uids: allMemberUids });
                 }
             }
             // バッチ書き込み（500件制限対策）
@@ -2535,11 +2536,21 @@ function registerV1Routes(app) {
                             template = { template_id: a.templateId, html: t.html || "", css: t.css || "" };
                         }
                     }
+                    // launcher用: modalTemplateId があればモーダルテンプレートも埋め込む
+                    let modalTemplate = null;
+                    if (a.type === "launcher" && a.modalTemplateId) {
+                        const mtSnap = await db.collection("templates").doc(a.modalTemplateId).get();
+                        if (mtSnap.exists) {
+                            const mt = mtSnap.data();
+                            modalTemplate = { template_id: a.modalTemplateId, html: mt.html || "", css: mt.css || "" };
+                        }
+                    }
                     actions.push({
                         action_id: a.id || ref.actionId,
                         type: a.type,
                         creative: a.creative || {},
                         template,
+                        modal_template: modalTemplate,
                         mount: a.mount || null,
                     });
                 }
@@ -2577,6 +2588,7 @@ function registerV1Routes(app) {
                 await corsBySiteDomains(req, res, site_id);
             res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
             res.setHeader("Access-Control-Allow-Headers", "Content-Type,X-Site-Id,X-Site-Key");
+            res.setHeader("Access-Control-Allow-Credentials", "true");
             res.status(204).send("");
         }
         catch (e) {
@@ -2600,8 +2612,9 @@ function registerV1Routes(app) {
                 event: body.event,
                 path: body.path ?? null,
             });
-            // CORS + allow (public embed side)
-            await corsBySiteDomains(req, res, body.site_id);
+            // ログはcredentials不要なのでワイルドカードCORSで返す（埋め込みJSからcredentials: "omit"で呼ばれる）
+            res.setHeader("Access-Control-Allow-Origin", "*");
+            res.setHeader("Vary", "Origin");
             const db = (0, admin_1.adminDb)();
             const nowIso = new Date().toISOString();
             const day = yyyyMmDdJST(new Date());
@@ -2817,19 +2830,12 @@ function registerV1Routes(app) {
             return res.status(403).send(e?.message || "forbidden");
         }
     });
-    app.options("/v1/log", async (req, res) => {
-        try {
-            // Preflight usually has no body. Try query/header fallbacks.
-            const site_id = String(req.query.site_id || req.header("X-Site-Id") || req.body?.site_id || "");
-            if (site_id)
-                await corsBySiteDomains(req, res, site_id);
-            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-            res.setHeader("Access-Control-Allow-Headers", "Content-Type,X-Site-Id,X-Site-Key,Authorization");
-            res.status(204).send("");
-        }
-        catch (e) {
-            return res.status(403).send(e?.message || "forbidden");
-        }
+    app.options("/v1/log", (req, res) => {
+        // ログはcredentials不要 → ワイルドカードCORSで常にpreflightを通す
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type,X-Site-Id,X-Site-Key");
+        res.status(204).send("");
     });
     /* -----------------------------
        /v1/ai/copy
@@ -3005,13 +3011,14 @@ function registerV1Routes(app) {
                 return res.status(404).json({ error: "site not found" });
             const db = (0, admin_1.adminDb)();
             const siteId = body.site_id;
-            const day = body.day;
+            const dayFrom = body.day_from;
+            const dayTo = body.day_to;
             const scenarioId = body.scenario_id;
             const variantId = String(body.variant_id ?? "na") || "na";
             // ===============================
-            // 1) キャッシュ
+            // 1) キャッシュ（期間単位）
             // ===============================
-            const cacheId = `${siteId}__${scenarioId}__${variantId}__${day}`;
+            const cacheId = `${siteId}__${scenarioId}__${variantId}__${dayFrom}__${dayTo}`;
             const cacheRef = db.collection("ai_reviews_daily").doc(cacheId);
             const cacheSnap = await cacheRef.get();
             if (cacheSnap.exists) {
@@ -3050,7 +3057,8 @@ function registerV1Routes(app) {
             const statsSnap = await db
                 .collection("stats_daily")
                 .where("siteId", "==", siteId)
-                .where("day", "==", day)
+                .where("day", ">=", dayFrom)
+                .where("day", "<=", dayTo)
                 .where("scenarioId", "==", scenarioId)
                 .where("variantId", "==", variantId)
                 .get();
@@ -3115,7 +3123,8 @@ function registerV1Routes(app) {
                     ok: true,
                     site_id: siteId,
                     scenario_id: scenarioId,
-                    day,
+                    day_from: dayFrom,
+                    day_to: dayTo,
                     rule,
                     packs: [pack],
                 };
@@ -3158,7 +3167,8 @@ function registerV1Routes(app) {
                 output_rule: "JSON配列のみ。最大3件。",
                 inputs: {
                     site_id: siteId,
-                    day,
+                    day_from: dayFrom,
+                    day_to: dayTo,
                     scenario_id: scenarioId,
                     variant_id: variantId,
                     actions: aiInput,
@@ -3170,22 +3180,24 @@ function registerV1Routes(app) {
                 model: "gpt-4.1-mini",
                 input: {
                     ...prompt,
-                    // Stronger instruction for strict JSON output
-                    output_rule: "Return ONLY a JSON array (no object wrapper). Example: [{\"action_id\":\"...\",\"label\":\"...\",\"reason\":\"...\",\"severity\":\"warn\"}] . Max 3 items.",
+                    output_rule: "Return a JSON object with a single key 'highlights' containing an array. Example: {\"highlights\":[{\"action_id\":\"...\",\"label\":\"...\",\"reason\":\"...\",\"severity\":\"warn\"}]}. Max 3 items.",
                 },
-                schema: zod_1.z
-                    .union([
-                    zod_1.z.array(AiReviewHighlightSchema).max(3),
-                    zod_1.z.object({ highlights: zod_1.z.array(AiReviewHighlightSchema).max(3) }),
-                    zod_1.z.object({ items: zod_1.z.array(AiReviewHighlightSchema).max(3) }),
-                    zod_1.z.object({ result: zod_1.z.array(AiReviewHighlightSchema).max(3) }),
-                ])
-                    .transform((v) => {
-                    // normalize to array
-                    if (Array.isArray(v))
-                        return v;
-                    const anyV = v;
-                    return (anyV.highlights || anyV.items || anyV.result || []);
+                // json_object format always returns an object, never a bare array.
+                // Accept any object shape and extract the first array value found.
+                schema: zod_1.z.record(zod_1.z.unknown()).transform((v) => {
+                    // Try well-known keys first, then fall back to first array value
+                    const raw = v;
+                    const arr = raw.highlights ?? raw.items ?? raw.result ?? raw.data ?? raw.reviews ??
+                        Object.values(raw).find((x) => Array.isArray(x)) ?? [];
+                    return (Array.isArray(arr) ? arr : [])
+                        .slice(0, 3)
+                        .map((item) => ({
+                        action_id: String(item?.action_id || ""),
+                        label: String(item?.label || ""),
+                        reason: String(item?.reason || ""),
+                        severity: (["bad", "warn", "info"].includes(item?.severity) ? item.severity : "info"),
+                    }))
+                        .filter((h) => h.action_id && h.label);
                 }),
             });
             const highlights = Array.isArray(highlightsRaw) ? highlightsRaw : [];
@@ -3209,7 +3221,8 @@ function registerV1Routes(app) {
                 ok: true,
                 site_id: siteId,
                 scenario_id: scenarioId,
-                day,
+                day_from: dayFrom,
+                day_to: dayTo,
                 rule,
                 packs: [pack],
             };

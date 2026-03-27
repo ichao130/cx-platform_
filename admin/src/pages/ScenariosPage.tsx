@@ -215,6 +215,7 @@ export default function ScenariosPage() {
     Array<(typeof PAGE_TYPES)[number]>
   >(["other"]);
   const [staySec, setStaySec] = useState(3);
+  const [scrollDepthPct, setScrollDepthPct] = useState(0); // 0=無効, 1-100=スクロール深度(%)
 
   // non-AB actionRefs
   const [actionRefs, setActionRefs] = useState<ActionRef[]>([]);
@@ -430,10 +431,16 @@ export default function ScenariosPage() {
           ? { mode: urlMode, value: String(urlValue || "").trim(), target: urlTarget }
           : undefined,
       },
-      behavior: { stay_gte_sec: Number(staySec) },
-      trigger: { type: "stay", ms: Number(staySec) * 1000 },
+      behavior: {
+        stay_gte_sec: Number(staySec),
+        ...(scrollDepthPct > 0 ? { scroll_depth_pct: Number(scrollDepthPct) } : {}),
+      },
+      trigger: {
+        type: scrollDepthPct > 0 ? "scroll" : "stay",
+        ms: Number(staySec) * 1000,
+      },
     }),
-    [pageTypeIn, staySec, urlEnabled, urlMode, urlValue, urlTarget]
+    [pageTypeIn, staySec, scrollDepthPct, urlEnabled, urlMode, urlValue, urlTarget]
   );
 
 
@@ -669,6 +676,7 @@ export default function ScenariosPage() {
 
     setPageTypeIn(["other"]);
     setStaySec(3);
+    setScrollDepthPct(0);
 
     setActionRefs([]);
 
@@ -762,6 +770,7 @@ export default function ScenariosPage() {
 
     setPageTypeIn((s.entry_rules?.page?.page_type_in as any) || ["other"]);
     setStaySec(Number(s.entry_rules?.behavior?.stay_gte_sec ?? 3));
+    setScrollDepthPct(Number(s.entry_rules?.behavior?.scroll_depth_pct ?? 0));
 
     setActionRefs(reorder(normalizeActionRefs(s.actionRefs)));
 
@@ -1271,17 +1280,44 @@ export default function ScenariosPage() {
                       {pt}
                     </label>
                   ))}
-                  <label className="badge">
-                    stay_gte_sec
+                </div>
+
+                <div style={{ height: 10 }} />
+                <div className="row" style={{ gap: 16, flexWrap: "wrap" }}>
+                  <div style={{ flex: 1, minWidth: 180 }}>
+                    <div className="h2">滞在時間（秒）</div>
+                    <div className="small" style={{ marginBottom: 6 }}>ページ表示後、この秒数経過してから発動</div>
                     <input
                       className="input"
-                      style={{ width: 110, marginLeft: 8 }}
                       type="number"
                       min={0}
                       value={staySec}
                       onChange={(e) => setStaySec(Number(e.target.value))}
                     />
-                  </label>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 180 }}>
+                    <div className="h2">スクロール深度（%）</div>
+                    <div className="small" style={{ marginBottom: 6 }}>0=無効。50なら「ページを50%スクロールしたら」発動</div>
+                    <input
+                      className="input"
+                      type="number"
+                      min={0}
+                      max={100}
+                      placeholder="0（無効）"
+                      value={scrollDepthPct || ""}
+                      onChange={(e) => setScrollDepthPct(Number(e.target.value))}
+                    />
+                    {scrollDepthPct > 0 && staySec > 0 && (
+                      <div className="small" style={{ marginTop: 4, color: "var(--brand)" }}>
+                        💡 {staySec}秒経過後、{scrollDepthPct}%スクロールで発動
+                      </div>
+                    )}
+                    {scrollDepthPct > 0 && staySec === 0 && (
+                      <div className="small" style={{ marginTop: 4, color: "var(--brand)" }}>
+                        💡 {scrollDepthPct}%スクロールで即発動
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div style={{ height: 14 }} />

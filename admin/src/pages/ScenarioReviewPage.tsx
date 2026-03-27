@@ -80,7 +80,10 @@ export default function ScenarioReviewPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>("");
   const [siteId, setSiteId] = useState<string>(() => readSelectedSiteId());
-  const [day, setDay] = useState<string>(todayIso());
+  const [dayFrom, setDayFrom] = useState<string>(() => {
+    const d = new Date(); d.setDate(d.getDate() - 6); return d.toISOString().slice(0, 10);
+  });
+  const [dayTo, setDayTo] = useState<string>(todayIso());
   const [variantId, setVariantId] = useState<string>("na");
 
   useEffect(() => {
@@ -135,7 +138,8 @@ export default function ScenarioReviewPage() {
         "/v1/ai/review",
         {
           site_id: siteId,
-          day,
+          day_from: dayFrom,
+          day_to: dayTo,
           scenario_id: scenarioId,
           variant_id: variantId,
         },
@@ -150,7 +154,7 @@ export default function ScenarioReviewPage() {
     } finally {
       setLoading(false);
     }
-  }, [scenarioId, siteId, day, variantId]);
+  }, [scenarioId, siteId, dayFrom, dayTo, variantId]);
 
   useEffect(() => {
     fetchReview();
@@ -181,20 +185,27 @@ export default function ScenarioReviewPage() {
       </div>
 
       <div className="card" style={{ minWidth: 0 }}>
+        <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+          {[
+            { label: "今日", days: 0 },
+            { label: "直近7日", days: 6 },
+            { label: "直近30日", days: 29 },
+          ].map(({ label, days }) => (
+            <button key={label} className="btn btn--sm" onClick={() => {
+              const to = todayIso();
+              const from = new Date(); from.setDate(from.getDate() - days);
+              setDayFrom(from.toISOString().slice(0, 10));
+              setDayTo(to);
+            }}>{label}</button>
+          ))}
+        </div>
         <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <div className="small" style={{ opacity: 0.8 }}>site_id</div>
-          <input
-            className="input"
-            value={siteId}
-            onChange={(e) => setSiteId(e.target.value)}
-            style={{ minWidth: 260, flex: "1 1 260px" }}
-          />
-
-          <div className="small" style={{ opacity: 0.8 }}>day</div>
-          <input className="input" type="date" value={day} onChange={(e) => setDay(e.target.value)} />
-
-          <div className="small" style={{ opacity: 0.8 }}>variant_id</div>
-          <input className="input" value={variantId} onChange={(e) => setVariantId(e.target.value)} style={{ width: 140 }} />
+          <div className="small" style={{ opacity: 0.8 }}>開始日</div>
+          <input className="input" type="date" value={dayFrom} onChange={(e) => setDayFrom(e.target.value)} style={{ width: 160 }} />
+          <div className="small" style={{ opacity: 0.8 }}>終了日</div>
+          <input className="input" type="date" value={dayTo} onChange={(e) => setDayTo(e.target.value)} style={{ width: 160 }} />
+          <div className="small" style={{ opacity: 0.8 }}>variant</div>
+          <input className="input" value={variantId} onChange={(e) => setVariantId(e.target.value)} style={{ width: 120 }} />
         </div>
       </div>
 

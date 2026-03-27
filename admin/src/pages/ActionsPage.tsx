@@ -1,5 +1,6 @@
 // src/pages/ActionsPage.tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useBeforeUnload } from '../hooks/useBeforeUnload';
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import {
   collection,
@@ -22,7 +23,7 @@ import { uploadImageToWorkspace } from "../lib/storage";
 /* =========================
  * Types
  * ========================= */
-type ActionType = "modal" | "banner" | "toast";
+type ActionType = "modal" | "banner" | "toast" | "launcher";
 type MountPlacement = "append" | "prepend" | "before" | "after";
 type MountMode = "shadow" | "theme" | "inherit";
 
@@ -47,6 +48,7 @@ type ActionDoc = {
   action_id?: string;
   type: ActionType;
   templateId?: string;
+  modalTemplateId?: string; // launcher用: クリック後に開くモーダルのテンプレート
 
   // legacy compat
   selector?: string;
@@ -68,6 +70,7 @@ type ActionDoc = {
     cta_url?: string;
     cta_url_text?: string;
     image_url?: string;
+    launcher_image_url?: string; // ランチャーボタン専用画像
 
     // primary media id (optional)
     image_media_id?: string;
@@ -171,12 +174,14 @@ function normalizeActionFromDb(a: ActionDoc) {
     placement: (a.mount?.placement ?? "append") as MountPlacement,
     mode: (a.mount?.mode ?? "shadow") as MountMode,
     templateId: a.templateId ?? "",
+    modalTemplateId: a.modalTemplateId ?? "",
     title: a.creative?.title ?? "",
     body: a.creative?.body ?? "",
     ctaText: a.creative?.cta_text ?? "OK",
     ctaUrl: a.creative?.cta_url ?? "",
     ctaUrlText: a.creative?.cta_url_text ?? "詳細を見る",
     imageUrl: a.creative?.image_url ?? "",
+    launcherImageUrl: a.creative?.launcher_image_url ?? "",
     imageMediaId: a.creative?.image_media_id ?? "",
     mediaIds: Array.isArray(a.mediaIds) ? a.mediaIds : [],
   };
@@ -190,7 +195,8 @@ function workspaceLabel(workspaces: Array<{ id: string; data?: { name?: string }
 function actionTypeLabel(type: ActionType) {
   if (type === "modal") return "モーダル";
   if (type === "banner") return "バナー";
-  return "トースト";
+  if (type === "toast") return "トースト";
+  return "ランチャー";
 }
 
 function placementLabel(v: MountPlacement) {
@@ -215,6 +221,7 @@ function buildActionPayload(form: {
   placement: MountPlacement;
   mode: MountMode;
   templateId: string;
+  modalTemplateId: string;
   creative: ActionDoc["creative"];
   mediaIds: string[];
 }): ActionDoc {
@@ -227,6 +234,7 @@ function buildActionPayload(form: {
     siteId: form.siteId || undefined,
     type: form.type,
     templateId: form.templateId.trim() || undefined,
+    modalTemplateId: (form.type === "launcher" && form.modalTemplateId.trim()) ? form.modalTemplateId.trim() : undefined,
     mediaIds,
     creative: {
       title: form.creative.title ?? "",
@@ -476,6 +484,7 @@ export default function ActionsPage() {
   const [mode, setMode] = useState<MountMode>("shadow");
 
   const [templateId, setTemplateId] = useState<string>("");
+  const [modalTemplateId, setModalTemplateId] = useState<string>("");
 
   const [title, setTitle] = useState("テスト表示");
   const [body, setBody] = useState("これが出れば成功🔥");
@@ -483,7 +492,9 @@ export default function ActionsPage() {
   const [ctaUrl, setCtaUrl] = useState("");
   const [ctaUrlText, setCtaUrlText] = useState("詳細を見る");
 
+  const [launcherPosition, setLauncherPosition] = useState<"left" | "right">("right");
   const [imageUrl, setImageUrl] = useState("");
+  const [launcherImageUrl, setLauncherImageUrl] = useState("");
   const [imageMediaId, setImageMediaId] = useState<string>("");
   const [scenarios, setScenarios] = useState<Array<{ id: string; data: ScenarioDoc }>>([]);
 
@@ -505,6 +516,8 @@ export default function ActionsPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadErr, setUploadErr] = useState<string>("");
   const [isImageDragOver, setIsImageDragOver] = useState(false);
+  const [launcherUploading, setLauncherUploading] = useState(false);
+  const [isLauncherImageDragOver, setIsLauncherImageDragOver] = useState(false);
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const selectedWorkspaceName = useMemo(() => workspaceLabel(workspaces, workspaceId), [workspaces, workspaceId]);
@@ -513,6 +526,7 @@ export default function ActionsPage() {
     return s?.data?.name || s?.data?.siteName || siteId || "（未選択）";
   }, [sites, siteId]);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  useBeforeUnload(isModalOpen);
 
   // toast / delete confirm
   const [toast, setToast] = useState<{ msg: string; type: "success" | "error" } | null>(null);
@@ -626,12 +640,14 @@ export default function ActionsPage() {
     setPlacement(f.placement);
     setMode(f.mode);
     setTemplateId(f.templateId);
+    setModalTemplateId(f.modalTemplateId);
     setTitle(f.title);
     setBody(f.body);
     setCtaText(f.ctaText);
     setCtaUrl(f.ctaUrl);
     setCtaUrlText(f.ctaUrlText);
     setImageUrl(f.imageUrl);
+    setLauncherImageUrl(f.launcherImageUrl);
     setImageMediaId(f.imageMediaId);
     setMediaIds(f.mediaIds);
     setUploadErr("");
@@ -775,6 +791,7 @@ export default function ActionsPage() {
       placement,
       mode,
       templateId,
+      modalTemplateId,
       creative: {
         title,
         body,
@@ -782,7 +799,9 @@ export default function ActionsPage() {
         cta_url: ctaUrl,
         cta_url_text: ctaUrlText,
         image_url: imageUrl,
+        launcher_image_url: type === "launcher" ? (launcherImageUrl || undefined) : undefined,
         image_media_id: imageMediaId || undefined,
+        ...(type === "launcher" ? { launcher_position: launcherPosition } : {}),
       },
       mediaIds,
     });
@@ -794,12 +813,14 @@ export default function ActionsPage() {
     placement,
     mode,
     templateId,
+    modalTemplateId,
     title,
     body,
     ctaText,
     ctaUrl,
     ctaUrlText,
     imageUrl,
+    launcherImageUrl,
     imageMediaId,
     mediaIds,
   ]);
@@ -873,6 +894,25 @@ export default function ActionsPage() {
     } finally {
       setUploading(false);
       setIsImageDragOver(false);
+    }
+  }
+
+  async function uploadLauncherImage(file: File) {
+    if (!workspaceId || !file) return;
+    if (!(file.type || '').startsWith('image/')) {
+      setUploadErr('画像ファイルを選択してください。');
+      return;
+    }
+    setUploadErr('');
+    setLauncherUploading(true);
+    try {
+      const result = await uploadImageToWorkspace({ workspaceId, file });
+      setLauncherImageUrl(result.downloadURL);
+    } catch (err: any) {
+      setUploadErr(err?.message || String(err));
+    } finally {
+      setLauncherUploading(false);
+      setIsLauncherImageDragOver(false);
     }
   }
 
@@ -1068,6 +1108,7 @@ export default function ActionsPage() {
             zIndex: 50,
           }}
           onClick={() => {
+            if (!window.confirm('保存されていない変更があります。閉じますか？')) return;
             setIsModalOpen(false);
             setUploadErr('');
           }}
@@ -1131,9 +1172,10 @@ export default function ActionsPage() {
                         if (t === "modal") setSelector("body");
                       }}
                     >
-                      <option value="modal">modal（モーダル）</option>
-                      <option value="banner">banner（バナー）</option>
-                      <option value="toast">toast（トースト）</option>
+                      <option value="modal">モーダル（画面中央ポップアップ）</option>
+                      <option value="banner">バナー（画面下フローティングバー）</option>
+                      <option value="toast">トースト（画面端の小通知）</option>
+                      <option value="launcher">ランチャー（固定ボタン→クリックでモーダル）</option>
                     </select>
                   </div>
 
@@ -1180,17 +1222,49 @@ export default function ActionsPage() {
                 </div>
 
                 <div style={{ height: 10 }} />
-                <div className="h2">テンプレート（任意）</div>
-                <select className="input" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
-                  <option value="">（標準 / built-in）</option>
-                  {templates
-                    .filter((t) => t.data?.workspaceId === workspaceId && t.data?.type === type)
-                    .map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.id} — {t.data?.name || ""}
-                      </option>
-                    ))}
-                </select>
+                {type === "launcher" ? (
+                  <>
+                    <div className="h2">ランチャーボタン テンプレート（任意）</div>
+                    <div className="small" style={{ opacity: 0.72, marginBottom: 6 }}>画面隅に常駐するボタンのデザイン。未選択の場合はビルトインデザインが使われます。</div>
+                    <select className="input" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
+                      <option value="">（標準 / built-in）</option>
+                      {templates
+                        .filter((t) => t.data?.workspaceId === workspaceId && t.data?.type === "launcher")
+                        .map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.id} — {t.data?.name || ""}
+                          </option>
+                        ))}
+                    </select>
+                    <div style={{ height: 10 }} />
+                    <div className="h2">クリック後モーダル テンプレート（任意）</div>
+                    <div className="small" style={{ opacity: 0.72, marginBottom: 6 }}>ボタンをクリックしたときに開くモーダルのデザイン。未選択の場合はビルトインモーダルが使われます。</div>
+                    <select className="input" value={modalTemplateId} onChange={(e) => setModalTemplateId(e.target.value)}>
+                      <option value="">（標準 / built-in）</option>
+                      {templates
+                        .filter((t) => t.data?.workspaceId === workspaceId && t.data?.type === "modal")
+                        .map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.id} — {t.data?.name || ""}
+                          </option>
+                        ))}
+                    </select>
+                  </>
+                ) : (
+                  <>
+                    <div className="h2">テンプレート（任意）</div>
+                    <select className="input" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
+                      <option value="">（標準 / built-in）</option>
+                      {templates
+                        .filter((t) => t.data?.workspaceId === workspaceId && t.data?.type === type)
+                        .map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.id} — {t.data?.name || ""}
+                          </option>
+                        ))}
+                    </select>
+                  </>
+                )}
 
                 <div style={{ height: 10 }} />
 
@@ -1198,10 +1272,25 @@ export default function ActionsPage() {
                 <div className="h2">本文</div>
                 <textarea className="input" value={body} onChange={(e) => setBody(e.target.value)} />
 
+                {type === "launcher" && (
+                  <>
+                    <div style={{ height: 10 }} />
+                    <div className="row">
+                      <div style={{ flex: 1 }}>
+                        <div className="h2">ボタン位置</div>
+                        <select className="input" value={launcherPosition} onChange={(e) => setLauncherPosition(e.target.value as "left" | "right")}>
+                          <option value="right">右下</option>
+                          <option value="left">左下</option>
+                        </select>
+                      </div>
+                    </div>
+                  </>
+                )}
+
                 <div style={{ height: 10 }} />
                 <div className="row">
                   <div style={{ flex: 1 }}>
-                    <div className="h2">閉じるボタン文言</div>
+                    <div className="h2">{type === "launcher" ? "ボタン文言" : "閉じるボタン文言"}</div>
                     <input className="input" value={ctaText} onChange={(e) => setCtaText(e.target.value)} />
                   </div>
                 </div>
@@ -1369,9 +1458,49 @@ export default function ActionsPage() {
                 )}
 
                 <div style={{ height: 12 }} />
-                <div className="h2">画像URL（任意）</div>
+                {type === "launcher" && (
+                  <>
+                    <div className="h2">ランチャーボタン画像URL（任意）</div>
+                    <input className="input" value={launcherImageUrl} onChange={(e) => setLauncherImageUrl(e.target.value)} placeholder="https://..." />
+                    <div className="small">ボタン専用の画像。テンプレートで <code>{"{{launcher_image_url}}"}</code> として使えます。</div>
+                    <div style={{ height: 8 }} />
+                    <div
+                      style={{
+                        border: isLauncherImageDragOver ? '2px dashed rgba(37,99,235,.55)' : '1px dashed rgba(15,23,42,.18)',
+                        borderRadius: 14,
+                        padding: 12,
+                        background: isLauncherImageDragOver ? 'rgba(37,99,235,.06)' : 'rgba(15,23,42,.02)',
+                        transition: 'border-color .15s ease, background .15s ease',
+                      }}
+                      onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); if (!workspaceId || launcherUploading) return; setIsLauncherImageDragOver(true); }}
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); if (!workspaceId || launcherUploading) return; if (!isLauncherImageDragOver) setIsLauncherImageDragOver(true); }}
+                      onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); const next = e.relatedTarget as Node | null; if (next && e.currentTarget.contains(next)) return; setIsLauncherImageDragOver(false); }}
+                      onDrop={async (e) => { e.preventDefault(); e.stopPropagation(); if (!workspaceId || launcherUploading) { setIsLauncherImageDragOver(false); return; } const file = e.dataTransfer?.files?.[0]; if (!file) { setIsLauncherImageDragOver(false); return; } await uploadLauncherImage(file); }}
+                    >
+                      <div className="row" style={{ alignItems: "center", gap: 10 }}>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          disabled={!workspaceId || launcherUploading}
+                          onChange={async (e) => { const file = e.target.files?.[0]; if (!file) return; await uploadLauncherImage(file); e.currentTarget.value = ""; }}
+                        />
+                        {launcherUploading && <div className="small">アップロード中...</div>}
+                      </div>
+                      <div className="small" style={{ marginTop: 8, opacity: 0.74 }}>ファイル選択またはここへ画像をドラッグ＆ドロップできます。</div>
+                    </div>
+                    {launcherImageUrl?.trim() && (
+                      <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <img src={launcherImageUrl} alt="preview" style={{ width: 48, height: 48, objectFit: "cover", borderRadius: "50%" }} onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")} />
+                        <div className="small" style={{ opacity: 0.7 }}>ボタンプレビュー</div>
+                      </div>
+                    )}
+                    <div style={{ height: 12 }} />
+                    <div className="h2">モーダル画像URL（任意）</div>
+                  </>
+                )}
+                {type !== "launcher" && <div className="h2">画像URL（任意）</div>}
                 <input className="input" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} />
-                <div className="small">直接入力するか、下のアップロードで自動入力できます。</div>
+                <div className="small">{type === "launcher" ? "クリック後に開くモーダル専用の画像。" : ""}直接入力するか、下のアップロードで自動入力できます。</div>
 
                 <div style={{ height: 10 }} />
                 <div

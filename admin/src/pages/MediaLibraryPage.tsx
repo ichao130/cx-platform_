@@ -371,16 +371,15 @@ export default function MediaPage() {
 
   const filtered = useMemo(() => {
     const key = qText.trim().toLowerCase();
+    // ワークスペース単位で全画像を表示（siteIdはメタデータとして列に表示、フィルターには使わない）
     return mediaRows.filter((r) => {
-      // siteId が設定されている行は現在のサイトと一致するか、siteId 未設定（旧データ）のみ表示
-      if (siteId && r.data.siteId && r.data.siteId !== siteId) return false;
       if (!key) return true;
       const n = (r.data.originalName || "").toLowerCase();
       const id = r.id.toLowerCase();
       const ct = (r.data.contentType || "").toLowerCase();
       return n.includes(key) || id.includes(key) || ct.includes(key);
     });
-  }, [mediaRows, qText, siteId]);
+  }, [mediaRows, qText]);
 
   useEffect(() => {
     if (!workspaceId) return;

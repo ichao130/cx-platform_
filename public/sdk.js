@@ -75,8 +75,10 @@
   }
 
   function postLog(apiBase, payload, siteId, siteKey) {
-    var url = logEndpointFromServe(apiBase);
-    if (!url) return;
+    var base = logEndpointFromServe(apiBase);
+    if (!base) return;
+    // OPTIONSプリフライトでも site_id を参照できるよう query param に付与
+    var url = base + (base.indexOf("?") >= 0 ? "&" : "?") + "site_id=" + encodeURIComponent(siteId || "");
     try {
       fetch(url, {
         method: "POST",
@@ -259,8 +261,8 @@
     // base inside shadow: allow tokens
     var base = document.createElement("style");
     base.textContent =
-      ":host{display:contents;font-family:var(--cx-font, system-ui);color:var(--cx-text,#111);}"+
-      ".cx-scope{all:initial;font-family:var(--cx-font, system-ui);color:var(--cx-text,#111);}"+
+      ":host{display:contents;}"+
+      ".cx-scope{all:initial;display:block;font-family:var(--cx-font,system-ui,-apple-system,'Segoe UI',sans-serif);font-size:14px;line-height:1.5;color:var(--cx-text,#111);}"+
       ".cx-scope *{box-sizing:border-box;}";
 
     shadow.appendChild(base);
@@ -429,11 +431,11 @@
   }
 
   function renderModal(action, next, apiBase, ctx) {
-    // modalは常にoverlay（DOM差し込み対象外）
-    ensureBaseStyle();
-
-    // template優先（global）
+    // template優先（global）- テンプレートがある場合はbaseStyleを注入しない（競合防止）
     if (renderWithTemplate(action, next, apiBase, ctx, null)) return;
+
+    // テンプレートなし時のフォールバック
+    ensureBaseStyle();
 
     var creative = normalizeCreative(action.creative);
 
@@ -543,9 +545,9 @@
   }
 
   function renderBanner(action, next, apiBase, ctx) {
-    ensureBaseStyle();
     var mount = pickMount(action);
     if (renderWithTemplate(action, next, apiBase, ctx, mount)) return;
+    ensureBaseStyle();
 
     // mountがある場合は固定position bannerよりも “自然に差し込む” が優先
     if (mount && mount.selector) {
@@ -701,9 +703,9 @@
   }
 
   function renderToast(action, next, apiBase, ctx) {
-    ensureBaseStyle();
     var mount = pickMount(action);
     if (renderWithTemplate(action, next, apiBase, ctx, mount)) return;
+    ensureBaseStyle();
 
     if (mount && mount.selector) {
       var target = null;
@@ -819,6 +821,63 @@
     });
   }
 
+  /* ------------------ LAUNCHER ------------------ */
+
+  function renderLauncher(action, next, apiBase, ctx) {
+    var creative = normalizeCreative(action.creative);
+    var pos = String(creative.launcher_position || "right");
+    var label = creative.cta_text || "お問い合わせ";
+
+    // テンプレートがある場合はそれでランチャーボタンを描画
+    if (action.template && action.template.html) {
+      var mount = { mode: "shadow" };
+      var host = document.createElement("div");
+      host.setAttribute("data-cx-host", "1");
+      host.style.cssText = "position:fixed;bottom:20px;" + (pos === "left" ? "left:20px;" : "right:20px;") + "z-index:2147483645;";
+      document.body.appendChild(host);
+
+      var handle = mountRootFor(host, mount);
+      var root = handle.root || host;
+      var tpl = action.template;
+      ensureTemplateStyle(tpl.template_id || tpl.templateId, tpl.css, handle.shadowRoot || null);
+      root.innerHTML = renderTemplate(tpl.html, creative);
+
+      var openBtn = root.querySelector("[data-cx-launcher-open]") || root.firstElementChild;
+      if (openBtn) {
+        openBtn.style.cursor = "pointer";
+        openBtn.addEventListener("click", function () {
+          postLog(apiBase, { site_id: ctx.site_id, scenario_id: ctx.scenario_id, action_id: action.action_id, variant_id: ctx.variant_id || null, event: "click", url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid }, ctx.site_id, ctx.site_key);
+          // モーダルとして同じクリエイティブを表示
+          var modalAction = { action_id: action.action_id, type: "modal", creative: action.creative, template: action.modal_template || null };
+          renderModal(modalAction, function () {}, apiBase, ctx);
+        });
+      }
+
+      postLog(apiBase, { site_id: ctx.site_id, scenario_id: ctx.scenario_id, action_id: action.action_id, variant_id: ctx.variant_id || null, event: "impression", url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid }, ctx.site_id, ctx.site_key);
+      if (typeof next === "function") next();
+      return;
+    }
+
+    // テンプレートなし: ビルトインのフローティングボタン
+    ensureBaseStyle();
+    var btn = document.createElement("button");
+    btn.className = "cx-launcher";
+    btn.textContent = label;
+    btn.style.cssText = "position:fixed;bottom:20px;" + (pos === "left" ? "left:20px;" : "right:20px;") +
+      "z-index:2147483645;background:#111;color:#fff;border:none;border-radius:50px;padding:12px 20px;" +
+      "font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 4px 20px rgba(0,0,0,.3);display:flex;align-items:center;gap:8px;";
+    document.body.appendChild(btn);
+
+    btn.addEventListener("click", function () {
+      postLog(apiBase, { site_id: ctx.site_id, scenario_id: ctx.scenario_id, action_id: action.action_id, variant_id: ctx.variant_id || null, event: "click", url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid }, ctx.site_id, ctx.site_key);
+      var modalAction = { action_id: action.action_id, type: "modal", creative: action.creative, template: null };
+      renderModal(modalAction, function () {}, apiBase, ctx);
+    });
+
+    postLog(apiBase, { site_id: ctx.site_id, scenario_id: ctx.scenario_id, action_id: action.action_id, variant_id: ctx.variant_id || null, event: "impression", url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid }, ctx.site_id, ctx.site_key);
+    if (typeof next === "function") next();
+  }
+
   /* ------------------ ACTION CHAIN ------------------ */
 
   function runActions(actions, apiBase, ctx) {
@@ -830,6 +889,7 @@
       var t = (action.type || "modal");
       if (t === "banner") return renderBanner(action, next, apiBase, ctx);
       if (t === "toast") return renderToast(action, next, apiBase, ctx);
+      if (t === "launcher") return renderLauncher(action, next, apiBase, ctx);
       return renderModal(action, next, apiBase, ctx);
     }
     next();
@@ -923,21 +983,54 @@
 
   function scheduleScenario(s, ctx, apiBase) {
     var er = s.entry_rules || {};
-    var trigger = er.trigger || { type: "immediate", ms: 0 };
-    var waitMs = Number(trigger.ms || 0);
+    var waitMs = Number((er.trigger && er.trigger.ms) || 0);
     if (er.behavior && er.behavior.stay_gte_sec) {
       waitMs = Math.max(waitMs, Number(er.behavior.stay_gte_sec) * 1000);
     }
-    setTimeout(function () {
-      var actions = Array.isArray(s.actions) ? s.actions : [];
-      if (!actions.length) {
-        log("[cx] no actions in scenario", s.scenario_id);
-        return;
-      }
-      ctx.scenario_id = s.scenario_id || s.id;
-      ctx.variant_id = s.variant_id || null; // serverが付与
+    var scrollPct = er.behavior && er.behavior.scroll_depth_pct ? Number(er.behavior.scroll_depth_pct) : 0;
+
+    var actions = Array.isArray(s.actions) ? s.actions : [];
+    if (!actions.length) {
+      log("[cx] no actions in scenario", s.scenario_id);
+      return;
+    }
+    ctx.scenario_id = s.scenario_id || s.id;
+    ctx.variant_id = s.variant_id || null;
+
+    function fire() {
       runActions(actions, apiBase, ctx);
-    }, waitMs);
+    }
+
+    if (scrollPct > 0) {
+      // スクロールトリガー: stay_gte_sec 秒の最小待機後にスクロール深度を監視
+      var readyToScroll = waitMs <= 0;
+      var scrollFired = false;
+
+      function onScroll() {
+        if (!readyToScroll || scrollFired) return;
+        var scrollTop = window.scrollY || document.documentElement.scrollTop || 0;
+        var docHeight = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+        var pct = docHeight <= 0 ? 100 : (scrollTop / docHeight) * 100;
+        if (pct >= scrollPct) {
+          scrollFired = true;
+          window.removeEventListener("scroll", onScroll);
+          fire();
+        }
+      }
+
+      if (waitMs > 0) {
+        setTimeout(function () {
+          readyToScroll = true;
+          onScroll(); // 既にスクロール済みの場合も即発火
+        }, waitMs);
+      }
+
+      window.addEventListener("scroll", onScroll, { passive: true });
+      onScroll(); // 初期チェック（ページが短くてスクロールできない場合など）
+    } else {
+      // タイマートリガー（既存）
+      setTimeout(fire, waitMs);
+    }
   }
 
   function main() {

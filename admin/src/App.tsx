@@ -445,12 +445,9 @@ function AppShell({ children }: { children: React.ReactNode }) {
             )}
           </div>
           <div style={{ minWidth: 0 }}>
-            <Link to="/dashboard" className="h2" style={{ margin: 0, textDecoration: "none", display: "block", color: "rgba(255,255,255,.9)" }}>
+            <Link to="/dashboard" style={{ margin: 0, textDecoration: "none", display: "block", color: "rgba(255,255,255,.95)", fontSize: 20, fontWeight: 800, lineHeight: 1.3 }}>
               {selectedWorkspaceName}
             </Link>
-            <div className="small" style={{ marginTop: 4, color: "rgba(255,255,255,.45)" }}>
-              {selectedWorkspaceDescription || "ワークスペース設定でロゴ・説明文を登録できます"}
-            </div>
           </div>
         </div>
 
