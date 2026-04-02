@@ -1,0 +1,37 @@
+version: 2
+updates:
+  # Admin (React/Vite)
+  - package-ecosystem: "npm"
+    directory: "/admin"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+
+  # Functions (Cloud Functions)
+  - package-ecosystem: "npm"
+    directory: "/functions"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+
+  # Root
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"

@@ -1001,6 +1001,15 @@
       runActions(actions, apiBase, ctx);
     }
 
+    // カートトリガー
+    if (er.trigger && er.trigger.type === "cart_add") {
+      window.addEventListener("cx:cart:add", function onCartAdd() {
+        window.removeEventListener("cx:cart:add", onCartAdd);
+        fire();
+      });
+      return;
+    }
+
     if (scrollPct > 0) {
       // スクロールトリガー: stay_gte_sec 秒の最小待機後にスクロール深度を監視
       var readyToScroll = waitMs <= 0;

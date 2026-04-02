@@ -22,7 +22,7 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
-import { db } from "../firebase";
+import { db, apiPostJson } from "../firebase";
 
 // ---- helpers ----
 function isoDay(d: Date) {
@@ -82,6 +82,35 @@ function MiniBar({ value, max, color = "#59b7c6" }: { value: number; max: number
   return (
     <div style={{ height: 8, background: "rgba(15,23,42,.07)", borderRadius: 99, overflow: "hidden", flex: 1 }}>
       <div style={{ height: "100%", width: `${pctVal}%`, background: color, borderRadius: 99, transition: "width .4s ease" }} />
+    </div>
+  );
+}
+
+// ---- BarRow: ラベル＋横棒＋%付きグラフ行 ----
+function BarRow({ label, value, max, total, color, href }: {
+  label: string; value: number; max: number; total: number; color: string; href?: string;
+}) {
+  const barPct = max > 0 ? Math.max(2, Math.round((value / max) * 100)) : 0;
+  const totalPct = total > 0 ? Math.round((value / total) * 100) : 0;
+  const labelEl = href ? (
+    <a href={href} target="_blank" rel="noreferrer" className="small"
+      style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "inherit", textDecoration: "underline", textDecorationColor: "rgba(99,102,241,.35)" }}
+      title={label}>{label}</a>
+  ) : (
+    <span className="small" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: 0.82 }} title={label}>{label}</span>
+  );
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4, gap: 6 }}>
+        <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }}>{labelEl}</div>
+        <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexShrink: 0 }}>
+          <span className="small" style={{ opacity: 0.45, fontSize: 11 }}>{totalPct}%</span>
+          <span className="small" style={{ fontWeight: 700, minWidth: 28, textAlign: "right" }}>{value.toLocaleString()}</span>
+        </div>
+      </div>
+      <div style={{ height: 10, background: "rgba(15,23,42,.07)", borderRadius: 99, overflow: "hidden" }}>
+        <div style={{ height: "100%", width: `${barPct}%`, background: color, borderRadius: 99, transition: "width .5s ease" }} />
+      </div>
     </div>
   );
 }
@@ -217,6 +246,11 @@ function TrendChart({ data, lines }: { data: TrendPoint[]; lines: TrendLine[] })
 }
 
 // ---- Live dot ----
+function formatRef(ref: string | null | undefined): string {
+  if (!ref) return "直接流入";
+  try { return new URL(ref).hostname || ref; } catch { return ref; }
+}
+
 function LiveDot() {
   return (
     <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 99, background: "#22c55e", marginRight: 6, boxShadow: "0 0 0 2px rgba(34,197,94,.28)", animation: "pulse 1.6s ease infinite" }} />
@@ -254,7 +288,46 @@ export default function AnalyticsPage() {
   const [sites, setSites] = useState<Array<{ id: string; data: any }>>([]);
   const [siteId, setSiteId] = useState<string>("");
   const [scenarios, setScenarios] = useState<Array<{ id: string; data: any }>>([]);
-  const [dateRange, setDateRange] = useState<7 | 14 | 30>(14);
+  const [dateRange, setDateRange] = useState<7 | 14 | 30 | "custom">(14);
+
+  // ---- AI サマリー ----
+  const [aiSummary, setAiSummary] = useState<{ summary: string; bullets: string[]; next: string } | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const [aiModalOpen, setAiModalOpen] = useState(false);
+  const [customFrom, setCustomFrom] = useState<string>(isoDay(daysAgo(13))); // 2週間前
+  const [customTo, setCustomTo] = useState<string>(isoDay(new Date()));
+
+  // 実効的な開始・終了日
+  const effectiveFrom = useMemo(() => {
+    if (dateRange === "custom") {
+      const d = new Date(customFrom + "T00:00:00");
+      return isNaN(d.getTime()) ? daysAgo(13) : d;
+    }
+    return daysAgo(dateRange);
+  }, [dateRange, customFrom]);
+
+  const effectiveTo = useMemo(() => {
+    if (dateRange === "custom") {
+      const d = new Date(customTo + "T23:59:59");
+      return isNaN(d.getTime()) ? new Date() : d;
+    }
+    const d = new Date();
+    d.setHours(23, 59, 59, 999);
+    return d;
+  }, [dateRange, customTo]);
+
+  const effectiveDays = useMemo(() => {
+    const ms = effectiveTo.getTime() - effectiveFrom.getTime();
+    return Math.max(1, Math.ceil(ms / (1000 * 60 * 60 * 24)));
+  }, [effectiveFrom, effectiveTo]);
+
+  const dateRangeLabel = useMemo(() => {
+    if (dateRange !== "custom") return `過去${dateRange}日間`;
+    const f = customFrom.replace(/-/g, "/");
+    const t = customTo.replace(/-/g, "/");
+    return f === t ? f : `${f}〜${t}`;
+  }, [dateRange, customFrom, customTo]);
 
   // ---- リアルタイムログ ----
   const [recentLogs, setRecentLogs] = useState<any[]>([]);
@@ -336,7 +409,7 @@ export default function AnalyticsPage() {
   useEffect(() => {
     if (!siteId) { setPvLogs([]); return; }
     setPvLoading(true);
-    const since = daysAgo(dateRange).toISOString();
+    const since = effectiveFrom.toISOString();
     getDocs(
       query(
         collection(db, "logs"),
@@ -346,16 +419,17 @@ export default function AnalyticsPage() {
         limit(2000)
       )
     ).then((snap) => {
-      setPvLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      const to = effectiveTo.toISOString();
+      setPvLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((l) => (l.createdAt || "") <= to));
       setPvLoading(false);
     }).catch(() => setPvLoading(false));
-  }, [siteId, dateRange]);
+  }, [siteId, effectiveFrom, effectiveTo]);
 
   // ---- 訪問者ジャーニー用ログ（全イベント取得） ----
   useEffect(() => {
     if (!siteId) { setJourneyLogs([]); setSelectedVid(null); return; }
     setJourneyLoading(true);
-    const since = daysAgo(dateRange).toISOString();
+    const since = effectiveFrom.toISOString();
     getDocs(
       query(
         collection(db, "logs"),
@@ -365,29 +439,34 @@ export default function AnalyticsPage() {
         limit(3000)
       )
     ).then((snap) => {
-      setJourneyLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      const to = effectiveTo.toISOString();
+      setJourneyLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((l) => (l.createdAt || "") <= to));
       setJourneyLoading(false);
     }).catch(() => setJourneyLoading(false));
-  }, [siteId, dateRange]);
+  }, [siteId, effectiveFrom, effectiveTo]);
 
   // ---- stats_daily ----
   useEffect(() => {
     if (!siteId) { setStatRows([]); return; }
     const days: string[] = [];
-    for (let i = 0; i < dateRange; i++) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      days.push(isoDay(d));
+    const cur = new Date(effectiveFrom);
+    cur.setHours(0, 0, 0, 0);
+    const end = new Date(effectiveTo);
+    end.setHours(0, 0, 0, 0);
+    while (cur <= end && days.length < 30) {
+      days.push(isoDay(cur));
+      cur.setDate(cur.getDate() + 1);
     }
+    if (!days.length) return;
     const q = query(
       collection(db, "stats_daily"),
       where("siteId", "==", siteId),
-      where("day", "in", days.slice(0, 30))
+      where("day", "in", days)
     );
     return onSnapshot(q, (snap) => {
       setStatRows(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
     });
-  }, [siteId, dateRange]);
+  }, [siteId, effectiveFrom, effectiveTo]);
 
   // ---- computed: リアルタイム ----
   const activeVisitors = useMemo(() => {
@@ -418,6 +497,7 @@ export default function AnalyticsPage() {
   }, [pvLogs]);
 
   const referrerMax = useMemo(() => Math.max(...referrerData.map((r) => r.count), 1), [referrerData]);
+  const referrerTotal = useMemo(() => referrerData.reduce((s, r) => s + r.count, 0), [referrerData]);
 
   // ---- computed: UTM campaign ----
   const campaignData = useMemo(() => {
@@ -447,6 +527,33 @@ export default function AnalyticsPage() {
 
   const pageMax = useMemo(() => Math.max(...pageData.map((r) => r.count), 1), [pageData]);
 
+  // ---- computed: 離脱ページ（セッションの最終ページ） ----
+  const exitData = useMemo(() => {
+    const sessions = new Map<string, string[]>();
+    const sorted = [...pvLogs]
+      .filter((l) => l.event === "pageview")
+      .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+    for (const l of sorted) {
+      const sid = l.sid || l.vid || "";
+      if (!sid) continue;
+      if (!sessions.has(sid)) sessions.set(sid, []);
+      sessions.get(sid)!.push(l.path || "/");
+    }
+    const exitMap = new Map<string, number>();
+    for (const pages of sessions.values()) {
+      if (!pages.length) continue;
+      const last = pages[pages.length - 1];
+      exitMap.set(last, (exitMap.get(last) || 0) + 1);
+    }
+    return Array.from(exitMap.entries())
+      .map(([path, count]) => ({ path, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+  }, [pvLogs]);
+
+  const exitTotal = useMemo(() => exitData.reduce((s, r) => s + r.count, 0), [exitData]);
+  const exitMax = useMemo(() => Math.max(...exitData.map((r) => r.count), 1), [exitData]);
+
   // ---- computed: シナリオファネル ----
   const funnelData = useMemo(() => {
     return scenarios.map((sc) => {
@@ -465,32 +572,36 @@ export default function AnalyticsPage() {
   // ---- computed: 日別トレンド ----
   const dailyTrend = useMemo<TrendPoint[]>(() => {
     const result: TrendPoint[] = [];
-    for (let i = dateRange - 1; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const day = isoDay(d);
-      const label = `${d.getMonth() + 1}/${d.getDate()}`;
+    const cur = new Date(effectiveFrom);
+    cur.setHours(0, 0, 0, 0);
+    const end = new Date(effectiveTo);
+    end.setHours(0, 0, 0, 0);
+    while (cur <= end) {
+      const day = isoDay(cur);
+      const label = `${cur.getMonth() + 1}/${cur.getDate()}`;
       const dayPvLogs = pvLogs.filter((l) => (l.createdAt || "").startsWith(day));
       const pv = dayPvLogs.length;
       const uv = new Set(dayPvLogs.map((l) => l.vid).filter(Boolean)).size;
       const imp = statRows.filter((r) => r.day === day && r.event === "impression").reduce((s, r) => s + safeNum(r.count), 0);
       const cv = statRows.filter((r) => r.day === day && r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
       result.push({ day, label, pv, uv, imp, cv });
+      cur.setDate(cur.getDate() + 1);
     }
     return result;
-  }, [pvLogs, statRows, dateRange]);
+  }, [pvLogs, statRows, effectiveFrom, effectiveTo]);
 
   // ---- computed: 最近のセッション ----
   const sessionData = useMemo(() => {
-    const map = new Map<string, { sid: string; vid: string; pages: string[]; events: string[]; start: string; last: string }>();
+    const map = new Map<string, { sid: string; vid: string; pages: string[]; events: string[]; start: string; last: string; ref: string }>();
     const sorted = [...recentLogs].sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
     for (const l of sorted) {
       const sid = l.sid || l.vid || "unknown";
-      if (!map.has(sid)) map.set(sid, { sid, vid: l.vid || "", pages: [], events: [], start: l.createdAt || "", last: l.createdAt || "" });
+      if (!map.has(sid)) map.set(sid, { sid, vid: l.vid || "", pages: [], events: [], start: l.createdAt || "", last: l.createdAt || "", ref: "" });
       const s = map.get(sid)!;
       if (l.path && (s.pages.length === 0 || s.pages[s.pages.length - 1] !== l.path)) s.pages.push(l.path);
       s.events.push(l.event);
       s.last = l.createdAt || s.last;
+      if (l.event === "pageview" && !s.ref && l.ref) s.ref = l.ref;
     }
     return Array.from(map.values())
       .sort((a, b) => String(b.last || "").localeCompare(String(a.last || "")))
@@ -503,13 +614,13 @@ export default function AnalyticsPage() {
       vid: string; firstSeen: string; lastSeen: string;
       pvCount: number; totalDuration: number;
       hasConversion: boolean; hasImpression: boolean;
-      pages: string[]; eventCount: number;
+      pages: string[]; eventCount: number; firstRef: string;
     }>();
     const sorted = [...journeyLogs].sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
     for (const l of sorted) {
       const vid = l.vid || "unknown";
       if (!map.has(vid)) {
-        map.set(vid, { vid, firstSeen: l.createdAt || "", lastSeen: l.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, pages: [], eventCount: 0 });
+        map.set(vid, { vid, firstSeen: l.createdAt || "", lastSeen: l.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, pages: [], eventCount: 0, firstRef: "" });
       }
       const v = map.get(vid)!;
       v.lastSeen = l.createdAt || v.lastSeen;
@@ -517,6 +628,7 @@ export default function AnalyticsPage() {
       if (l.event === "pageview") {
         v.pvCount++;
         if (l.path && !v.pages.includes(l.path)) v.pages.push(l.path);
+        if (!v.firstRef && l.ref) v.firstRef = l.ref;
       }
       if (l.event === "conversion") v.hasConversion = true;
       if (l.event === "impression") v.hasImpression = true;
@@ -554,6 +666,69 @@ export default function AnalyticsPage() {
     return `${siteDomain}${p}`;
   }
 
+  // ---- シナリオが設定されていないPV上位ページを検出 ----
+  const uncoveredPages = useMemo(() => {
+    if (!pageData.length || !scenarios.length) return [];
+    function scenarioCoversPath(sc: any, path: string): boolean {
+      const u = sc.data?.entry_rules?.page?.url;
+      if (!u?.mode || !u?.value) return false;
+      try {
+        if (u.mode === "equals") return path === u.value;
+        if (u.mode === "prefix") return path.startsWith(u.value);
+        if (u.mode === "contains") return path.includes(u.value);
+        if (u.mode === "regex") return new RegExp(u.value).test(path);
+      } catch {}
+      return false;
+    }
+    const enabledScenarios = scenarios.filter((sc) => sc.data?.enabled !== false);
+    return pageData
+      .filter((p) => !enabledScenarios.some((sc) => scenarioCoversPath(sc, p.path)))
+      .slice(0, 5);
+  }, [pageData, scenarios]);
+
+  // ---- AI サマリーを取得 ----
+  async function runAiSummary() {
+    if (!siteId || aiLoading) return;
+    setAiLoading(true);
+    setAiError("");
+    setAiSummary(null);
+    try {
+      const totalImp = statRows.filter((r) => r.event === "impression").reduce((s, r) => s + safeNum(r.count), 0);
+      const totalClk = statRows.filter((r) => r.event === "click" || r.event === "click_link").reduce((s, r) => s + safeNum(r.count), 0);
+      const totalCv  = statRows.filter((r) => r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
+      const totalClose = statRows.filter((r) => r.event === "close").reduce((s, r) => s + safeNum(r.count), 0);
+
+      const topSrc = referrerData.slice(0, 3).map((r) => `${r.src}(${r.count}PV)`).join(", ");
+      const topPages = pageData.slice(0, 3).map((p) => `${p.path}(${p.count})`).join(", ");
+      const topExit = exitData.slice(0, 2).map((p) => `${p.path}(${p.count})`).join(", ");
+
+      const res = await apiPostJson("/v1/ai/insight", {
+        site_id: siteId,
+        day: isoDay(effectiveTo),
+        scope: "site",
+        scope_id: siteId,
+        metrics: {
+          impressions: totalImp,
+          clicks: totalClk,
+          closes: totalClose,
+          conversions: totalCv,
+        },
+        context: {
+          url_hint: `期間:${dateRangeLabel} PV:${pvLogs.length} UV:${new Set(pvLogs.map((l: any) => l.vid).filter(Boolean)).size} 流入元:${topSrc || "なし"} 人気ページ:${topPages || "なし"} 離脱:${topExit || "なし"}`,
+        },
+      });
+      if (res?.ai) {
+        setAiSummary(res.ai);
+      } else {
+        setAiError("データが少なすぎてAI分析できませんでした。");
+      }
+    } catch (e: any) {
+      setAiError(e?.message || "エラーが発生しました");
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
   return (
     <div style={{ padding: "28px 0 48px" }}>
       {/* ヘッダー */}
@@ -583,26 +758,81 @@ export default function AnalyticsPage() {
             ))}
           </select>
           {/* 期間選択 */}
-          <div style={{ display: "flex", border: "1px solid rgba(15,23,42,.12)", borderRadius: 10, overflow: "hidden" }}>
-            {([7, 14, 30] as const).map((d) => (
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+            <div style={{ display: "flex", border: "1px solid rgba(15,23,42,.12)", borderRadius: 10, overflow: "hidden" }}>
+              {([7, 14, 30] as const).map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => setDateRange(d)}
+                  style={{
+                    padding: "7px 14px",
+                    border: "none",
+                    background: dateRange === d ? "#1f6573" : "transparent",
+                    color: dateRange === d ? "#fff" : "inherit",
+                    fontWeight: dateRange === d ? 700 : 500,
+                    cursor: "pointer",
+                    fontSize: 13,
+                  }}
+                >
+                  {d}日
+                </button>
+              ))}
               <button
-                key={d}
                 type="button"
-                onClick={() => setDateRange(d)}
+                onClick={() => setDateRange("custom")}
                 style={{
                   padding: "7px 14px",
                   border: "none",
-                  background: dateRange === d ? "#1f6573" : "transparent",
-                  color: dateRange === d ? "#fff" : "inherit",
-                  fontWeight: dateRange === d ? 700 : 500,
+                  borderLeft: "1px solid rgba(15,23,42,.1)",
+                  background: dateRange === "custom" ? "#1f6573" : "transparent",
+                  color: dateRange === "custom" ? "#fff" : "inherit",
+                  fontWeight: dateRange === "custom" ? 700 : 500,
                   cursor: "pointer",
                   fontSize: 13,
                 }}
               >
-                {d}日
+                カスタム
               </button>
-            ))}
+            </div>
+            {dateRange === "custom" && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <input
+                  type="date"
+                  className="input"
+                  value={customFrom}
+                  max={customTo}
+                  onChange={(e) => setCustomFrom(e.target.value)}
+                  style={{ padding: "6px 10px", fontSize: 13, width: 140 }}
+                />
+                <span className="small" style={{ opacity: 0.5 }}>〜</span>
+                <input
+                  type="date"
+                  className="input"
+                  value={customTo}
+                  min={customFrom}
+                  max={isoDay(new Date())}
+                  onChange={(e) => setCustomTo(e.target.value)}
+                  style={{ padding: "6px 10px", fontSize: 13, width: 140 }}
+                />
+              </div>
+            )}
           </div>
+          {/* AI分析ボタン */}
+          {siteId && (
+            <button
+              className="btn"
+              onClick={() => setAiModalOpen(true)}
+              style={{ position: "relative", background: "linear-gradient(135deg, rgba(37,99,235,.12), rgba(124,58,237,.12))", border: "1px solid rgba(99,102,241,.3)", fontWeight: 700, fontSize: 13, padding: "8px 16px", flexShrink: 0 }}
+            >
+              🤖 AI分析
+              {uncoveredPages.length > 0 && (
+                <span style={{ position: "absolute", top: -6, right: -6, background: "#f59e0b", color: "#fff", fontSize: 10, fontWeight: 800, borderRadius: 99, minWidth: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px" }}>
+                  {uncoveredPages.length}
+                </span>
+              )}
+            </button>
+          )}
         </div>
       </div>
 
@@ -639,6 +869,74 @@ export default function AnalyticsPage() {
 
       {siteId && (
         <>
+          {/* ===== AI分析モーダル ===== */}
+          {aiModalOpen && (
+            <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.45)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+              onClick={(e) => { if (e.target === e.currentTarget) setAiModalOpen(false); }}>
+              <div className="card" style={{ width: "100%", maxWidth: 560, maxHeight: "85vh", overflowY: "auto", padding: "24px 28px", background: "#fff", borderRadius: 16 }}>
+                {/* モーダルヘッダー */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ fontSize: 22 }}>🤖</span>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 15 }}>AI分析</div>
+                      <div className="small" style={{ opacity: 0.6, marginTop: 2 }}>{dateRangeLabel}のデータをもとに分析します</div>
+                    </div>
+                  </div>
+                  <button className="btn" onClick={() => setAiModalOpen(false)} style={{ fontSize: 18, padding: "4px 10px", lineHeight: 1 }}>×</button>
+                </div>
+
+                {/* シナリオ未設定ページ（常時表示） */}
+                {uncoveredPages.length > 0 && (
+                  <div style={{ marginBottom: 20, padding: "12px 14px", background: "rgba(251,191,36,.1)", border: "1px solid rgba(251,191,36,.3)", borderRadius: 10 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>⚠️ 流入が多いのにシナリオが未設定のページ</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {uncoveredPages.map((p) => (
+                        <div key={p.path} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                          <span className="small" style={{ fontWeight: 600 }}>{p.path}</span>
+                          <span className="small" style={{ opacity: 0.6, flexShrink: 0 }}>{p.count.toLocaleString()} PV</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="small" style={{ marginTop: 8, opacity: 0.7 }}>→ シナリオのURL条件でこれらのページを指定すると効果的かもしれません</div>
+                  </div>
+                )}
+
+                {/* AIサマリー */}
+                <button
+                  className="btn"
+                  onClick={runAiSummary}
+                  disabled={aiLoading}
+                  style={{ width: "100%", background: "linear-gradient(135deg, rgba(37,99,235,.1), rgba(124,58,237,.1))", border: "1px solid rgba(99,102,241,.3)", fontWeight: 700, fontSize: 13, padding: "10px", marginBottom: 16 }}
+                >
+                  {aiLoading ? "⏳ 分析中..." : aiSummary ? "🔄 再分析する" : "✨ AIにサマリーを生成してもらう"}
+                </button>
+
+                {aiError && (
+                  <div className="small" style={{ color: "#dc2626", background: "rgba(220,38,38,.08)", padding: "8px 12px", borderRadius: 8, marginBottom: 12 }}>
+                    ⚠️ {aiError}
+                  </div>
+                )}
+
+                {aiSummary && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    <div style={{ fontWeight: 600, fontSize: 14, lineHeight: 1.7, padding: "12px 14px", background: "rgba(15,23,42,.03)", borderRadius: 10 }}>
+                      📊 {aiSummary.summary}
+                    </div>
+                    <ul style={{ margin: 0, paddingLeft: 20, display: "flex", flexDirection: "column", gap: 8 }}>
+                      {aiSummary.bullets.map((b, i) => (
+                        <li key={i} className="small" style={{ lineHeight: 1.8 }}>{b}</li>
+                      ))}
+                    </ul>
+                    <div style={{ padding: "10px 14px", background: "rgba(99,102,241,.08)", borderRadius: 10, fontSize: 13, fontWeight: 600, lineHeight: 1.7 }}>
+                      💡 次のアクション：{aiSummary.next}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* ===== Section 1: リアルタイム ===== */}
           <div style={{ marginBottom: 32 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
@@ -674,7 +972,7 @@ export default function AnalyticsPage() {
           {/* ===== Section 1.5: 日別トレンド ===== */}
           <div style={{ marginBottom: 32 }}>
             <div className="h2" style={{ marginBottom: 14 }}>
-              日別トレンド <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（過去{dateRange}日間）</span>
+              日別トレンド <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel}）</span>
             </div>
 
             {pvLoading ? (
@@ -766,96 +1064,90 @@ export default function AnalyticsPage() {
           {/* ===== Section 2: 流入元 ===== */}
           <div style={{ marginBottom: 32 }}>
             <div className="h2" style={{ marginBottom: 14 }}>
-              流入元 <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（過去{dateRange}日間）</span>
+              流入元・離脱 <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel}）</span>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-              {/* 流入元（utm_source / リファラー） */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
+
+              {/* 流入元 */}
               <div className="card" style={{ padding: 18, background: "#fff" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 14 }}>
-                  <div className="small" style={{ fontWeight: 700 }}>流入元（utm_source / リファラー）</div>
-                  <div className="small" style={{ opacity: 0.5 }}>PV数</div>
+                <div style={{ marginBottom: 14 }}>
+                  <div className="small" style={{ fontWeight: 700 }}>🔀 流入元</div>
+                  <div className="small" style={{ opacity: 0.5, marginTop: 2 }}>utm_source またはリファラー</div>
                 </div>
                 {pvLoading ? (
                   <div className="small" style={{ opacity: 0.55 }}>読み込み中...</div>
                 ) : referrerData.length === 0 ? (
-                  <div className="small" style={{ opacity: 0.55 }}>データなし（SDKをv5以降に更新するとUTM計測が有効になります）</div>
+                  <div className="small" style={{ opacity: 0.55 }}>データなし</div>
                 ) : (
-                  <div style={{ display: "grid", gap: 10 }}>
+                  <div style={{ display: "grid", gap: 12 }}>
                     {referrerData.map((r) => (
-                      <div key={r.src} style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-                        <div style={{ flex: "0 0 160px", overflow: "hidden" }}>
-                          <div className="small" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: 0.82 }} title={r.src}>{r.src}</div>
-                        </div>
-                        <MiniBar value={r.count} max={referrerMax} color="#59b7c6" />
-                        <div className="small" style={{ flex: "0 0 40px", textAlign: "right", fontWeight: 700 }}>{fmtInt(r.count)}</div>
-                      </div>
+                      <BarRow key={r.src} label={r.src} value={r.count} max={referrerMax} total={referrerTotal} color="#59b7c6" />
                     ))}
                   </div>
                 )}
               </div>
 
-              {/* ページ別PV */}
+              {/* 離脱ページ */}
               <div className="card" style={{ padding: 18, background: "#fff" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 14 }}>
-                  <div className="small" style={{ fontWeight: 700 }}>よく見られたページ</div>
-                  <div className="small" style={{ opacity: 0.5 }}>PV数</div>
+                <div style={{ marginBottom: 14 }}>
+                  <div className="small" style={{ fontWeight: 700 }}>🚪 離脱ページ</div>
+                  <div className="small" style={{ opacity: 0.5, marginTop: 2 }}>セッションの最後に見たページ</div>
+                </div>
+                {pvLoading ? (
+                  <div className="small" style={{ opacity: 0.55 }}>読み込み中...</div>
+                ) : exitData.length === 0 ? (
+                  <div className="small" style={{ opacity: 0.55 }}>データなし</div>
+                ) : (
+                  <div style={{ display: "grid", gap: 12 }}>
+                    {exitData.map((r) => (
+                      <BarRow key={r.path} label={r.path} value={r.count} max={exitMax} total={exitTotal} color="#f97316" href={toPageUrl(r.path) || undefined} />
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* よく見られたページ */}
+              <div className="card" style={{ padding: 18, background: "#fff" }}>
+                <div style={{ marginBottom: 14 }}>
+                  <div className="small" style={{ fontWeight: 700 }}>📄 よく見られたページ</div>
+                  <div className="small" style={{ opacity: 0.5, marginTop: 2 }}>PV数の多い順</div>
                 </div>
                 {pvLoading ? (
                   <div className="small" style={{ opacity: 0.55 }}>読み込み中...</div>
                 ) : pageData.length === 0 ? (
                   <div className="small" style={{ opacity: 0.55 }}>データなし</div>
                 ) : (
-                  <div style={{ display: "grid", gap: 10 }}>
-                    {pageData.map((r) => {
-                      const href = toPageUrl(r.path);
-                      return (
-                        <div key={r.path} style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-                          <div style={{ flex: "0 0 160px", overflow: "hidden" }}>
-                            {href ? (
-                              <a
-                                href={href}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="small"
-                                style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: 0.82, color: "inherit", textDecoration: "underline", textDecorationColor: "rgba(99,102,241,.4)" }}
-                                title={r.path}
-                              >
-                                {r.path}
-                              </a>
-                            ) : (
-                              <div className="small" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: 0.82 }} title={r.path}>{r.path}</div>
-                            )}
-                          </div>
-                          <MiniBar value={r.count} max={pageMax} color="#6366f1" />
-                          <div className="small" style={{ flex: "0 0 40px", textAlign: "right", fontWeight: 700 }}>{fmtInt(r.count)}</div>
-                        </div>
-                      );
-                    })}
+                  <div style={{ display: "grid", gap: 12 }}>
+                    {pageData.map((r) => (
+                      <BarRow key={r.path} label={r.path} value={r.count} max={pageMax} total={pageData.reduce((s, x) => s + x.count, 0)} color="#6366f1" href={toPageUrl(r.path) || undefined} />
+                    ))}
                   </div>
                 )}
               </div>
-            </div>
 
-            {/* UTMキャンペーン */}
-            {campaignData.some((c) => c.campaign !== "（なし）") && (
-              <div className="card" style={{ padding: 18, background: "#fff", marginTop: 16 }}>
-                <div className="small" style={{ fontWeight: 700, marginBottom: 14 }}>UTMキャンペーン別</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                  {campaignData.filter((c) => c.campaign !== "（なし）").map((c) => (
-                    <div key={c.campaign} className="badge" style={{ background: "rgba(89,183,198,.12)", color: "#1f6573" }}>
-                      {c.campaign}
-                      <span style={{ marginLeft: 6, fontWeight: 700 }}>{fmtInt(c.count)}</span>
-                    </div>
-                  ))}
+              {/* UTMキャンペーン */}
+              {campaignData.some((c) => c.campaign !== "（なし）") && (
+                <div className="card" style={{ padding: 18, background: "#fff" }}>
+                  <div style={{ marginBottom: 14 }}>
+                    <div className="small" style={{ fontWeight: 700 }}>🎯 UTMキャンペーン</div>
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {campaignData.filter((c) => c.campaign !== "（なし）").map((c) => (
+                      <div key={c.campaign} className="badge" style={{ background: "rgba(89,183,198,.12)", color: "#1f6573" }}>
+                        {c.campaign}
+                        <span style={{ marginLeft: 6, fontWeight: 700 }}>{fmtInt(c.count)}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
           {/* ===== Section 3: 施策ファネル ===== */}
           <div style={{ marginBottom: 32 }}>
             <div className="h2" style={{ marginBottom: 14 }}>
-              施策ファネル <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（過去{dateRange}日間）</span>
+              施策ファネル <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel}）</span>
             </div>
             {funnelData.length === 0 ? (
               <div className="card" style={{ padding: 20, opacity: 0.7 }}>
@@ -967,6 +1259,11 @@ export default function AnalyticsPage() {
                             </React.Fragment>
                           ))}
                         </div>
+                        {s.ref && (
+                          <div className="small" style={{ opacity: 0.5, marginTop: 5 }}>
+                            🔗 流入元: <span style={{ fontWeight: 600 }}>{formatRef(s.ref)}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -980,7 +1277,7 @@ export default function AnalyticsPage() {
               <div>
                 <div className="h2" style={{ margin: 0 }}>
                   訪問者ジャーニー
-                  <span className="small" style={{ fontWeight: 400, opacity: 0.6, marginLeft: 8 }}>（過去{dateRange}日間・匿名ID別）</span>
+                  <span className="small" style={{ fontWeight: 400, opacity: 0.6, marginLeft: 8 }}>（{dateRangeLabel}・匿名ID別）</span>
                 </div>
                 <div className="small" style={{ opacity: 0.55, marginTop: 2 }}>
                   訪問者を選択すると行動タイムラインが表示されます
@@ -1040,7 +1337,7 @@ export default function AnalyticsPage() {
                                   <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 20, background: "#eff6ff", color: "#2563eb" }}>施策</span>
                                 )}
                               </div>
-                              <div style={{ display: "flex", gap: 8 }}>
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                                 <span className="small" style={{ opacity: 0.55 }}>{v.pvCount} PV</span>
                                 {v.totalDuration > 0 && (
                                   <span className="small" style={{ opacity: 0.55 }}>
@@ -1049,6 +1346,11 @@ export default function AnalyticsPage() {
                                 )}
                                 <span className="small" style={{ opacity: 0.4 }}>{lastTime}</span>
                               </div>
+                              {v.firstRef && (
+                                <div className="small" style={{ opacity: 0.45, marginTop: 2 }}>
+                                  🔗 {formatRef(v.firstRef)}
+                                </div>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -1147,7 +1449,12 @@ export default function AnalyticsPage() {
                                       )}
                                       {ev.utm_source && (
                                         <div className="small" style={{ opacity: 0.55 }}>
-                                          流入: {[ev.utm_source, ev.utm_medium, ev.utm_campaign].filter(Boolean).join(" / ")}
+                                          🔗 流入: {[ev.utm_source, ev.utm_medium, ev.utm_campaign].filter(Boolean).join(" / ")}
+                                        </div>
+                                      )}
+                                      {!ev.utm_source && ev.event === "pageview" && (
+                                        <div className="small" style={{ opacity: 0.5 }}>
+                                          🔗 {ev.ref ? formatRef(ev.ref) : "直接流入"}
                                         </div>
                                       )}
                                     </div>

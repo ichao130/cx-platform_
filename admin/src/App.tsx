@@ -157,8 +157,16 @@ function readSelectedWorkspaceIdForUid(uid: string): string | null {
 
 function readEffectiveWorkspaceId(uid?: string | null): string | null {
   if (uid) {
-    return readSelectedWorkspaceIdForUid(uid);
+    try {
+      // App.tsx形式: cx_workspace_id:{uid}
+      const k1 = window.localStorage.getItem(`cx_workspace_id:${uid}`);
+      if (k1) return k1;
+      // 各ページ形式: cx_admin_workspace_id:{uid}
+      const k2 = window.localStorage.getItem(`cx_admin_workspace_id:${uid}`);
+      if (k2) return k2;
+    } catch {}
   }
+  // 汎用キーにフォールバック
   return readSelectedWorkspaceId();
 }
 
@@ -169,7 +177,8 @@ function writeSelectedWorkspaceId(workspaceId: string, uid?: string) {
     window.localStorage.setItem("selectedWorkspaceId", workspaceId);
     window.localStorage.setItem("cx_workspace_id", workspaceId);
     if (uid) {
-      window.localStorage.setItem(workspaceKeyForUid(uid), workspaceId);
+      window.localStorage.setItem(workspaceKeyForUid(uid), workspaceId);          // cx_workspace_id:{uid}
+      window.localStorage.setItem(`cx_admin_workspace_id:${uid}`, workspaceId);   // 各ページ互換
     }
     window.dispatchEvent(new CustomEvent("cx_admin_workspace_changed", { detail: { workspaceId } }));
   } catch {
@@ -297,6 +306,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
     });
   }, [currentUid]);
 
+
   const selectedWorkspaceRow = useMemo(() => {
     return workspaceRows.find((r) => r.id === workspaceId) || null;
   }, [workspaceRows, workspaceId]);
@@ -341,6 +351,56 @@ function AppShell({ children }: { children: React.ReactNode }) {
   }
 
 
+  // ---- rail 並び順（ローカル保存） ----
+  const RAIL_ORDER_KEY = `cx_rail_order:${currentUid || ""}`;
+  const [railOrder, setRailOrder] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem(`cx_rail_order:${currentUid || ""}`) || "[]"); } catch { return []; }
+  });
+
+  const sortedWorkspaceRows = useMemo(() => {
+    if (!railOrder.length) return workspaceRows;
+    return [...workspaceRows].sort((a, b) => {
+      const ai = railOrder.indexOf(a.id);
+      const bi = railOrder.indexOf(b.id);
+      if (ai === -1 && bi === -1) return 0;
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+  }, [workspaceRows, railOrder]);
+
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+
+  function handleRailDragStart(id: string) {
+    setDragId(id);
+  }
+  function handleRailDragOver(e: React.DragEvent, id: string) {
+    e.preventDefault();
+    if (dragOverId !== id) setDragOverId(id);
+  }
+  function handleRailDrop(e: React.DragEvent, targetId: string) {
+    e.preventDefault();
+    if (!dragId || dragId === targetId) { setDragId(null); setDragOverId(null); return; }
+    const ids = sortedWorkspaceRows.map((r) => r.id);
+    const fromIdx = ids.indexOf(dragId);
+    const toIdx = ids.indexOf(targetId);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const next = [...ids];
+    next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, dragId);
+    setRailOrder(next);
+    try { localStorage.setItem(RAIL_ORDER_KEY, JSON.stringify(next)); } catch {}
+    // 一番上のワークスペースを自動選択
+    if (next[0]) changeWorkspace(next[0]);
+    setDragId(null);
+    setDragOverId(null);
+  }
+  function handleRailDragEnd() {
+    setDragId(null);
+    setDragOverId(null);
+  }
+
   const showRail = workspaceRows.length > 1;
 
   return (
@@ -366,31 +426,42 @@ function AppShell({ children }: { children: React.ReactNode }) {
         }}
       >
         <div style={{ display: "grid", gap: 10, justifyItems: "center" }}>
-          {workspaceRows.map((w) => {
+          {sortedWorkspaceRows.map((w) => {
             const active = w.id === workspaceId;
             const icon = getWorkspaceRailIcon(w);
             const accent = getWorkspaceAccentColor(w.data);
+            const isDragging = dragId === w.id;
+            const isDragOver = dragOverId === w.id && dragId !== w.id;
             return (
               <button
                 key={w.id}
                 type="button"
                 title={getWorkspaceRailLabel(w)}
+                draggable
+                onDragStart={() => handleRailDragStart(w.id)}
+                onDragOver={(e) => handleRailDragOver(e, w.id)}
+                onDrop={(e) => handleRailDrop(e, w.id)}
+                onDragEnd={handleRailDragEnd}
                 onClick={() => changeWorkspace(w.id)}
                 style={{
                   width: 52,
                   height: 52,
                   borderRadius: active ? 18 : 16,
-                  border: active ? `2px solid ${accent}` : "1px solid rgba(255,255,255,.08)",
+                  border: isDragOver
+                    ? "2px dashed rgba(255,255,255,.6)"
+                    : active ? `2px solid ${accent}` : "1px solid rgba(255,255,255,.08)",
                   background: icon.logoUrl ? "#fff" : active ? hexToRgba(accent, 0.22) : "rgba(255,255,255,.06)",
                   color: "#fff",
-                  cursor: "pointer",
+                  cursor: "grab",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                   boxShadow: active ? `0 10px 24px ${hexToRgba(accent, 0.28)}` : "none",
                   overflow: "hidden",
                   padding: 0,
-                  transition: "transform .16s ease, border-radius .16s ease, background .16s ease, box-shadow .16s ease",
+                  opacity: isDragging ? 0.4 : 1,
+                  transform: isDragOver ? "scale(1.12)" : "scale(1)",
+                  transition: "transform .16s ease, border-radius .16s ease, background .16s ease, box-shadow .16s ease, opacity .16s ease",
                 }}
               >
                 {icon.logoUrl ? (
@@ -834,7 +905,22 @@ function AuthGate({ children }: { children: React.ReactNode }) {
               const w = (wSnap.data() || {}) as any;
               const currentMember = readMemberRole(w?.members?.[user.uid]);
               if (currentMember) {
-                writeSelectedWorkspaceId(primaryWorkspaceId, user.uid);
+                // 既にlocalStorageにワークスペースが保存されている場合は上書きしない（キー同期だけ行う）
+                const existingId = readEffectiveWorkspaceId(user.uid);
+                if (existingId) {
+                  // 両方のキーを同期（イベント不要、onAuthStateChangedで既に読み込み済み）
+                  try {
+                    window.localStorage.setItem("cx_admin_workspace_id", existingId);
+                    window.localStorage.setItem("cx_admin_selected_workspace", existingId);
+                    window.localStorage.setItem("selectedWorkspaceId", existingId);
+                    window.localStorage.setItem("cx_workspace_id", existingId);
+                    window.localStorage.setItem(`cx_workspace_id:${user.uid}`, existingId);
+                    window.localStorage.setItem(`cx_admin_workspace_id:${user.uid}`, existingId);
+                  } catch {}
+                } else {
+                  // localStorageにワークスペースがない場合のみprimaryを設定してイベント発火
+                  writeSelectedWorkspaceId(primaryWorkspaceId, user.uid);
+                }
                 return;
               }
             }
@@ -990,7 +1076,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (user && bootstrapping) {
+  if (user && bootstrapping && !workspaceInfo.workspaceId) {
     return (
       <AuthScreen
         title="初期設定を準備しています..."

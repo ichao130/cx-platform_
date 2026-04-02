@@ -207,9 +207,9 @@ function placementLabel(v: MountPlacement) {
 }
 
 function modeLabel(v: MountMode) {
-  if (v === "shadow") return "shadow";
-  if (v === "theme") return "theme";
-  return "inherit";
+  if (v === "shadow") return "CSS分離";
+  if (v === "theme") return "テーマ適用";
+  return "スタイル継承";
 }
 
 /** フォーム→保存 payload（mount + mediaIds + primary image_media_id） */
@@ -1193,31 +1193,36 @@ export default function ActionsPage() {
 
                 <div className="row" style={{ marginTop: 10 }}>
                   <div style={{ flex: 1 }}>
-                    <div className="h2">表示位置</div>
+                    <div className="h2">挿入位置</div>
                     <select
                       className="input"
                       value={placement}
                       onChange={(e) => setPlacement(e.target.value as MountPlacement)}
                       disabled={type === "modal"}
                     >
-                      <option value="append">append（末尾に追加）</option>
-                      <option value="prepend">prepend（先頭に追加）</option>
-                      <option value="before">before（要素の前）</option>
-                      <option value="after">after（要素の後）</option>
+                      <option value="append">末尾に追加（セレクター内の一番下）</option>
+                      <option value="prepend">先頭に追加（セレクター内の一番上）</option>
+                      <option value="before">要素の直前に挿入</option>
+                      <option value="after">要素の直後に挿入</option>
                     </select>
                   </div>
                   <div style={{ flex: 1 }}>
-                    <div className="h2">描画モード</div>
+                    <div className="h2">スタイル適用方法</div>
                     <select
                       className="input"
                       value={mode}
                       onChange={(e) => setMode(e.target.value as MountMode)}
                       disabled={type === "modal"}
                     >
-                      <option value="shadow">shadow</option>
-                      <option value="theme">theme</option>
-                      <option value="inherit">inherit</option>
+                      <option value="shadow">サイトのCSSと分離する（推奨）</option>
+                      <option value="theme">サイトのテーマを適用する</option>
+                      <option value="inherit">サイトのスタイルをそのまま継承</option>
                     </select>
+                    <div className="small" style={{ marginTop: 4, opacity: 0.65 }}>
+                      {mode === "shadow" && "サイトのCSSに影響されず、デザインが崩れにくい"}
+                      {mode === "theme" && "サイトのフォントや色などのテーマが適用される"}
+                      {mode === "inherit" && "サイトのすべてのスタイルをそのまま引き継ぐ"}
+                    </div>
                   </div>
                 </div>
 

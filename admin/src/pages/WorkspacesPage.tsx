@@ -506,10 +506,7 @@ export default function WorkspacesPage() {
                     </td>
                     <td>
                       <div className="small" style={{ display: 'grid', gap: 4 }}>
-                        <div>AI decision: <b>{r.data.defaults?.ai?.decision ? 'ON' : 'OFF'}</b></div>
-                        <div>discovery: <b>{r.data.defaults?.ai?.discovery || 'suggest'}</b></div>
-                        <div>copy: <b>{r.data.defaults?.ai?.copy || 'approve'}</b></div>
-                        <div>log sample: <b>{Number(r.data.defaults?.log_sample_rate ?? 1)}</b></div>
+                        <div>ログ率: <b>{Number(r.data.defaults?.log_sample_rate ?? 1)}</b></div>
                       </div>
                     </td>
                     <td>
@@ -744,28 +741,9 @@ export default function WorkspacesPage() {
               </div>
 
               <div style={{ flex: 1, minWidth: 280 }}>
-                <div className="h2">初期設定</div>
-                <div className="row">
-                  <label className="badge">
-                    <input type="checkbox" checked={decision} onChange={(e) => setDecision(e.target.checked)} />
-                    AI decision
-                  </label>
-                  <label className="badge">discovery
-                    <select className="input" style={{ width: 140, marginLeft: 8 }} value={discovery} onChange={(e) => setDiscovery(e.target.value as any)}>
-                      <option value="suggest">suggest</option>
-                      <option value="off">off</option>
-                    </select>
-                  </label>
-                  <label className="badge">copy
-                    <select className="input" style={{ width: 140, marginLeft: 8 }} value={copyMode} onChange={(e) => setCopyMode(e.target.value as any)}>
-                      <option value="approve">approve</option>
-                      <option value="auto">auto</option>
-                    </select>
-                  </label>
-                </div>
-                <div style={{ height: 10 }} />
                 <div className="h2">ログ取得サンプル率</div>
-                <input className="input" type="number" step="0.1" value={logSampleRate} onChange={(e) => setLogSampleRate(Number(e.target.value))} />
+                <div className="small" style={{ marginBottom: 6, opacity: 0.7 }}>アクセスのうち何割をログに記録するか（1 = 全件、0.1 = 10%のみ）。トラフィックが多いサイトでは下げるとコスト削減になります。</div>
+                <input className="input" type="number" min="0" max="1" step="0.1" value={logSampleRate} onChange={(e) => setLogSampleRate(Number(e.target.value))} />
                 <div style={{ height: 14 }} />
 
                 <div className="h2">ロールごとの表示権限</div>

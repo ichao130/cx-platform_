@@ -182,6 +182,83 @@ function readSelectedWorkspaceId(uid?: string) {
   }
 }
 
+/* ── カート追加スニペット ── */
+function CartAddSnippet({ siteId, publicKey }: { siteId: string; publicKey: string }) {
+  const [copied, setCopied] = React.useState<string | null>(null);
+  const SDK_URL = 'https://cx-platform-v1.web.app/sdk.js';
+
+  const copy = (text: string, key: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(key);
+      setTimeout(() => setCopied(null), 2000);
+    });
+  };
+
+  const shopifySnippet = `<!-- Mokkeda SDK -->
+<script
+  src="${SDK_URL}"
+  data-site-id="${siteId || 'YOUR_SITE_ID'}"
+  data-site-key="${publicKey || 'YOUR_PUBLIC_KEY'}"
+  async
+></script>
+
+<!-- カートイベントフック（theme.liquid または cart.js の ajax完了後に追記） -->
+<script>
+  document.addEventListener('cart:item-added', function() {
+    window.dispatchEvent(new CustomEvent('cx:cart:add'));
+  });
+</script>`;
+
+  const gtmSnippet = `// GTM カスタムHTMLタグ（トリガー: カート追加ボタンクリック など）
+<script>
+  window.dispatchEvent(new CustomEvent('cx:cart:add'));
+</script>`;
+
+  const codeStyle: React.CSSProperties = {
+    background: '#13141f',
+    color: '#cdd6f4',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+    fontSize: 12,
+    lineHeight: 1.6,
+    borderRadius: 10,
+    padding: '12px 14px',
+    whiteSpace: 'pre',
+    overflowX: 'auto',
+    display: 'block',
+    marginTop: 8,
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div className="small" style={{ color: 'var(--brand)', background: 'rgba(37,99,235,.06)', borderRadius: 10, padding: '10px 14px' }}>
+        🛒 カートに商品が追加されたタイミングで発動します。下のスニペットをサイトに設置してください。
+      </div>
+
+      {/* theme.liquid */}
+      <div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div className="h2">Shopify（theme.liquid）</div>
+          <button className="btn" style={{ fontSize: 12, padding: '4px 12px' }} onClick={() => copy(shopifySnippet, 'shopify')}>
+            {copied === 'shopify' ? 'コピー済 ✓' : 'コピー'}
+          </button>
+        </div>
+        <code style={codeStyle}>{shopifySnippet}</code>
+      </div>
+
+      {/* GTM */}
+      <div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div className="h2">GTM経由</div>
+          <button className="btn" style={{ fontSize: 12, padding: '4px 12px' }} onClick={() => copy(gtmSnippet, 'gtm')}>
+            {copied === 'gtm' ? 'コピー済 ✓' : 'コピー'}
+          </button>
+        </div>
+        <code style={codeStyle}>{gtmSnippet}</code>
+      </div>
+    </div>
+  );
+}
+
 export default function ScenariosPage() {
   const navigate = useNavigate();
   const [sites, setSites] = useState<SiteRow[]>([]);
@@ -216,6 +293,7 @@ export default function ScenariosPage() {
   >(["other"]);
   const [staySec, setStaySec] = useState(3);
   const [scrollDepthPct, setScrollDepthPct] = useState(0); // 0=無効, 1-100=スクロール深度(%)
+  const [triggerType, setTriggerType] = useState<'stay' | 'scroll' | 'cart_add'>('stay');
 
   // non-AB actionRefs
   const [actionRefs, setActionRefs] = useState<ActionRef[]>([]);
@@ -431,16 +509,20 @@ export default function ScenariosPage() {
           ? { mode: urlMode, value: String(urlValue || "").trim(), target: urlTarget }
           : undefined,
       },
-      behavior: {
-        stay_gte_sec: Number(staySec),
-        ...(scrollDepthPct > 0 ? { scroll_depth_pct: Number(scrollDepthPct) } : {}),
-      },
-      trigger: {
-        type: scrollDepthPct > 0 ? "scroll" : "stay",
-        ms: Number(staySec) * 1000,
-      },
+      behavior: triggerType === 'cart_add'
+        ? { stay_gte_sec: 0 }
+        : {
+            stay_gte_sec: Number(staySec),
+            ...(triggerType === 'scroll' && scrollDepthPct > 0 ? { scroll_depth_pct: Number(scrollDepthPct) } : {}),
+          },
+      trigger: triggerType === 'cart_add'
+        ? { type: "cart_add", ms: 0 }
+        : {
+            type: triggerType === 'scroll' ? "scroll" : "stay",
+            ms: Number(staySec) * 1000,
+          },
     }),
-    [pageTypeIn, staySec, scrollDepthPct, urlEnabled, urlMode, urlValue, urlTarget]
+    [pageTypeIn, staySec, scrollDepthPct, triggerType, urlEnabled, urlMode, urlValue, urlTarget]
   );
 
 
@@ -677,6 +759,7 @@ export default function ScenariosPage() {
     setPageTypeIn(["other"]);
     setStaySec(3);
     setScrollDepthPct(0);
+    setTriggerType('stay');
 
     setActionRefs([]);
 
@@ -771,6 +854,7 @@ export default function ScenariosPage() {
     setPageTypeIn((s.entry_rules?.page?.page_type_in as any) || ["other"]);
     setStaySec(Number(s.entry_rules?.behavior?.stay_gte_sec ?? 3));
     setScrollDepthPct(Number(s.entry_rules?.behavior?.scroll_depth_pct ?? 0));
+    setTriggerType(s.entry_rules?.trigger?.type === 'cart_add' ? 'cart_add' : s.entry_rules?.behavior?.scroll_depth_pct ? 'scroll' : 'stay');
 
     setActionRefs(reorder(normalizeActionRefs(s.actionRefs)));
 
@@ -1283,75 +1367,147 @@ export default function ScenariosPage() {
                 </div>
 
                 <div style={{ height: 10 }} />
-                <div className="row" style={{ gap: 16, flexWrap: "wrap" }}>
-                  <div style={{ flex: 1, minWidth: 180 }}>
-                    <div className="h2">滞在時間（秒）</div>
-                    <div className="small" style={{ marginBottom: 6 }}>ページ表示後、この秒数経過してから発動</div>
-                    <input
-                      className="input"
-                      type="number"
-                      min={0}
-                      value={staySec}
-                      onChange={(e) => setStaySec(Number(e.target.value))}
-                    />
-                  </div>
-                  <div style={{ flex: 1, minWidth: 180 }}>
-                    <div className="h2">スクロール深度（%）</div>
-                    <div className="small" style={{ marginBottom: 6 }}>0=無効。50なら「ページを50%スクロールしたら」発動</div>
-                    <input
-                      className="input"
-                      type="number"
-                      min={0}
-                      max={100}
-                      placeholder="0（無効）"
-                      value={scrollDepthPct || ""}
-                      onChange={(e) => setScrollDepthPct(Number(e.target.value))}
-                    />
-                    {scrollDepthPct > 0 && staySec > 0 && (
-                      <div className="small" style={{ marginTop: 4, color: "var(--brand)" }}>
-                        💡 {staySec}秒経過後、{scrollDepthPct}%スクロールで発動
-                      </div>
-                    )}
-                    {scrollDepthPct > 0 && staySec === 0 && (
-                      <div className="small" style={{ marginTop: 4, color: "var(--brand)" }}>
-                        💡 {scrollDepthPct}%スクロールで即発動
-                      </div>
-                    )}
-                  </div>
+                <div className="h2">発動タイミング</div>
+                <div className="row" style={{ gap: 8, marginBottom: 12 }}>
+                  {([
+                    { value: 'stay', label: '⏱ 滞在時間' },
+                    { value: 'scroll', label: '📜 スクロール' },
+                    { value: 'cart_add', label: '🛒 カート追加' },
+                  ] as const).map(({ value, label }) => (
+                    <button
+                      key={value}
+                      onClick={() => setTriggerType(value)}
+                      className={triggerType === value ? 'btn btn--primary' : 'btn'}
+                      style={{ fontSize: 13, padding: '6px 14px' }}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
+
+                {triggerType === 'cart_add' ? (
+                  <CartAddSnippet siteId={siteId} publicKey={(selectedSite?.data as any)?.publicKey || ''} />
+                ) : (
+                  <div className="row" style={{ gap: 16, flexWrap: "wrap" }}>
+                    <div style={{ flex: 1, minWidth: 180 }}>
+                      <div className="h2">滞在時間（秒）</div>
+                      <div className="small" style={{ marginBottom: 6 }}>ページ表示後、この秒数経過してから発動</div>
+                      <input
+                        className="input"
+                        type="number"
+                        min={0}
+                        value={staySec}
+                        onChange={(e) => setStaySec(Number(e.target.value))}
+                      />
+                    </div>
+                    {triggerType === 'scroll' && (
+                      <div style={{ flex: 1, minWidth: 180 }}>
+                        <div className="h2">スクロール深度（%）</div>
+                        <div className="small" style={{ marginBottom: 6 }}>50なら「ページを50%スクロールしたら」発動</div>
+                        <input
+                          className="input"
+                          type="number"
+                          min={1}
+                          max={100}
+                          placeholder="50"
+                          value={scrollDepthPct || ""}
+                          onChange={(e) => setScrollDepthPct(Number(e.target.value))}
+                        />
+                        {scrollDepthPct > 0 && staySec > 0 && (
+                          <div className="small" style={{ marginTop: 4, color: "var(--brand)" }}>
+                            💡 {staySec}秒経過後、{scrollDepthPct}%スクロールで発動
+                          </div>
+                        )}
+                        {scrollDepthPct > 0 && staySec === 0 && (
+                          <div className="small" style={{ marginTop: 4, color: "var(--brand)" }}>
+                            💡 {scrollDepthPct}%スクロールで即発動
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div style={{ height: 14 }} />
                 <div className="h2">URL条件</div>
                 <div className="row" style={{ alignItems: "center", gap: 10 }}>
                   <label className="badge" style={{ cursor: "pointer" }}>
                     <input type="checkbox" checked={urlEnabled} onChange={(e) => setUrlEnabled(e.target.checked)} />
-                    URL条件を有効化
+                    特定のページだけに表示する
                   </label>
-                  <select className="input" style={{ width: 140 }} disabled={!urlEnabled} value={urlTarget} onChange={(e) => setUrlTarget(e.target.value as any)}>
-                    <option value="path">path</option>
-                    <option value="url">url</option>
-                  </select>
-                  <select className="input" style={{ width: 160 }} disabled={!urlEnabled} value={urlMode} onChange={(e) => setUrlMode(e.target.value as any)}>
-                    <option value="contains">contains</option>
-                    <option value="prefix">prefix</option>
-                    <option value="equals">equals</option>
-                    <option value="regex">regex</option>
-                  </select>
-                  <input
-                    className="input"
-                    style={{ flex: 1, minWidth: 220 }}
-                    disabled={!urlEnabled}
-                    value={urlValue}
-                    onChange={(e) => setUrlValue(e.target.value)}
-                    placeholder="例: /products/  or  ^/collections/.*"
-                  />
                 </div>
-                <div className="small" style={{ marginTop: 6 }}>
-                  例：<code>path + prefix = /products/</code>（商品ページ） / <code>regex = ^/lp/</code>
-                </div>
-                <div className="small" style={{ marginTop: 4, opacity: 0.72 }}>
-                  ※ トップページを指定したい場合は <code>path + equals = /</code> を使ってください。
-                </div>
+                {urlEnabled && (
+                  <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+                    <div>
+                      <div className="small" style={{ marginBottom: 4, fontWeight: 600 }}>対象URL（フルURLでもパスだけでもOK）</div>
+                      <input
+                        className="input"
+                        style={{ width: "100%" }}
+                        value={urlValue}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          // フルURLが貼られたらパスだけ抽出
+                          try {
+                            if (v.startsWith("http://") || v.startsWith("https://")) {
+                              const u = new URL(v);
+                              setUrlValue(u.pathname + u.search);
+                            } else {
+                              setUrlValue(v);
+                            }
+                          } catch {
+                            setUrlValue(v);
+                          }
+                        }}
+                        placeholder="例: /service/web_customer_service/　（フルURLを貼り付けてもOK）"
+                      />
+                    </div>
+                    <div>
+                      <div className="small" style={{ marginBottom: 6, fontWeight: 600 }}>マッチ方法</div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        {[
+                          { mode: "equals", target: "path", label: "このページだけ", desc: "URLが完全に一致するページのみ" },
+                          { mode: "prefix", target: "path", label: "このページ以下すべて", desc: "このパスで始まるすべてのページ" },
+                          { mode: "contains", target: "path", label: "URLのどこかに含む", desc: "URLの一部に指定文字列が含まれるページ" },
+                          { mode: "regex", target: "path", label: "正規表現で指定", desc: "上級者向け：正規表現パターンで細かく指定" },
+                        ].map(({ mode, target, label, desc }) => (
+                          <label
+                            key={mode}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 10,
+                              cursor: "pointer",
+                              padding: "7px 12px",
+                              borderRadius: 8,
+                              background: urlMode === mode ? "rgba(var(--brand-rgb,59,130,246),.08)" : "rgba(0,0,0,.03)",
+                              border: urlMode === mode ? "1.5px solid var(--brand, #3b82f6)" : "1.5px solid transparent",
+                              transition: "all .15s",
+                            }}
+                          >
+                            <input
+                              type="radio"
+                              name="urlMode"
+                              value={mode}
+                              checked={urlMode === mode}
+                              onChange={() => { setUrlMode(mode as any); setUrlTarget(target as any); }}
+                              style={{ accentColor: "var(--brand, #3b82f6)" }}
+                            />
+                            <span style={{ fontWeight: 600, fontSize: 13 }}>{label}</span>
+                            <span className="small" style={{ opacity: 0.65, marginLeft: 2 }}>{desc}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                    {urlValue && (
+                      <div className="small" style={{ padding: "8px 12px", background: "rgba(0,0,0,.04)", borderRadius: 8, lineHeight: 1.7 }}>
+                        {urlMode === "equals" && <>✅ <strong>{urlValue}</strong> と完全一致するページのみ表示</>}
+                        {urlMode === "prefix" && <>✅ <strong>{urlValue}</strong> で始まるすべてのページで表示</>}
+                        {urlMode === "contains" && <>✅ URLに <strong>{urlValue}</strong> が含まれるページで表示</>}
+                        {urlMode === "regex" && <>✅ パターン <code>{urlValue}</code> に一致するページで表示</>}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div style={{ height: 14 }} />
                 <div className="h2">配信スケジュール</div>

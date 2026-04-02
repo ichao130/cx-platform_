@@ -117,7 +117,7 @@ export default function SitesPage() {
   const [currentUid, setCurrentUid] = useState('');
   const [copyMessage, setCopyMessage] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [tagMode, setTagMode] = useState<'direct' | 'gtm'>('direct');
+  const [tagMode, setTagMode] = useState<'direct' | 'gtm' | 'shopify'>('direct');
   const [isSaving, setIsSaving] = useState(false);
   const [expandedSiteId, setExpandedSiteId] = useState<string | null>(null);
   const [memberOpLoading, setMemberOpLoading] = useState<string | null>(null);
@@ -260,6 +260,9 @@ export default function SitesPage() {
     const safePublicKey = String(publicKey || '').trim();
     if (tagMode === 'gtm') {
       return `<script>\n(function() {\n  var s = document.createElement('script');\n  s.src = 'https://app.mokkeda.com/sdk.js';\n  s.setAttribute('data-site-id', '${safeSiteId}');\n  s.setAttribute('data-site-key', '${safePublicKey}');\n  document.head.appendChild(s);\n})();\n</script>`;
+    }
+    if (tagMode === 'shopify') {
+      return `{% comment %}Mokkeda{% endcomment %}\n<script\n  src="https://app.mokkeda.com/sdk.js"\n  data-site-id="${safeSiteId}"\n  data-site-key="${safePublicKey}"\n  defer\n></script>`;
     }
     return `<script\n  src="https://app.mokkeda.com/sdk.js"\n  data-site-id="${safeSiteId}"\n  data-site-key="${safePublicKey}"\n  defer\n></script>`;
   }, [id, publicKey, tagMode]);
@@ -682,7 +685,7 @@ export default function SitesPage() {
                       <div className="h2" style={{ marginBottom: 6 }}>埋め込みタグ</div>
                       {/* タブ切り替え */}
                       <div style={{ display: 'flex', gap: 0, background: 'rgba(0,0,0,.15)', borderRadius: 8, padding: 3, width: 'fit-content' }}>
-                        {(['direct', 'gtm'] as const).map((mode) => (
+                        {(['direct', 'gtm', 'shopify'] as const).map((mode) => (
                           <button
                             key={mode}
                             onClick={() => setTagMode(mode)}
@@ -699,7 +702,7 @@ export default function SitesPage() {
                               transition: 'all .15s',
                             }}
                           >
-                            {mode === 'direct' ? '直接埋め込み' : 'タグマネージャー'}
+                            {mode === 'direct' ? '直接埋め込み' : mode === 'gtm' ? 'タグマネージャー' : '🛍️ Shopify'}
                           </button>
                         ))}
                       </div>
@@ -722,11 +725,31 @@ export default function SitesPage() {
                     </button>
                   </div>
                   {/* 説明文 */}
-                  <div className="small" style={{ marginBottom: 8, opacity: 0.7 }}>
-                    {tagMode === 'direct'
-                      ? 'サイトの <head> 内に直接貼り付けてください'
-                      : 'GTM の「カスタムHTML」タグとして貼り付けてください'}
-                  </div>
+                  {tagMode === 'shopify' ? (
+                    <div style={{ marginBottom: 12 }}>
+                      <div className="small" style={{ opacity: 0.85, marginBottom: 8 }}>
+                        Shopify管理画面 → <b>オンラインストア &gt; テーマ &gt; コードを編集</b> → <code>theme.liquid</code> を開き、<code>&lt;/head&gt;</code> の直前に貼り付けてください。
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
+                        {[
+                          { step: '1', label: 'Shopify管理画面 → オンラインストア → テーマ' },
+                          { step: '2', label: '「コードを編集」→ Layout/theme.liquid を開く' },
+                          { step: '3', label: '</head> の直前に下のコードを貼り付けて保存' },
+                        ].map(({ step, label }) => (
+                          <div key={step} className="small" style={{ display: 'flex', gap: 8, alignItems: 'flex-start', opacity: 0.8 }}>
+                            <span style={{ background: 'rgba(255,255,255,.2)', borderRadius: '50%', width: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, flexShrink: 0, fontSize: 11 }}>{step}</span>
+                            <span>{label}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="small" style={{ marginBottom: 8, opacity: 0.7 }}>
+                      {tagMode === 'direct'
+                        ? 'サイトの <head> 内に直接貼り付けてください'
+                        : 'GTM の「カスタムHTML」タグとして貼り付けてください'}
+                    </div>
+                  )}
                   <pre style={{
                     margin: 0,
                     padding: '16px',
@@ -767,6 +790,45 @@ export default function SitesPage() {
                   {copyMessage === 'コピーに失敗しました' && (
                     <div className="small" style={{ marginTop: 8, color: 'var(--danger)' }}>
                       クリップボードへのコピーに失敗しました。上のコードを直接選択してコピーしてください。
+                    </div>
+                  )}
+
+                  {tagMode === 'shopify' && (
+                    <div style={{ marginTop: 16 }}>
+                      <div className="small" style={{ fontWeight: 700, marginBottom: 6, opacity: 0.9 }}>
+                        🛒 カートイベントフック（任意）
+                      </div>
+                      <div className="small" style={{ opacity: 0.7, marginBottom: 8 }}>
+                        カートに商品が追加されたタイミングでシナリオを起動したい場合は、上のスクリプトの直後に追加してください。「これと一緒によく買われています」などのアップセル訴求に使えます。
+                      </div>
+                      <pre style={{
+                        margin: 0,
+                        padding: '14px',
+                        background: '#1a2a3a',
+                        color: '#e2f0f5',
+                        borderRadius: 10,
+                        fontSize: 12,
+                        lineHeight: 1.75,
+                        overflowX: 'auto',
+                        whiteSpace: 'pre',
+                        userSelect: 'all',
+                        cursor: 'text',
+                        border: '1px solid rgba(255,255,255,.06)',
+                      }}>
+                        <span style={{ color: '#94a3b8' }}>{`/* Mokkeda: Shopify カートイベントフック */`}</span>{'\n'}
+                        <span style={{ color: '#7ec8e3' }}>{'document'}</span><span style={{ color: '#94a3b8' }}>{'.'}</span><span style={{ color: '#a8d8a8' }}>{'addEventListener'}</span><span style={{ color: '#94a3b8' }}>{'('}</span><span style={{ color: '#ffd580' }}>{"'DOMContentLoaded'"}</span><span style={{ color: '#94a3b8' }}>{', function() {'}</span>{'\n'}
+                        <span style={{ color: '#94a3b8' }}>{'  var _fetch = window.fetch;'}</span>{'\n'}
+                        <span style={{ color: '#94a3b8' }}>{'  window.fetch = function(url, opts) {'}</span>{'\n'}
+                        <span style={{ color: '#94a3b8' }}>{'    var res = _fetch.apply(this, arguments);'}</span>{'\n'}
+                        <span style={{ color: '#94a3b8' }}>{'    if (typeof url === '}</span><span style={{ color: '#ffd580' }}>{"'string'"}</span><span style={{ color: '#94a3b8' }}>{' && url.indexOf('}</span><span style={{ color: '#ffd580' }}>{"'/cart/add'"}</span><span style={{ color: '#94a3b8' }}>{') > -1) {'}</span>{'\n'}
+                        <span style={{ color: '#94a3b8' }}>{'      res.then(function(r) {'}</span>{'\n'}
+                        <span style={{ color: '#94a3b8' }}>{'        if (r.ok) window.dispatchEvent(new CustomEvent('}</span><span style={{ color: '#ffd580' }}>{"'cx:cart:add'"}</span><span style={{ color: '#94a3b8' }}>{'));'}</span>{'\n'}
+                        <span style={{ color: '#94a3b8' }}>{'      });'}</span>{'\n'}
+                        <span style={{ color: '#94a3b8' }}>{'    }'}</span>{'\n'}
+                        <span style={{ color: '#94a3b8' }}>{'    return res;'}</span>{'\n'}
+                        <span style={{ color: '#94a3b8' }}>{'  };'}</span>{'\n'}
+                        <span style={{ color: '#94a3b8' }}>{'});'}</span>
+                      </pre>
                     </div>
                   )}
                 </div>

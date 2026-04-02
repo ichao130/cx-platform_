@@ -239,11 +239,10 @@ export default function TemplatesPage() {
     );
   }, [workspaceId]);
 
-  useEffect(() => {
-    // When type changes and we're creating a new template, preload defaults
-    setHtml((prev) => (prev ? prev : DEFAULTS[type].html));
-    setCss((prev) => (prev ? prev : DEFAULTS[type].css));
-  }, [type]);
+  // タイプ変更で自動適用すべきデフォルトかを判定するヘルパー
+  // いずれかのタイプのデフォルト値と完全一致する場合のみデフォルト適用対象とみなす
+  const ALL_DEFAULT_CSS = Object.values(DEFAULTS).map((d) => d.css);
+  const ALL_DEFAULT_HTML = Object.values(DEFAULTS).map((d) => d.html);
 
   const payload: TemplateDoc = useMemo(
     () => ({ workspaceId, type, name: name.trim() || 'Template', html, css }),
@@ -272,8 +271,9 @@ export default function TemplatesPage() {
     setWorkspaceId(row.data.workspaceId);
     setType(row.data.type);
     setName(row.data.name || 'Template');
-    setHtml(row.data.html || DEFAULTS[row.data.type].html);
-    setCss(row.data.css || DEFAULTS[row.data.type].css);
+    // ?? を使い、空文字列も意図的な値として保持する（|| だと空文字→デフォルトに戻ってしまう）
+    setHtml(row.data.html ?? DEFAULTS[row.data.type].html);
+    setCss(row.data.css ?? DEFAULTS[row.data.type].css);
     setIsModalOpen(true);
   }
 
@@ -413,8 +413,10 @@ export default function TemplatesPage() {
                     <select className="input" value={type} onChange={(e) => {
                       const t = e.target.value as TemplateDoc['type'];
                       setType(t);
-                      setHtml(DEFAULTS[t].html);
-                      setCss(DEFAULTS[t].css);
+                      // 現在の値が既知のデフォルト値のいずれかと一致する場合のみ新タイプのデフォルトを適用。
+                      // ユーザーが独自編集済み（カスタム値 or 意図的な空文字）の場合は上書きしない。
+                      if (ALL_DEFAULT_HTML.includes(html)) setHtml(DEFAULTS[t].html);
+                      if (ALL_DEFAULT_CSS.includes(css)) setCss(DEFAULTS[t].css);
                     }}>
                       <option value="modal">モーダル — 画面中央のポップアップ。クーポン・キャンペーン訴求に。</option>
                       <option value="banner">バナー — 画面下に固定表示されるフローティングバー。告知・誘導に。</option>
