@@ -173,17 +173,19 @@ const PlanLimitsSchema = z.object({
   actions: PlanLimitValueSchema.optional(),
   aiInsights: PlanLimitValueSchema.optional(),
   members: PlanLimitValueSchema.optional(),
+  templates: PlanLimitValueSchema.optional(),
+  media: PlanLimitValueSchema.optional(),
 });
 
 const WorkspaceBillingUpdateReqSchema = z.object({
   workspace_id: z.string().min(1),
-  plan: z.enum(["standard", "premium", "custom"]).optional(),
+  plan: z.enum(["free", "standard", "premium", "custom"]).optional(),
   status: z.enum(["inactive", "trialing", "active", "past_due", "canceled"]).optional(),
   provider: z.enum(["stripe", "manual"]).optional(),
   trial_days: z.number().int().min(0).max(365).optional(),
   trial_ends_at: z.string().datetime().optional(),
   current_period_ends_at: z.string().datetime().optional(),
-  billing_email: z.string().email().optional(),
+  billing_email: z.preprocess((v) => (v === "" ? undefined : v), z.string().email().optional().nullable()),
   stripe_customer_id: z.string().min(1).optional(),
   stripe_subscription_id: z.string().min(1).optional(),
   stripe_price_id: z.string().min(1).optional(),
@@ -562,6 +564,8 @@ function defaultPlanLimits() {
     actions: null as number | null,
     aiInsights: null as number | null,
     members: null as number | null,
+    templates: null as number | null,
+    media: null as number | null,
   };
 }
 
@@ -576,6 +580,50 @@ function normalizePlanLimits(input: any) {
     }
   }
   return base;
+}
+
+/* =========================================
+   Plan Limit Helpers
+========================================= */
+type LimitKey = "workspaces" | "sites" | "scenarios" | "actions" | "templates" | "media" | "members" | "aiInsights";
+
+async function getEffectiveLimits(wsId: string) {
+  const db = adminDb();
+  const billingSnap = await db.collection("workspace_billing").doc(wsId).get();
+  const billing = (billingSnap.data() || {}) as any;
+  // 特別トライアル中は全制限解除
+  if (billing.access_override_active && billing.access_override_until) {
+    const until = new Date(billing.access_override_until);
+    if (until > new Date()) return null; // null = 無制限
+  }
+  const plan = String(billing.plan || "free");
+  const planSnap = await db.collection("plans").where("code", "==", plan).limit(1).get();
+  if (planSnap.empty) return null;
+  return normalizePlanLimits(planSnap.docs[0].data().limits || {});
+}
+
+async function countResource(wsId: string, resource: LimitKey, uid?: string) {
+  const db = adminDb();
+  if (resource === "workspaces") {
+    // ユーザーが owner のワークスペース数
+    if (!uid) return 0;
+    const snap = await db.collection("workspaces").where(`members.${uid}`, "==", "owner").get();
+    return snap.size;
+  }
+  const col = resource === "aiInsights" ? "ai_insights" : resource;
+  const snap = await db.collection(col).where("workspaceId", "==", wsId).get();
+  return snap.size;
+}
+
+async function assertWithinLimit(wsId: string, resource: LimitKey) {
+  const limits = await getEffectiveLimits(wsId);
+  if (limits === null) return; // 無制限
+  const limit = limits[resource];
+  if (limit === null) return; // このリソースは無制限
+  const current = await countResource(wsId, resource);
+  if (current >= limit) {
+    throw Object.assign(new Error("plan_limit_exceeded"), { resource, current, limit });
+  }
 }
 
 function normalizeBillingProvider(input: any, plan?: string) {
@@ -629,8 +677,12 @@ function getRequestUserEmail(req: any): string {
   return String(req?.auth?.email || req?.user?.email || req?.token?.email || "").trim().toLowerCase();
 }
 
-function requirePlatformAdmin(req: any) {
-  const email = getRequestUserEmail(req);
+async function requirePlatformAdmin(req: any): Promise<string> {
+  // Bearer トークンを検証してメールを取得
+  const { extractBearerToken, verifyIdToken } = await import("../services/admin");
+  const token = extractBearerToken(req);
+  const decoded = await verifyIdToken(token);
+  const email = String(decoded?.email || "").trim().toLowerCase();
   if (email !== "iwatanabe@branberyheag.com") {
     throw new Error("platform_admin_only");
   }
@@ -1138,6 +1190,18 @@ export function registerV1Routes(app: Express) {
       const body = WorkspaceCreateReqSchema.parse(req.body);
 
       const db = adminDb();
+
+      // ワークスペース数上限チェック（オーナーとして所有する既存WSの最初のプランを参照）
+      const ownedSnap = await db.collection("workspaces")
+        .where(`members.${uid}`, "==", "owner").get();
+      if (!ownedSnap.empty) {
+        const firstWsId = ownedSnap.docs[0].id;
+        const limits = await getEffectiveLimits(firstWsId);
+        if (limits !== null && limits.workspaces !== null && ownedSnap.size >= limits.workspaces) {
+          return res.status(403).json({ ok: false, error: "plan_limit_exceeded", resource: "workspaces", current: ownedSnap.size, limit: limits.workspaces });
+        }
+      }
+
       const workspaceId = genId("ws");
 
       const now = FieldValue.serverTimestamp();
@@ -1936,6 +2000,9 @@ export function registerV1Routes(app: Express) {
       const body = SiteCreateReqSchema.parse(req.body);
       const { uid } = await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "sites", ["owner", "admin"]);
 
+      // サイト数上限チェック
+      await assertWithinLimit(body.workspace_id, "sites");
+
       const db = adminDb();
       const siteId = genId("site");
       const publicKey = String(body.public_key || "").trim();
@@ -1982,11 +2049,11 @@ export function registerV1Routes(app: Express) {
         .status(
           e?.message === "missing_authorization" || e?.message === "invalid_token"
             ? 401
-            : String(e?.message || "").startsWith("workspace_access_denied:")
+            : String(e?.message || "").startsWith("workspace_access_denied:") || e?.message === "plan_limit_exceeded"
             ? 403
             : 400
         )
-        .json({ ok: false, error: "site_create_failed", message: e?.message || String(e) });
+        .json({ ok: false, error: e?.message === "plan_limit_exceeded" ? "plan_limit_exceeded" : "site_create_failed", message: e?.message || String(e) });
     }
   });
 
@@ -2000,6 +2067,31 @@ export function registerV1Routes(app: Express) {
       return res.status(403).send(e?.message || "forbidden");
     }
   });
+
+  /* -----------------------------
+     /v1/check-can-create  ★管理画面専用
+     - リソース作成前のプランリミット確認
+  ------------------------------ */
+  app.post("/v1/check-can-create", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      const uid = await requireAuthUid(req);
+      const { workspace_id, resource } = req.body as { workspace_id: string; resource: LimitKey };
+      if (!workspace_id || !resource) return res.status(400).json({ ok: false, error: "workspace_id and resource required" });
+
+      const limits = await getEffectiveLimits(workspace_id);
+      if (limits === null) return res.json({ ok: true, allowed: true, current: 0, limit: null });
+
+      const limit = limits[resource] ?? null;
+      if (limit === null) return res.json({ ok: true, allowed: true, current: 0, limit: null });
+
+      const current = await countResource(workspace_id, resource, uid);
+      return res.json({ ok: true, allowed: current < limit, current, limit });
+    } catch (e: any) {
+      return res.status(400).json({ ok: false, error: e?.message });
+    }
+  });
+  app.options("/v1/check-can-create", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
 
   /* -----------------------------
      /v1/sites/list  ★管理画面専用（ADMIN_ORIGINS）
@@ -2290,7 +2382,7 @@ export function registerV1Routes(app: Express) {
       corsByAdminOrigins(req, res);
 
       const body = PlansListReqSchema.parse(req.body);
-      requirePlatformAdmin(req);
+      await requirePlatformAdmin(req);
       await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner", "admin"]);
 
       const db = adminDb();
@@ -2354,7 +2446,7 @@ export function registerV1Routes(app: Express) {
       corsByAdminOrigins(req, res);
 
       const body = PlansUpsertReqSchema.parse(req.body);
-      requirePlatformAdmin(req);
+      await requirePlatformAdmin(req);
       await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner", "admin"]);
 
       const db = adminDb();
@@ -3850,7 +3942,7 @@ export function registerV1Routes(app: Express) {
   app.post("/v1/workspaces/access-override/set", async (req, res) => {
     try {
       corsByAdminOrigins(req, res);
-      requirePlatformAdmin(req);
+      await requirePlatformAdmin(req);
 
       const workspace_id = String(req.body?.workspace_id || "").trim();
       if (!workspace_id) return res.status(400).json({ error: "workspace_id required" });
@@ -3902,5 +3994,290 @@ export function registerV1Routes(app: Express) {
         .json({ error: e?.message || "access_override_set_failed" });
     }
   });
+
+  /* ============================================================
+     OPS endpoints（バックヤード専用 / platform admin only）
+     ============================================================ */
+
+  const opsErrStatus = (e: any) =>
+    e?.message === "platform_admin_only" ? 403
+    : e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401
+    : 500;
+
+  /* --- /v1/ops/workspaces --- 全ワークスペース一覧 */
+  app.post("/v1/ops/workspaces", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      await requirePlatformAdmin(req);
+      const db = adminDb();
+      const [wsSnap, billingSnap] = await Promise.all([
+        db.collection("workspaces").orderBy("createdAt", "desc").get(),
+        db.collection("workspace_billing").get(),
+      ]);
+      const billingMap: Record<string, any> = {};
+      for (const d of billingSnap.docs) billingMap[d.id] = d.data();
+
+      const workspaces = wsSnap.docs.map((d) => {
+        const data = d.data() as any;
+        const billing = data.billing || {};
+        const override = billingMap[d.id] || {};
+        const members = data.members || {};
+        const emails = data.memberEmails || {};
+        const ownerUid = Object.entries(members).find(([, v]: any) => v?.role === "owner")?.[0] || "";
+        return {
+          id: d.id,
+          name: data.name || "",
+          ownerEmail: ownerUid ? (emails[ownerUid] || "") : "",
+          plan: billing.plan || "free",
+          status: billing.status || "inactive",
+          trialEndsAt: billing.trial_ends_at || null,
+          currentPeriodEndsAt: billing.current_period_ends_at || null,
+          provider: billing.provider || "manual",
+          stripeCustomerId: billing.stripe_customer_id || null,
+          stripeSubscriptionId: billing.stripe_subscription_id || null,
+          billingNote: billing.manual_billing_note || "",
+          accessOverrideActive: override.access_override_active || false,
+          accessOverrideUntil: override.access_override_until || null,
+          accessOverrideNote: override.access_override_note || "",
+          memberCount: Object.keys(members).length,
+          createdAt: data.createdAt || null,
+        };
+      });
+      return res.json({ ok: true, workspaces });
+    } catch (e: any) {
+      console.error("[/v1/ops/workspaces] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/workspaces", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /* --- /v1/ops/workspaces/billing/update --- プラン・ステータス更新 */
+  app.post("/v1/ops/workspaces/billing/update", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      await requirePlatformAdmin(req);
+      const { workspace_id, plan, status, trial_days, note } = req.body || {};
+      if (!workspace_id) return res.status(400).json({ error: "workspace_id required" });
+
+      const db = adminDb();
+      const billing: Record<string, any> = { updatedAt: new Date().toISOString() };
+      if (plan) billing.plan = plan;
+      if (status) billing.status = status;
+      if (note !== undefined) billing.manual_billing_note = note;
+      if (typeof trial_days === "number" && trial_days > 0) {
+        const trialEnd = new Date();
+        trialEnd.setDate(trialEnd.getDate() + trial_days);
+        billing.trial_ends_at = trialEnd.toISOString();
+        billing.status = "trialing";
+      }
+      await db.collection("workspaces").doc(workspace_id).set({ billing }, { merge: true });
+      return res.json({ ok: true, workspace_id });
+    } catch (e: any) {
+      console.error("[/v1/ops/workspaces/billing/update] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/workspaces/billing/update", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /* --- /v1/ops/special-trials/list --- */
+  app.post("/v1/ops/special-trials/list", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      await requirePlatformAdmin(req);
+      const db = adminDb();
+      const snap = await db.collection("special_trials").orderBy("granted_at", "desc").get();
+      return res.json({ ok: true, trials: snap.docs.map((d) => ({ id: d.id, ...d.data() })) });
+    } catch (e: any) {
+      console.error("[/v1/ops/special-trials/list] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/special-trials/list", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /* --- /v1/ops/special-trials/upsert --- 特別トライアル作成/更新 */
+  app.post("/v1/ops/special-trials/upsert", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      const grantedBy = await requirePlatformAdmin(req);
+      const { type, target_id, target_name, expires_at, note, trial_id } = req.body || {};
+      if (!type || !target_id) return res.status(400).json({ error: "type and target_id required" });
+
+      const db = adminDb();
+      const id = trial_id || `trial_${Date.now()}`;
+      const now = new Date().toISOString();
+      const overrideUntil = expires_at || new Date(Date.now() + 1000 * 60 * 60 * 24 * 3650).toISOString();
+
+      await db.collection("special_trials").doc(id).set({
+        type, target_id,
+        target_name: target_name || target_id,
+        status: "active",
+        expires_at: expires_at || null,
+        note: note || "",
+        granted_by: grantedBy,
+        granted_at: now,
+        updatedAt: now,
+      }, { merge: true });
+
+      const applyOverride = async (wsId: string) => {
+        await db.collection("workspace_billing").doc(wsId).set({
+          access_override_active: true,
+          access_override_until: overrideUntil,
+          access_override_note: `特別トライアル: ${note || id}`,
+          updatedAt: now,
+        }, { merge: true });
+        await db.collection("workspace_limit_overrides").doc(wsId).set({
+          limits: { sites: null, scenarios: null, actions: null, aiInsights: null, members: null },
+          note: `特別トライアル: ${note || id}`,
+          updatedAt: now,
+        }, { merge: true });
+      };
+
+      if (type === "workspace") {
+        await applyOverride(target_id);
+      } else if (type === "account") {
+        const wsSnap = await db.collection("workspaces").get();
+        for (const d of wsSnap.docs) {
+          const data = d.data() as any;
+          const emails = data.memberEmails || {};
+          const members = data.members || {};
+          const isOwner = Object.entries(members).some(([uid, v]: any) =>
+            v?.role === "owner" && emails[uid] === target_id
+          );
+          if (isOwner) await applyOverride(d.id);
+        }
+      }
+
+      return res.json({ ok: true, trial_id: id });
+    } catch (e: any) {
+      console.error("[/v1/ops/special-trials/upsert] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/special-trials/upsert", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /* --- /v1/ops/special-trials/revoke --- */
+  app.post("/v1/ops/special-trials/revoke", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      await requirePlatformAdmin(req);
+      const { trial_id } = req.body || {};
+      if (!trial_id) return res.status(400).json({ error: "trial_id required" });
+
+      const db = adminDb();
+      const trialRef = db.collection("special_trials").doc(trial_id);
+      const trialSnap = await trialRef.get();
+      if (!trialSnap.exists) return res.status(404).json({ error: "trial not found" });
+      const trial = trialSnap.data() as any;
+
+      const now = new Date().toISOString();
+      await trialRef.set({ status: "revoked", updatedAt: now }, { merge: true });
+
+      const clearOverride = async (wsId: string) => {
+        await db.collection("workspace_billing").doc(wsId).set({
+          access_override_active: false,
+          access_override_until: null,
+          access_override_note: "",
+          updatedAt: now,
+        }, { merge: true });
+        await db.collection("workspace_limit_overrides").doc(wsId).delete();
+      };
+
+      if (trial.type === "workspace") {
+        await clearOverride(trial.target_id);
+      } else if (trial.type === "account") {
+        const wsSnap = await db.collection("workspaces").get();
+        for (const d of wsSnap.docs) {
+          const data = d.data() as any;
+          const emails = data.memberEmails || {};
+          const members = data.members || {};
+          const isOwner = Object.entries(members).some(([uid, v]: any) =>
+            v?.role === "owner" && emails[uid] === trial.target_id
+          );
+          if (isOwner) await clearOverride(d.id);
+        }
+      }
+
+      return res.json({ ok: true, trial_id });
+    } catch (e: any) {
+      console.error("[/v1/ops/special-trials/revoke] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/special-trials/revoke", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /* --- /v1/ops/workspaces/delete --- ワークスペース削除 */
+  app.post("/v1/ops/workspaces/delete", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      await requirePlatformAdmin(req);
+      const { workspace_id } = req.body as { workspace_id: string };
+      if (!workspace_id) throw new Error("workspace_id required");
+      const db = adminDb();
+      const batch = db.batch();
+      batch.delete(db.collection("workspaces").doc(workspace_id));
+      batch.delete(db.collection("workspace_billing").doc(workspace_id));
+      batch.delete(db.collection("workspace_limit_overrides").doc(workspace_id));
+      await batch.commit();
+      return res.json({ ok: true, workspace_id });
+    } catch (e: any) {
+      console.error("[/v1/ops/workspaces/delete] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/workspaces/delete", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /* --- /v1/ops/plans/list --- 全プラン一覧 */
+  app.post("/v1/ops/plans/list", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      await requirePlatformAdmin(req);
+      const db = adminDb();
+      const snap = await db.collection("plans").orderBy("code", "asc").get();
+      const plans = snap.docs.map((d) => ({ id: d.id, ...d.data(), limits: normalizePlanLimits(d.data().limits) }));
+      return res.json({ ok: true, plans });
+    } catch (e: any) {
+      console.error("[/v1/ops/plans/list] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/plans/list", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /* --- /v1/ops/plans/upsert --- プラン作成/更新 */
+  const OpsPlanUpsertSchema = z.object({
+    plan_id: z.string().min(1).max(80),
+    code: z.enum(["free", "standard", "premium", "custom"]),
+    name: z.string().min(1).max(80),
+    description: z.string().max(2000).optional().default(""),
+    active: z.boolean().optional().default(true),
+    price_monthly: z.number().min(0).optional().default(0),
+    limits: PlanLimitsSchema,
+  });
+
+  app.post("/v1/ops/plans/upsert", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      await requirePlatformAdmin(req);
+      const body = OpsPlanUpsertSchema.parse(req.body);
+      const db = adminDb();
+      const ref = db.collection("plans").doc(body.plan_id);
+      const existing = await ref.get();
+      const now = FieldValue.serverTimestamp();
+      await ref.set({
+        code: body.code,
+        name: body.name,
+        description: body.description,
+        active: body.active,
+        price_monthly: body.price_monthly,
+        limits: normalizePlanLimits(body.limits),
+        updated_at: now,
+        ...(existing.exists ? {} : { created_at: now }),
+      }, { merge: true });
+      return res.json({ ok: true, plan_id: body.plan_id });
+    } catch (e: any) {
+      console.error("[/v1/ops/plans/upsert] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/plans/upsert", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
 
 }

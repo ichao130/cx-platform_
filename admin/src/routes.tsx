@@ -14,7 +14,6 @@ import ScenarioAiPage from "./pages/ScenarioAiPage";
 import WorkspaceMembersPage from "./pages/WorkspaceMembersPage";
 import WorkspaceBillingPage from "./pages/WorkspaceBillingPage";
 import AcceptInvitePage from "./pages/AcceptInvitePage";
-import PlansPage from "./pages/PlansPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
 
 type AccessKey =
@@ -83,7 +82,6 @@ export default function AppRoutes({ canAccess, workspaceRole, isPlatformAdmin }:
         {/* ワークスペース関連 */}
         <Route path="/workspace/members" element={<Guard allow={canShow(canAccess, "members")} title="メンバー"><WorkspaceMembersPage /></Guard>} />
         <Route path="/workspace/billing" element={<Guard allow={canShow(canAccess, "billing")} title="契約 / Billing"><WorkspaceBillingPage /></Guard>} />
-        <Route path="/plans" element={<Guard allow={canShow(canAccess, "plans")} title="Plans / マスタ管理"><PlansPage /></Guard>} />
 
         {/* 旧URL互換 */}
         <Route path="/admin/workspace/members" element={<Guard allow={canShow(canAccess, "members")} title="メンバー"><WorkspaceMembersPage /></Guard>} />

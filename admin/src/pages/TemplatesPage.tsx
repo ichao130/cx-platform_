@@ -1,7 +1,8 @@
 import React, { Fragment, useEffect, useMemo, useState } from 'react';
 import { collection, doc, onSnapshot, query, setDoc, deleteDoc, where } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
-import { db, auth } from '../firebase';
+import { db, auth, assertPlanLimit } from '../firebase';
+import { usePlanLimit } from '../hooks/usePlanLimit';
 import { genId } from '../components/id';
 import { useBeforeUnload } from '../hooks/useBeforeUnload';
 import { CodeEditor } from '../components/CodeEditor';
@@ -190,6 +191,7 @@ export default function TemplatesPage() {
 
   const [id, setId] = useState(() => genId('tpl'));
   const [workspaceId, setWorkspaceId] = useState('');
+  const templateLimit = usePlanLimit(workspaceId, "templates");
   const [type, setType] = useState<TemplateDoc['type']>('modal');
   const [name, setName] = useState('Default');
   const [html, setHtml] = useState(DEFAULTS.modal.html);
@@ -279,6 +281,8 @@ export default function TemplatesPage() {
 
   async function createOrUpdate() {
     if (!workspaceId) throw new Error('workspaceId required');
+    const isNew = !rows.some((r) => r.id === id.trim());
+    if (isNew) await assertPlanLimit(workspaceId, "templates");
     await setDoc(doc(db, 'templates', id.trim()), payload, { merge: true });
     resetEditor();
     setIsModalOpen(false);
@@ -301,8 +305,13 @@ export default function TemplatesPage() {
           </div>
         </div>
         <div className="page-header__actions">
-          <button className="btn btn--primary" onClick={openCreateModal}>
-            新規テンプレート
+          <button
+            className="btn btn--primary"
+            onClick={openCreateModal}
+            disabled={!templateLimit.allowed}
+            title={!templateLimit.allowed ? `プランの上限に達しています（${templateLimit.current}/${templateLimit.limit}）` : undefined}
+          >
+            新規テンプレート{templateLimit.limit !== null ? ` (${templateLimit.current}/${templateLimit.limit})` : ""}
           </button>
         </div>
       </div>

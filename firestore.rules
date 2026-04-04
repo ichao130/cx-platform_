@@ -8,7 +8,12 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // workspaces ドキュメントの members マップで確認（単一ドキュメント取得時のみ使用）
+    // workspace.members マップで uid を直接確認（resource.data から参照）
+    function isMemberOf(members) {
+      return isSignedIn() && request.auth.uid in members;
+    }
+
+    // workspaces ドキュメントを取得してメンバー確認（create 時など resource.data が無い場合）
     function isMember(workspaceId) {
       return isSignedIn() &&
         get(/databases/$(database)/documents/workspaces/$(workspaceId))
@@ -28,11 +33,12 @@ service cloud.firestore {
 
     // ── ワークスペース ───────────────────────────────────────────
     match /workspaces/{workspaceId} {
-      allow read: if isSignedIn();
+      // 自分が members に含まれている場合のみ読み取り可
+      allow read: if isSignedIn() && isMemberOf(resource.data.members);
       // 初回ログイン時の自動作成: 自分をownerとして設定する場合のみ許可
       allow create: if isSignedIn() &&
         request.resource.data.members[request.auth.uid] == 'owner';
-      // 更新: オーナーまたは管理者のみ
+      // 更新: オーナーまたは管理者のみ（ドメイン設定などの直接更新用）
       allow update: if isOwnerOrAdmin(workspaceId);
       // 削除: API経由のみ
       allow delete: if false;
@@ -45,47 +51,68 @@ service cloud.firestore {
         !('memberUids' in resource.data) ||
         request.auth.uid in resource.data.memberUids
       );
-      allow create: if isSignedIn() && isMember(request.resource.data.workspaceId);
-      allow update, delete: if isSignedIn() && isOwnerOrAdmin(resource.data.workspaceId);
+      // 作成・削除は API 経由のみ（admin SDK）
+      allow create, delete: if false;
+      allow update: if isSignedIn() && isOwnerOrAdmin(resource.data.workspaceId);
     }
 
     // ── シナリオ ─────────────────────────────────────────────────
     match /scenarios/{scenarioId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isMember(request.resource.data.workspaceId);
-      allow update, delete: if isSignedIn() && isMember(resource.data.workspaceId);
+      // 自分のワークスペースのみ読み取り可
+      allow read: if isMember(resource.data.workspaceId);
+      allow create: if isSignedIn() && isMember(request.resource.data.workspaceId)
+        // workspaceId の改ざん防止
+        && request.resource.data.workspaceId is string
+        && request.resource.data.workspaceId.size() > 0;
+      allow update: if isSignedIn() && isMember(resource.data.workspaceId)
+        // workspaceId を変更不可
+        && request.resource.data.workspaceId == resource.data.workspaceId;
+      allow delete: if isSignedIn() && isMember(resource.data.workspaceId);
     }
 
     // ── アクション ───────────────────────────────────────────────
     match /actions/{actionId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isMember(request.resource.data.workspaceId);
-      allow update, delete: if isSignedIn() && isMember(resource.data.workspaceId);
+      allow read: if isMember(resource.data.workspaceId);
+      allow create: if isSignedIn() && isMember(request.resource.data.workspaceId)
+        && request.resource.data.workspaceId is string
+        && request.resource.data.workspaceId.size() > 0;
+      allow update: if isSignedIn() && isMember(resource.data.workspaceId)
+        && request.resource.data.workspaceId == resource.data.workspaceId;
+      allow delete: if isSignedIn() && isMember(resource.data.workspaceId);
     }
 
     // ── テンプレート（クライアントから直接書き込みあり） ─────────
     match /templates/{templateId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isMember(request.resource.data.workspaceId);
-      allow update, delete: if isSignedIn() && isMember(resource.data.workspaceId);
+      allow read: if isMember(resource.data.workspaceId);
+      allow create: if isSignedIn() && isMember(request.resource.data.workspaceId)
+        && request.resource.data.workspaceId is string
+        && request.resource.data.workspaceId.size() > 0;
+      allow update: if isSignedIn() && isMember(resource.data.workspaceId)
+        && request.resource.data.workspaceId == resource.data.workspaceId;
+      allow delete: if isSignedIn() && isMember(resource.data.workspaceId);
     }
 
-    // ── メディア（クライアントから直接書き込みあり） ─────────────
+    // ── メディア（クライアントから直接書き込みあり、削除はAPIのみ） ──
     match /media/{mediaId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isMember(request.resource.data.workspaceId);
-      allow update, delete: if isSignedIn() && isMember(resource.data.workspaceId);
+      allow read: if isMember(resource.data.workspaceId);
+      allow create: if isSignedIn() && isMember(request.resource.data.workspaceId)
+        && request.resource.data.workspaceId is string
+        && request.resource.data.workspaceId.size() > 0;
+      allow update: if isSignedIn() && isMember(resource.data.workspaceId)
+        && request.resource.data.workspaceId == resource.data.workspaceId;
+      // 削除は Cloud Functions（deleteMedia Callable）経由のみ
+      allow delete: if false;
     }
 
     // ── ログ（SDK → Cloud Functions → admin SDK で書き込み）──────
     match /logs/{logId} {
-      allow read: if isSignedIn();
-      allow write: if false;
+      allow read, write: if false;
     }
 
     // ── 日別統計（Cloud Functions が書き込み）────────────────────
     match /stats_daily/{statId} {
-      allow read: if isSignedIn();
+      // ワークスペースメンバーのみ読み取り可
+      allow read: if isMember(resource.data.workspaceId);
       allow write: if false;
     }
 
@@ -116,6 +143,17 @@ service cloud.firestore {
     // ── Misocaトークン（クライアントからアクセス不可）───────────
     match /workspace_misoca_tokens/{docId} {
       allow read, write: if false;
+    }
+
+    // ── お知らせ（認証済みは読める、書き込みはplatform adminのみ）──
+    match /announcements/{announcementId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && request.auth.token.email == "iwatanabe@branberyheag.com";
+    }
+
+    // ── 特別トライアル（platform adminのみ）──────────────────────
+    match /special_trials/{trialId} {
+      allow read, write: if isSignedIn() && request.auth.token.email == "iwatanabe@branberyheag.com";
     }
 
     // ── 上記以外は全拒否 ─────────────────────────────────────────

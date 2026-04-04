@@ -1,0 +1,44 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // ── 許可するMIMEタイプ（GIF / JPG / PNG のみ） ──────────────
+    function isAllowedImageType() {
+      return request.resource.contentType in [
+        'image/gif',
+        'image/jpeg',
+        'image/png'
+      ];
+    }
+
+    // ── ファイルサイズ上限: 10MB ──────────────────────────────────
+    function isWithinSizeLimit() {
+      return request.resource.size <= 10 * 1024 * 1024;
+    }
+
+    // ── ワークスペース配下のメディア ─────────────────────────────
+    // workspaces/{wsId}/media/{mediaId}/{filename}
+    // workspaces/{wsId}/sites/{siteId}/media/{mediaId}/{filename}
+    match /workspaces/{workspaceId}/{allPaths=**} {
+      // 読み取り: 認証済みユーザーのみ（ダウンロードURL取得）
+      allow read: if request.auth != null;
+
+      // アップロード: 認証済み + 許可MIMEタイプ + サイズ上限
+      allow create: if request.auth != null
+        && isAllowedImageType()
+        && isWithinSizeLimit();
+
+      // 上書き不可（新規アップロードのみ）
+      allow update: if false;
+
+      // 削除: Cloud Functions（deleteMedia Callable）経由のみ
+      // ※ Firebase Storage のルールでは admin SDK の削除は制御不要
+      allow delete: if false;
+    }
+
+    // ── 上記以外は全拒否 ─────────────────────────────────────────
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

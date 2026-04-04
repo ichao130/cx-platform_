@@ -5,6 +5,7 @@ import { defineSecret } from "firebase-functions/params";
 
 import express from "express";
 import cors from "cors";
+import { rateLimit } from "express-rate-limit";
 
 import { getStorage } from "firebase-admin/storage";
 import { adminDb } from "./services/admin";
@@ -44,11 +45,59 @@ app.use((req, _res, next) => {
   next();
 });
 
+/* ──────────────────────────────────────────────────────────
+   レートリミット設定
+   ※ Cloud Functions はインスタンスが複数立ち上がる可能性があるため
+      per-instance の制限になる。グローバル制限が必要な場合は
+      Cloud Armor（GCP WAF）を追加で設定すること。
+────────────────────────────────────────────────────────── */
+
+// AI系（OpenAI コスト保護）: 1分あたり15リクエスト/IP
+const aiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 15,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "rate_limit_exceeded", message: "Too many requests, please try again later." },
+  skip: (req) => req.method === "OPTIONS",
+});
+
+// ログ・トラッキング（公開エンドポイント）: 1分あたり60リクエスト/IP
+const logLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "rate_limit_exceeded" },
+  skip: (req) => req.method === "OPTIONS",
+});
+
+// 一般API（認証あり）: 1分あたり120リクエスト/IP
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "rate_limit_exceeded", message: "Too many requests, please try again later." },
+  skip: (req) => req.method === "OPTIONS",
+});
+
+app.use("/v1/ai/", aiLimiter);
+app.use("/v1/log", logLimiter);
+app.use("/v1/variant", logLimiter);
+app.use("/v1/serve", logLimiter);
+app.use("/v1/", apiLimiter);
+
 app.get("/", (_req, res) => res.status(200).send("ok"));
 registerV1Routes(app);
 export const api = onRequest(
 {
   region: "asia-northeast1",
+  // コスト爆発防止: インスタンスの最大数を制限
+  maxInstances: 20,
+  // メモリとタイムアウトの上限設定
+  memory: "256MiB",
+  timeoutSeconds: 60,
   secrets: [OPENAI_API_KEY, POSTMARK_SERVER_TOKEN, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, MISOCA_CLIENT_ID, MISOCA_CLIENT_SECRET],
 },
 app

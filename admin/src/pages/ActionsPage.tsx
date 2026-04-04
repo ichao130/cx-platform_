@@ -16,7 +16,8 @@ import {
   where,
 } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
-import { db, apiPostJson } from "../firebase";
+import { db, apiPostJson, assertPlanLimit } from "../firebase";
+import { usePlanLimit } from "../hooks/usePlanLimit";
 import { genId } from "../components/id";
 import { uploadImageToWorkspace } from "../lib/storage";
 
@@ -477,6 +478,7 @@ export default function ActionsPage() {
   const [id, setId] = useState(() => genId("act"));
   const [workspaceId, setWorkspaceId] = useState("");
   const [currentUid, setCurrentUid] = useState("");
+  const actionLimit = usePlanLimit(workspaceId, "actions");
   const [type, setType] = useState<ActionType>("modal");
 
   const [selector, setSelector] = useState("body");
@@ -836,6 +838,9 @@ export default function ActionsPage() {
     const actionId = id.trim();
     if (!actionId) { showToast("アクションIDが未設定です", "error"); return; }
     try {
+      const isNew = !rows.some((r) => r.id === actionId);
+      if (isNew) await assertPlanLimit(workspaceId, "actions");
+
       await setDoc(doc(db, "actions", actionId), payload, { merge: true });
       showToast("アクションを保存しました ✓");
       resetEditor();
@@ -929,8 +934,13 @@ export default function ActionsPage() {
           </div>
         </div>
         <div className="page-header__actions">
-          <button className="btn btn--primary" onClick={openCreateModal}>
-            新規アクション
+          <button
+            className="btn btn--primary"
+            onClick={openCreateModal}
+            disabled={!actionLimit.allowed}
+            title={!actionLimit.allowed ? `プランの上限に達しています（${actionLimit.current}/${actionLimit.limit}）` : undefined}
+          >
+            新規アクション{actionLimit.limit !== null ? ` (${actionLimit.current}/${actionLimit.limit})` : ""}
           </button>
         </div>
       </div>

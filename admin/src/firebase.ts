@@ -123,6 +123,42 @@ export async function apiPostJson<T = any>(
   return (json ?? ({} as any)) as T;
 }
 
+// =============================
+// Plan limit check helper
+// =============================
+import type { LimitResource } from "./hooks/usePlanLimit";
+
+const LIMIT_RESOURCE_LABEL: Record<LimitResource, string> = {
+  workspaces: "ワークスペース",
+  sites: "サイト",
+  scenarios: "シナリオ",
+  actions: "アクション",
+  templates: "テンプレート",
+  media: "メディア",
+  members: "メンバー",
+  aiInsights: "AIインサイト",
+};
+
+/**
+ * リソース作成前のプラン上限チェック。
+ * 超えていたら Error を throw する。
+ */
+export async function assertPlanLimit(workspaceId: string, resource: LimitResource): Promise<void> {
+  try {
+    const res = await apiPostJson<{ ok: boolean; allowed: boolean; current: number; limit: number | null }>(
+      "/v1/check-can-create",
+      { workspace_id: workspaceId, resource }
+    );
+    if (!res.allowed) {
+      throw new Error(`プランの上限に達しました（${LIMIT_RESOURCE_LABEL[resource]}: ${res.current}/${res.limit}）`);
+    }
+  } catch (e: any) {
+    // check-can-create 自体が失敗した場合は通す（フォールスルー）
+    if (String(e?.message || "").includes("プランの上限")) throw e;
+    console.warn("[assertPlanLimit] check failed, allowing:", e?.message);
+  }
+}
+
 // Devtools helpers:
 //   await window.cxApiPost('/v1/workspaces/billing/get', { workspace_id: 'ws_xxx' })
 //   await window.cxGetIdToken()

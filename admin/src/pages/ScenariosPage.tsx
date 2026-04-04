@@ -2,7 +2,8 @@ import React, { Fragment, useCallback, useEffect, useMemo, useRef, useState } fr
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { collection, deleteDoc, deleteField, doc, onSnapshot, orderBy, query, setDoc, updateDoc, where } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
-import { db, apiPostJson } from "../firebase";
+import { db, apiPostJson, assertPlanLimit } from "../firebase";
+import { usePlanLimit } from "../hooks/usePlanLimit";
 
 function genId(prefix: string) {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
@@ -272,6 +273,8 @@ export default function ScenariosPage() {
   const [siteId, setSiteId] = useState(() => readSelectedSiteId());
   const [workspaceId, setWorkspaceId] = useState("");
   const [currentUid, setCurrentUid] = useState("");
+
+  const scenarioLimit = usePlanLimit(workspaceId, "scenarios");
 
   const migratedWs = useRef<Set<string>>(new Set());
   const runMigration = useCallback(async (wsId: string) => {
@@ -820,6 +823,10 @@ export default function ScenariosPage() {
     if (!siteId) { showToast("サイトを選択してください", "error"); return; }
     if (!workspaceId) { showToast("ワークスペースが未設定です", "error"); return; }
     try {
+      // 新規作成時のみプランリミットチェック
+      const isNew = !rows.some((r) => r.id === id.trim());
+      if (isNew) await assertPlanLimit(workspaceId, "scenarios");
+
       const safePayload = stripUndefinedDeep(payload);
       const docRef = doc(db, "scenarios", id.trim());
       await setDoc(docRef, safePayload, { merge: true });
@@ -1023,8 +1030,13 @@ export default function ScenariosPage() {
           </div>
         </div>
         <div className="page-header__actions">
-          <button className="btn btn--primary" onClick={openCreateModal}>
-            新規シナリオ
+          <button
+            className="btn btn--primary"
+            onClick={openCreateModal}
+            disabled={!scenarioLimit.allowed}
+            title={!scenarioLimit.allowed ? `プランの上限に達しています（${scenarioLimit.current}/${scenarioLimit.limit}）` : undefined}
+          >
+            新規シナリオ{scenarioLimit.limit !== null ? ` (${scenarioLimit.current}/${scenarioLimit.limit})` : ""}
           </button>
         </div>
       </div>

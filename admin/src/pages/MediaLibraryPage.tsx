@@ -9,7 +9,8 @@ import {
   query,
   where,
 } from "firebase/firestore";
-import { db, apiPostJson } from "../firebase";
+import { db, apiPostJson, assertPlanLimit } from "../firebase";
+import { usePlanLimit } from "../hooks/usePlanLimit";
 import { uploadMediaToWorkspace } from "../lib/media";
 
 /* =========================
@@ -168,6 +169,7 @@ export default function MediaPage() {
   const [workspaces, setWorkspaces] = useState<Array<{ id: string; data?: { name?: string } }>>([]);
   const [workspaceId, setWorkspaceId] = useState("");
   const [currentUid, setCurrentUid] = useState("");
+  const mediaLimit = usePlanLimit(workspaceId, "media");
 
   const [siteId, setSiteId] = useState("");
   const [sites, setSites] = useState<Array<{ id: string; data: { name?: string; siteName?: string } }>>([]);
@@ -490,13 +492,32 @@ export default function MediaPage() {
   }, [pendingPreviewUrls]);
 
   function acceptFiles(files: File[]) {
-    const imageFiles = files.filter((file) => (file.type || '').startsWith('image/'));
+    const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/gif"];
+    const ALLOWED_EXTS = [".jpg", ".jpeg", ".png", ".gif"];
+    const MAX_SIZE = 10 * 1024 * 1024; // 10MB
+
     setUploadErr('');
     setUploadInfo(null);
-    setPendingFiles(imageFiles);
-    if (files.length && !imageFiles.length) {
-      setUploadErr('画像ファイルを選択してください。');
+
+    const validFiles: File[] = [];
+    const errors: string[] = [];
+
+    for (const file of files) {
+      const mime = (file.type || '').toLowerCase();
+      const ext = file.name.toLowerCase().match(/\.[^.]+$/)?.[0] ?? '';
+      if (!ALLOWED_TYPES.includes(mime) || !ALLOWED_EXTS.includes(ext)) {
+        errors.push(`${file.name}: GIF / JPG / PNG のみ対応しています`);
+        continue;
+      }
+      if (file.size > MAX_SIZE) {
+        errors.push(`${file.name}: 10MB を超えています（${(file.size / 1024 / 1024).toFixed(1)}MB）`);
+        continue;
+      }
+      validFiles.push(file);
     }
+
+    if (errors.length) setUploadErr(errors.join('\n'));
+    setPendingFiles(validFiles);
   }
 
   async function uploadPendingFiles() {
@@ -505,6 +526,20 @@ export default function MediaPage() {
     setUploadErr("");
     setUploadInfo(null);
     setUploading(true);
+
+    // アップロード前にプランリミットチェック（現在枚数 + 追加枚数を合算）
+    try {
+      const check = await apiPostJson<{ ok: boolean; allowed: boolean; current: number; limit: number | null }>(
+        "/v1/check-can-create", { workspace_id: workspaceId, resource: "media" }
+      );
+      if (check.limit !== null && check.current + pendingFiles.length > check.limit) {
+        setUploadErr(`プランの上限に達しています（メディア: ${check.current}/${check.limit}）。アップロードできる枚数は残り ${Math.max(0, check.limit - check.current)} 枚です。`);
+        setUploading(false);
+        return;
+      }
+    } catch {
+      // チェック失敗は通す
+    }
 
     let ok = 0;
     const optimisticRows: Row<MediaDoc>[] = [];
@@ -666,6 +701,13 @@ export default function MediaPage() {
         <div className="small" style={{ opacity: 0.72, marginTop: 6 }}>
           ファイル選択またはこの枠へドラッグ＆ドロップしてください。選択後にプレビューを確認して保存できます。
         </div>
+        {mediaLimit.limit !== null && (
+          <div className="small" style={{ marginTop: 6, color: !mediaLimit.allowed ? "#dc2626" : "#64748b", fontWeight: !mediaLimit.allowed ? 700 : 400 }}>
+            {!mediaLimit.allowed
+              ? `⚠️ プランの上限に達しています（${mediaLimit.current}/${mediaLimit.limit} ファイル）`
+              : `残り ${mediaLimit.limit - mediaLimit.current} / ${mediaLimit.limit} ファイル`}
+          </div>
+        )}
 
         <div style={{ height: 10 }} />
 
@@ -673,9 +715,10 @@ export default function MediaPage() {
 
           <input
             type="file"
-            accept="image/*"
+            accept="image/jpeg,image/png,image/gif,.jpg,.jpeg,.png,.gif"
             multiple
-            disabled={!siteId || uploading}
+            disabled={!siteId || uploading || !mediaLimit.allowed}
+            title={!mediaLimit.allowed ? `プランの上限に達しています（${mediaLimit.current}/${mediaLimit.limit}）` : undefined}
             onChange={(e) => {
               const files = Array.from(e.target.files || []);
               acceptFiles(files);

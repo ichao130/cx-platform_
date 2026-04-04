@@ -1,7 +1,8 @@
 import React, { Fragment, useEffect, useMemo, useState } from "react";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
-import { collection, deleteDoc, doc, limit, onSnapshot, orderBy, query, setDoc, where } from "firebase/firestore";
+import { collection, doc, limit, onSnapshot, orderBy, query, setDoc, where } from "firebase/firestore";
 import { db, apiPostJson } from "../firebase";
+import { usePlanLimit } from "../hooks/usePlanLimit";
 import { uploadMediaToWorkspace } from "../lib/media";
 
 type RoleKey = 'owner' | 'admin' | 'member' | 'viewer';
@@ -176,6 +177,9 @@ function setSelectedWorkspaceId(workspaceId: string, uid?: string) {
 export default function WorkspacesPage() {
   const [rows, setRows] = useState<Array<{ id: string; data: Workspace }>>([]);
   const [selectedWorkspaceId, setSelectedWorkspaceIdState] = useState('');
+  // 選択中 or 最初のWSのIDでプランチェック（空だとフックが動かないため）
+  const limitCheckWsId = selectedWorkspaceId || rows[0]?.id || '';
+  const workspaceLimit = usePlanLimit(limitCheckWsId, "workspaces");
   const [currentUid, setCurrentUid] = useState('');
 
   const [id, setId] = useState(() => genId('ws'));
@@ -441,8 +445,13 @@ export default function WorkspacesPage() {
         </div>
 
         <div className="page-header__actions">
-          <button className="btn btn--primary" onClick={openCreateModal}>
-            新規ワークスペース
+          <button
+            className="btn btn--primary"
+            onClick={openCreateModal}
+            disabled={!workspaceLimit.allowed}
+            title={!workspaceLimit.allowed ? `プランの上限に達しています（${workspaceLimit.current}/${workspaceLimit.limit}）` : undefined}
+          >
+            新規ワークスペース{workspaceLimit.limit !== null ? ` (${workspaceLimit.current}/${workspaceLimit.limit})` : ""}
           </button>
         </div>
       </div>
@@ -531,13 +540,6 @@ export default function WorkspacesPage() {
                       <span style={{ width: 8, display: 'inline-block' }} />
                       <button className="btn" onClick={() => openEditModal(r)}>
                         編集
-                      </button>
-                      <span style={{ width: 8, display: 'inline-block' }} />
-                      <button className="btn btn--danger" onClick={() => {
-                        if (!window.confirm(`ワークスペース「${r.data?.name || r.id}」を削除しますか？\nメンバー・サイト情報は残ります。`)) return;
-                        deleteDoc(doc(db, 'workspaces', r.id));
-                      }}>
-                        削除
                       </button>
                     </td>
                   </tr>

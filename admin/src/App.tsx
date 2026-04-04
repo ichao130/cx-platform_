@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, NavLink, Navigate } from "react-router-dom";
 import AppRoutes from "./routes";
+import AnnouncementToast from "./components/AnnouncementToast";
 
 import { auth, googleProvider, db } from "./firebase";
 import {
@@ -232,7 +233,6 @@ function SidebarLink({
 
 const PLATFORM_ADMIN_EMAIL = "iwatanabe@branberyheag.com";
 const PLATFORM_ADMIN_ONLY_PATH_PREFIXES = [
-  "/plans",
   "/ops/invoices",
   "/ops/stripe-sync",
   "/ops/billing-admin",
@@ -546,7 +546,6 @@ function AppShell({ children }: { children: React.ReactNode }) {
             {(isPlatformAdmin || canShow(canAccess, "workspaces")) && <SidebarLink to="/workspaces">ワークスペース</SidebarLink>}
             {canShow(canAccess, "members") && <SidebarLink to="/workspace/members">メンバー</SidebarLink>}
             {canShow(canAccess, "billing") && <SidebarLink to="/workspace/billing">契約 / Billing</SidebarLink>}
-            {isPlatformAdmin ? <SidebarLink to="/plans">Plans / マスタ管理</SidebarLink> : null}
           </div>
         </div>
 
@@ -629,6 +628,32 @@ export function useAuth(): AuthContextValue {
   const v = React.useContext(AuthContext);
   if (!v) throw new Error("useAuth must be used within <AuthGate>");
   return v;
+}
+
+function LoadingScreen({ label = "読み込み中..." }: { label?: string }) {
+  return (
+    <div style={{
+      position: "fixed", inset: 0,
+      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+      background: "linear-gradient(160deg, #f8fafc 0%, #f1f5f9 100%)",
+      gap: 24,
+    }}>
+      <style>{`
+        @keyframes cx-spin { to { transform: rotate(360deg); } }
+        @keyframes cx-fade { 0%,100%{opacity:.3} 50%{opacity:1} }
+      `}</style>
+      <img src="/logo_mokkeda_v1.svg" alt="MOKKEDA" style={{ width: 160, opacity: 0.9 }} />
+      <div style={{
+        width: 36, height: 36, borderRadius: "50%",
+        border: "3px solid #e2e8f0",
+        borderTopColor: "#2563eb",
+        animation: "cx-spin .7s linear infinite",
+      }} />
+      <div style={{ fontSize: 13, color: "#64748b", animation: "cx-fade 1.6s ease-in-out infinite" }}>
+        {label}
+      </div>
+    </div>
+  );
 }
 
 function AuthScreen({
@@ -1065,28 +1090,8 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 
   }, [user, getIdToken, apiFetch, apiPost, logout, workspaceInfo, canAccess]);
 
-  if (checking) {
-    return (
-      <AuthScreen
-        title="読み込み中..."
-        description="ログイン状態とワークスペース設定を確認しています。MOKKEDA の管理画面を起動する準備をしています。"
-      >
-        <div className="small" style={{ opacity: 0.72 }}>認証状態 / ワークスペース / 権限を順番に初期化しています。</div>
-      </AuthScreen>
-    );
-  }
-
-  if (user && bootstrapping && !workspaceInfo.workspaceId) {
-    return (
-      <AuthScreen
-        title="初期設定を準備しています..."
-        description="初回ログイン時は、ユーザー情報・ワークスペース・オーナー権限を自動で作成しています。ログイン中のアカウントごとにワークスペース選択状態も分けて管理されます。"
-      >
-        <div className="small" style={{ opacity: 0.72 }}>
-          あと少しで管理画面が利用できます。ワークスペースの土台を自動で整えています。
-        </div>
-      </AuthScreen>
-    );
+  if (checking || (user && bootstrapping && !workspaceInfo.workspaceId)) {
+    return <LoadingScreen label={bootstrapping ? "ワークスペースを初期化しています..." : "読み込み中..."} />;
   }
 
   if (!user || !ctxValue) {
@@ -1159,6 +1164,7 @@ export default function App() {
         {/* platform-admin only: plans, 請求書関連, Stripe同期, 全workspace横断の請求管理, system settings */}
         <AppRoutesGuarded />
       </AppShell>
+      <AnnouncementToast />
     </AuthGate>
   );
 }
