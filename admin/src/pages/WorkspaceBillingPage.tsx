@@ -135,13 +135,18 @@ export default function WorkspaceBillingPage() {
     return () => window.removeEventListener("cx_admin_workspace_changed", handler);
   }, [currentUid]);
 
-  // ワークスペース一覧（名前表示用）
+  // ワークスペース一覧（名前表示用・自分がメンバーのもののみ）
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, "workspaces"), (snap) => {
+    if (!currentUid) return;
+    const q = query(
+      collection(db, "workspaces"),
+      where(`members.${currentUid}`, "in", ["owner", "admin", "member", "viewer"])
+    );
+    const unsub = onSnapshot(q, (snap) => {
       setWorkspaces(snap.docs.map((d) => ({ id: d.id, name: String(d.data()?.name || d.id) })));
     });
     return unsub;
-  }, []);
+  }, [currentUid]);
 
   const load = useCallback(async () => {
     if (!wsId) return;
