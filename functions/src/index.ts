@@ -38,6 +38,14 @@ app.use(express.json({
   limit: "1mb",
   verify: (req: any, _res, buf) => { req.rawBody = buf; },
 }));
+// Shopify Web Pixel の sendBeacon は text/plain で送ってくるため JSON としてパース
+app.use(express.text({ type: "text/plain", limit: "1mb" }));
+app.use((req: any, _res, next) => {
+  if (typeof req.body === "string") {
+    try { req.body = JSON.parse(req.body); } catch {}
+  }
+  next();
+});
 
 // Firebase Hosting 経由（/api/v1/...）と直接URL（/v1/...）の両方に対応
 app.use((req, _res, next) => {

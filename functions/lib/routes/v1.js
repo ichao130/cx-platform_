@@ -83,7 +83,7 @@ const LogReqSchema = zod_1.z.object({
     action_id: zod_1.z.string().nullable().optional(),
     template_id: zod_1.z.string().nullable().optional(),
     variant_id: zod_1.z.string().nullable().optional(),
-    event: zod_1.z.enum(["impression", "click", "click_link", "close", "conversion", "pageview"]),
+    event: zod_1.z.enum(["impression", "click", "click_link", "close", "conversion", "pageview", "purchase"]),
     url: zod_1.z.string().nullable().optional(),
     path: zod_1.z.string().nullable().optional(),
     ref: zod_1.z.string().nullable().optional(),
@@ -92,6 +92,15 @@ const LogReqSchema = zod_1.z.object({
     utm_source: zod_1.z.string().nullable().optional(),
     utm_medium: zod_1.z.string().nullable().optional(),
     utm_campaign: zod_1.z.string().nullable().optional(),
+    // 購入イベント用（Shopify Web Pixelから送信）
+    revenue: zod_1.z.number().nonnegative().nullable().optional(),
+    order_id: zod_1.z.string().nullable().optional(),
+    currency: zod_1.z.string().max(8).nullable().optional(),
+    items: zod_1.z.array(zod_1.z.object({
+        title: zod_1.z.string().max(200),
+        qty: zod_1.z.number().nonnegative(),
+        price: zod_1.z.number().nonnegative(),
+    })).max(100).nullable().optional(),
 });
 const AiInsightReqSchema = zod_1.z.object({
     site_id: zod_1.z.string().min(1),
@@ -182,6 +191,7 @@ const PlanLimitsSchema = zod_1.z.object({
     members: PlanLimitValueSchema.optional(),
     templates: PlanLimitValueSchema.optional(),
     media: PlanLimitValueSchema.optional(),
+    log_sample_rate: zod_1.z.number().min(0).max(1).optional(), // 0〜1 のログサンプリングレート
 });
 const WorkspaceBillingUpdateReqSchema = zod_1.z.object({
     workspace_id: zod_1.z.string().min(1),
@@ -526,11 +536,14 @@ function defaultPlanLimits() {
         members: null,
         templates: null,
         media: null,
+        log_sample_rate: 1, // デフォルト100%
     };
 }
 function normalizePlanLimits(input) {
     const base = defaultPlanLimits();
-    for (const key of Object.keys(base)) {
+    // カウント制限（整数 or null）
+    const countKeys = ["workspaces", "sites", "scenarios", "actions", "aiInsights", "members", "templates", "media"];
+    for (const key of countKeys) {
         const v = input?.[key];
         if (v === null) {
             base[key] = null;
@@ -538,6 +551,11 @@ function normalizePlanLimits(input) {
         else if (typeof v === "number" && isFinite(v) && v >= 0) {
             base[key] = Math.floor(v);
         }
+    }
+    // log_sample_rate は 0〜1 のfloat
+    const rate = input?.log_sample_rate;
+    if (typeof rate === "number" && isFinite(rate) && rate >= 0 && rate <= 1) {
+        base.log_sample_rate = rate;
     }
     return base;
 }
@@ -556,6 +574,26 @@ async function getEffectiveLimits(wsId) {
     if (planSnap.empty)
         return null;
     return normalizePlanLimits(planSnap.docs[0].data().limits || {});
+}
+/** ワークスペースの有効なログサンプリングレートを返す。特別トライアル中は常に1（100%）。 */
+async function getEffectiveLogSampleRate(wsId) {
+    const db = (0, admin_1.adminDb)();
+    const billingSnap = await db.collection("workspace_billing").doc(wsId).get();
+    const billing = (billingSnap.data() || {});
+    // 特別トライアル中は100%
+    if (billing.access_override_active && billing.access_override_until) {
+        const until = new Date(billing.access_override_until);
+        if (until > new Date())
+            return 1;
+    }
+    const plan = String(billing.plan || "free");
+    const planSnap = await db.collection("plans").where("code", "==", plan).limit(1).get();
+    if (planSnap.empty)
+        return 1;
+    const rate = planSnap.docs[0].data()?.limits?.log_sample_rate;
+    if (typeof rate === "number" && isFinite(rate) && rate >= 0 && rate <= 1)
+        return rate;
+    return 1; // デフォルト100%
 }
 async function countResource(wsId, resource, uid) {
     const db = (0, admin_1.adminDb)();
@@ -2685,6 +2723,7 @@ function registerV1Routes(app) {
                     experiment: s.experiment || null,
                 });
             }
+            const logSampleRate = await getEffectiveLogSampleRate(site.workspaceId);
             return res.json({
                 ok: true,
                 site: {
@@ -2692,6 +2731,7 @@ function registerV1Routes(app) {
                     publicKey: site.publicKey,
                     workspaceId: site.workspaceId,
                 },
+                log_sample_rate: logSampleRate,
                 scenarios,
             });
         }
@@ -2763,22 +2803,34 @@ function registerV1Routes(app) {
                 createdAt: nowIso,
                 updatedAt: nowIso,
             };
+            // 購入イベントの追加フィールド
+            if (event === "purchase") {
+                logPayload.revenue = body.revenue ?? null;
+                logPayload.order_id = body.order_id ?? null;
+                logPayload.currency = body.currency ?? "JPY";
+                logPayload.items = body.items ?? null;
+            }
             await db.collection("logs").add(logPayload);
             // ---- stats_daily (集計) ----
             // 重要: docId に variantId を含めないと A/B が上書きされる
             const statsDocId = `${siteId}__${day}__${scenarioId}__${actionId}__${variantId}__${event}`;
             const statsRef = db.collection("stats_daily").doc(statsDocId);
-            await statsRef.set({
+            const statsPayload = {
                 siteId,
                 day,
                 scenarioId: body.scenario_id ?? null,
                 actionId: body.action_id ?? null,
                 templateId,
-                variantId, // always a string like "A"/"B"/"na"
+                variantId,
                 event,
                 count: firestore_1.FieldValue.increment(1),
                 updatedAt: firestore_1.FieldValue.serverTimestamp(),
-            }, { merge: true });
+            };
+            // 購入イベントは売上合計も加算
+            if (event === "purchase" && typeof body.revenue === "number" && body.revenue >= 0) {
+                statsPayload.revenue_total = firestore_1.FieldValue.increment(body.revenue);
+            }
+            await statsRef.set(statsPayload, { merge: true });
             return res.json({ ok: true });
         }
         catch (e) {

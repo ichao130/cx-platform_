@@ -22,7 +22,7 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
-import { db, apiPostJson } from "../firebase";
+import { db } from "../firebase";
 
 // ---- helpers ----
 function isoDay(d: Date) {
@@ -290,11 +290,6 @@ export default function AnalyticsPage() {
   const [scenarios, setScenarios] = useState<Array<{ id: string; data: any }>>([]);
   const [dateRange, setDateRange] = useState<7 | 14 | 30 | "custom">(14);
 
-  // ---- AI サマリー ----
-  const [aiSummary, setAiSummary] = useState<{ summary: string; bullets: string[]; next: string } | null>(null);
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiError, setAiError] = useState("");
-  const [aiModalOpen, setAiModalOpen] = useState(false);
   const [customFrom, setCustomFrom] = useState<string>(isoDay(daysAgo(13))); // 2週間前
   const [customTo, setCustomTo] = useState<string>(isoDay(new Date()));
 
@@ -342,6 +337,10 @@ export default function AnalyticsPage() {
   // ---- 訪問者ジャーニー ----
   const [journeyLogs, setJourneyLogs] = useState<any[]>([]);
   const [journeyLoading, setJourneyLoading] = useState(false);
+
+  // ---- 購入ログ（売上計測） ----
+  const [purchaseLogs, setPurchaseLogs] = useState<any[]>([]);
+  const [purchaseLoading, setPurchaseLoading] = useState(false);
   const [selectedVid, setSelectedVid] = useState<string | null>(null);
 
   // auth
@@ -445,6 +444,32 @@ export default function AnalyticsPage() {
     }).catch(() => setJourneyLoading(false));
   }, [siteId, effectiveFrom, effectiveTo]);
 
+  // ---- 購入ログ取得（リアルタイム） ----
+  useEffect(() => {
+    if (!siteId) { setPurchaseLogs([]); return; }
+    setPurchaseLoading(true);
+    const since = effectiveFrom.toISOString();
+    const to = effectiveTo.toISOString();
+    const unsub = onSnapshot(
+      query(
+        collection(db, "logs"),
+        where("site_id", "==", siteId),
+        where("event", "==", "purchase"),
+        where("createdAt", ">", since),
+        limit(1000)
+      ),
+      (snap) => {
+        setPurchaseLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((l) => (l.createdAt || "") <= to));
+        setPurchaseLoading(false);
+      },
+      (err) => {
+        console.error("[purchaseLogs] query error:", err);
+        setPurchaseLoading(false);
+      }
+    );
+    return unsub;
+  }, [siteId, effectiveFrom, effectiveTo]);
+
   // ---- stats_daily ----
   useEffect(() => {
     if (!siteId) { setStatRows([]); return; }
@@ -482,6 +507,65 @@ export default function AnalyticsPage() {
   const todayCvCount = useMemo(() => {
     return statRows.filter((r) => r.day === todayStr && r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
   }, [statRows, todayStr]);
+
+  // ---- computed: 売上 ----
+  const totalRevenue = useMemo(() => purchaseLogs.reduce((s, l) => s + (typeof l.revenue === "number" ? l.revenue : 0), 0), [purchaseLogs]);
+  const purchaseCount = useMemo(() => purchaseLogs.length, [purchaseLogs]);
+  const avgOrderValue = useMemo(() => purchaseCount > 0 ? totalRevenue / purchaseCount : 0, [totalRevenue, purchaseCount]);
+
+  // シナリオ別売上（vid紐付けによるラストタッチ帰属）
+  const revenueByScenario = useMemo(() => {
+    if (!purchaseLogs.length || !journeyLogs.length) return [];
+    // vid → 最後に見たシナリオIDを特定
+    const vidToScenario = new Map<string, string>();
+    const sorted = [...journeyLogs]
+      .filter((l) => l.event === "impression" && l.scenario_id)
+      .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+    for (const l of sorted) {
+      if (l.vid) vidToScenario.set(l.vid, l.scenario_id);
+    }
+    const map = new Map<string, { name: string; revenue: number; count: number }>();
+    for (const purchase of purchaseLogs) {
+      const scenarioId = vidToScenario.get(purchase.vid || "") || null;
+      const key = scenarioId || "__none__";
+      const sc = scenarios.find((s) => s.id === scenarioId);
+      const name = sc ? String(sc.data?.name || sc.id) : "（施策なし）";
+      if (!map.has(key)) map.set(key, { name, revenue: 0, count: 0 });
+      const entry = map.get(key)!;
+      entry.revenue += typeof purchase.revenue === "number" ? purchase.revenue : 0;
+      entry.count++;
+    }
+    return Array.from(map.values()).sort((a, b) => b.revenue - a.revenue);
+  }, [purchaseLogs, journeyLogs, scenarios]);
+
+  // ---- computed: 商品別売上（施策帰属付き） ----
+  const revenueByProduct = useMemo(() => {
+    // vid → 最後に接触した施策ID
+    const vidToScenario = new Map<string, string>();
+    const sorted = [...journeyLogs].sort((a, b) => (a.createdAt || "") < (b.createdAt || "") ? -1 : 1);
+    for (const l of sorted) {
+      if (l.vid && l.scenario_id) vidToScenario.set(l.vid, l.scenario_id);
+    }
+
+    const map = new Map<string, { title: string; qty: number; revenue: number; qtyAttributed: number; revenueAttributed: number }>();
+    for (const log of purchaseLogs) {
+      if (!Array.isArray(log.items)) continue;
+      const isAttributed = !!vidToScenario.get(log.vid || "");
+      for (const item of log.items) {
+        const title = String(item.title || "（不明）");
+        if (!map.has(title)) map.set(title, { title, qty: 0, revenue: 0, qtyAttributed: 0, revenueAttributed: 0 });
+        const entry = map.get(title)!;
+        const itemRevenue = (Number(item.qty) || 0) * (Number(item.price) || 0);
+        entry.qty += Number(item.qty) || 0;
+        entry.revenue += itemRevenue;
+        if (isAttributed) {
+          entry.qtyAttributed += Number(item.qty) || 0;
+          entry.revenueAttributed += itemRevenue;
+        }
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.revenue - a.revenue);
+  }, [purchaseLogs, journeyLogs]);
 
   // ---- computed: 流入元（utm_source or ref） ----
   const referrerData = useMemo(() => {
@@ -666,68 +750,6 @@ export default function AnalyticsPage() {
     return `${siteDomain}${p}`;
   }
 
-  // ---- シナリオが設定されていないPV上位ページを検出 ----
-  const uncoveredPages = useMemo(() => {
-    if (!pageData.length || !scenarios.length) return [];
-    function scenarioCoversPath(sc: any, path: string): boolean {
-      const u = sc.data?.entry_rules?.page?.url;
-      if (!u?.mode || !u?.value) return false;
-      try {
-        if (u.mode === "equals") return path === u.value;
-        if (u.mode === "prefix") return path.startsWith(u.value);
-        if (u.mode === "contains") return path.includes(u.value);
-        if (u.mode === "regex") return new RegExp(u.value).test(path);
-      } catch {}
-      return false;
-    }
-    const enabledScenarios = scenarios.filter((sc) => sc.data?.enabled !== false);
-    return pageData
-      .filter((p) => !enabledScenarios.some((sc) => scenarioCoversPath(sc, p.path)))
-      .slice(0, 5);
-  }, [pageData, scenarios]);
-
-  // ---- AI サマリーを取得 ----
-  async function runAiSummary() {
-    if (!siteId || aiLoading) return;
-    setAiLoading(true);
-    setAiError("");
-    setAiSummary(null);
-    try {
-      const totalImp = statRows.filter((r) => r.event === "impression").reduce((s, r) => s + safeNum(r.count), 0);
-      const totalClk = statRows.filter((r) => r.event === "click" || r.event === "click_link").reduce((s, r) => s + safeNum(r.count), 0);
-      const totalCv  = statRows.filter((r) => r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
-      const totalClose = statRows.filter((r) => r.event === "close").reduce((s, r) => s + safeNum(r.count), 0);
-
-      const topSrc = referrerData.slice(0, 3).map((r) => `${r.src}(${r.count}PV)`).join(", ");
-      const topPages = pageData.slice(0, 3).map((p) => `${p.path}(${p.count})`).join(", ");
-      const topExit = exitData.slice(0, 2).map((p) => `${p.path}(${p.count})`).join(", ");
-
-      const res = await apiPostJson("/v1/ai/insight", {
-        site_id: siteId,
-        day: isoDay(effectiveTo),
-        scope: "site",
-        scope_id: siteId,
-        metrics: {
-          impressions: totalImp,
-          clicks: totalClk,
-          closes: totalClose,
-          conversions: totalCv,
-        },
-        context: {
-          url_hint: `期間:${dateRangeLabel} PV:${pvLogs.length} UV:${new Set(pvLogs.map((l: any) => l.vid).filter(Boolean)).size} 流入元:${topSrc || "なし"} 人気ページ:${topPages || "なし"} 離脱:${topExit || "なし"}`,
-        },
-      });
-      if (res?.ai) {
-        setAiSummary(res.ai);
-      } else {
-        setAiError("データが少なすぎてAI分析できませんでした。");
-      }
-    } catch (e: any) {
-      setAiError(e?.message || "エラーが発生しました");
-    } finally {
-      setAiLoading(false);
-    }
-  }
 
   return (
     <div style={{ padding: "28px 0 48px" }}>
@@ -818,21 +840,6 @@ export default function AnalyticsPage() {
               </div>
             )}
           </div>
-          {/* AI分析ボタン */}
-          {siteId && (
-            <button
-              className="btn"
-              onClick={() => setAiModalOpen(true)}
-              style={{ position: "relative", background: "linear-gradient(135deg, rgba(37,99,235,.12), rgba(124,58,237,.12))", border: "1px solid rgba(99,102,241,.3)", fontWeight: 700, fontSize: 13, padding: "8px 16px", flexShrink: 0 }}
-            >
-              🤖 AI分析
-              {uncoveredPages.length > 0 && (
-                <span style={{ position: "absolute", top: -6, right: -6, background: "#f59e0b", color: "#fff", fontSize: 10, fontWeight: 800, borderRadius: 99, minWidth: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px" }}>
-                  {uncoveredPages.length}
-                </span>
-              )}
-            </button>
-          )}
         </div>
       </div>
 
@@ -869,74 +876,6 @@ export default function AnalyticsPage() {
 
       {siteId && (
         <>
-          {/* ===== AI分析モーダル ===== */}
-          {aiModalOpen && (
-            <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.45)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
-              onClick={(e) => { if (e.target === e.currentTarget) setAiModalOpen(false); }}>
-              <div className="card" style={{ width: "100%", maxWidth: 560, maxHeight: "85vh", overflowY: "auto", padding: "24px 28px", background: "#fff", borderRadius: 16 }}>
-                {/* モーダルヘッダー */}
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span style={{ fontSize: 22 }}>🤖</span>
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: 15 }}>AI分析</div>
-                      <div className="small" style={{ opacity: 0.6, marginTop: 2 }}>{dateRangeLabel}のデータをもとに分析します</div>
-                    </div>
-                  </div>
-                  <button className="btn" onClick={() => setAiModalOpen(false)} style={{ fontSize: 18, padding: "4px 10px", lineHeight: 1 }}>×</button>
-                </div>
-
-                {/* シナリオ未設定ページ（常時表示） */}
-                {uncoveredPages.length > 0 && (
-                  <div style={{ marginBottom: 20, padding: "12px 14px", background: "rgba(251,191,36,.1)", border: "1px solid rgba(251,191,36,.3)", borderRadius: 10 }}>
-                    <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>⚠️ 流入が多いのにシナリオが未設定のページ</div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      {uncoveredPages.map((p) => (
-                        <div key={p.path} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                          <span className="small" style={{ fontWeight: 600 }}>{p.path}</span>
-                          <span className="small" style={{ opacity: 0.6, flexShrink: 0 }}>{p.count.toLocaleString()} PV</span>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="small" style={{ marginTop: 8, opacity: 0.7 }}>→ シナリオのURL条件でこれらのページを指定すると効果的かもしれません</div>
-                  </div>
-                )}
-
-                {/* AIサマリー */}
-                <button
-                  className="btn"
-                  onClick={runAiSummary}
-                  disabled={aiLoading}
-                  style={{ width: "100%", background: "linear-gradient(135deg, rgba(37,99,235,.1), rgba(124,58,237,.1))", border: "1px solid rgba(99,102,241,.3)", fontWeight: 700, fontSize: 13, padding: "10px", marginBottom: 16 }}
-                >
-                  {aiLoading ? "⏳ 分析中..." : aiSummary ? "🔄 再分析する" : "✨ AIにサマリーを生成してもらう"}
-                </button>
-
-                {aiError && (
-                  <div className="small" style={{ color: "#dc2626", background: "rgba(220,38,38,.08)", padding: "8px 12px", borderRadius: 8, marginBottom: 12 }}>
-                    ⚠️ {aiError}
-                  </div>
-                )}
-
-                {aiSummary && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                    <div style={{ fontWeight: 600, fontSize: 14, lineHeight: 1.7, padding: "12px 14px", background: "rgba(15,23,42,.03)", borderRadius: 10 }}>
-                      📊 {aiSummary.summary}
-                    </div>
-                    <ul style={{ margin: 0, paddingLeft: 20, display: "flex", flexDirection: "column", gap: 8 }}>
-                      {aiSummary.bullets.map((b, i) => (
-                        <li key={i} className="small" style={{ lineHeight: 1.8 }}>{b}</li>
-                      ))}
-                    </ul>
-                    <div style={{ padding: "10px 14px", background: "rgba(99,102,241,.08)", borderRadius: 10, fontSize: 13, fontWeight: 600, lineHeight: 1.7 }}>
-                      💡 次のアクション：{aiSummary.next}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
           {/* ===== Section 1: リアルタイム ===== */}
           <div style={{ marginBottom: 32 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
@@ -968,6 +907,77 @@ export default function AnalyticsPage() {
               )}
             </div>
           </div>
+
+          {/* ===== Section 1.5: 売上計測 ===== */}
+          {(purchaseLogs.length > 0 || purchaseLoading) && (
+            <div style={{ marginBottom: 32 }}>
+              <div className="h2" style={{ marginBottom: 14 }}>
+                💰 売上計測 <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel} · Shopify Web Pixel）</span>
+              </div>
+              {purchaseLoading ? (
+                <div className="card" style={{ padding: 24, textAlign: "center", opacity: 0.5, fontSize: 13 }}>読み込み中…</div>
+              ) : (
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }}>
+                    <StatCard label="売上合計" value={`¥${Math.round(totalRevenue).toLocaleString()}`} sub={`${purchaseCount}件の購入`} accent="#22c55e" />
+                    <StatCard label="平均注文額" value={`¥${Math.round(avgOrderValue).toLocaleString()}`} sub="AOV" accent="#0891b2" />
+                    <StatCard label="購入件数" value={fmtInt(purchaseCount)} sub="ユニーク注文" accent="#7c3aed" />
+                  </div>
+                  {revenueByScenario.length > 0 && (
+                    <div className="card" style={{ padding: 18, background: "#fff" }}>
+                      <div className="small" style={{ fontWeight: 700, marginBottom: 12 }}>施策別売上（ラストタッチ帰属）</div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {revenueByScenario.map((r) => {
+                          const pct = totalRevenue > 0 ? (r.revenue / totalRevenue) * 100 : 0;
+                          return (
+                            <div key={r.name} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                              <div style={{ minWidth: 140, fontSize: 13, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</div>
+                              <div style={{ flex: 1, height: 8, background: "rgba(15,23,42,.07)", borderRadius: 99, overflow: "hidden" }}>
+                                <div style={{ height: "100%", width: `${pct}%`, background: r.name === "（施策なし）" ? "#94a3b8" : "#22c55e", borderRadius: 99, transition: "width .4s ease" }} />
+                              </div>
+                              <div style={{ minWidth: 100, fontSize: 13, fontWeight: 600, textAlign: "right" }}>¥{Math.round(r.revenue).toLocaleString()}</div>
+                              <div style={{ minWidth: 40, fontSize: 12, color: "#94a3b8", textAlign: "right" }}>{r.count}件</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {revenueByProduct.length > 0 && (
+                    <div className="card" style={{ padding: 18, background: "#fff", marginTop: 12 }}>
+                      <div className="small" style={{ fontWeight: 700, marginBottom: 12 }}>🛍️ 商品別売上</div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                        {revenueByProduct.map((r) => {
+                          const maxRev = revenueByProduct[0]?.revenue || 1;
+                          const pct = (r.revenue / maxRev) * 100;
+                          const attrPct = r.qty > 0 ? Math.round((r.qtyAttributed / r.qty) * 100) : 0;
+                          return (
+                            <div key={r.title}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+                                <div style={{ minWidth: 180, fontSize: 13, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.title}</div>
+                                <div style={{ flex: 1, height: 8, background: "rgba(15,23,42,.07)", borderRadius: 99, overflow: "hidden" }}>
+                                  <div style={{ height: "100%", width: `${pct}%`, background: "#f59e0b", borderRadius: 99, transition: "width .4s ease" }} />
+                                </div>
+                                <div style={{ minWidth: 100, fontSize: 13, fontWeight: 600, textAlign: "right" }}>¥{Math.round(r.revenue).toLocaleString()}</div>
+                                <div style={{ minWidth: 50, fontSize: 12, color: "#94a3b8", textAlign: "right" }}>{r.qty}個</div>
+                              </div>
+                              {r.qtyAttributed > 0 && (
+                                <div style={{ marginLeft: 180, display: "flex", gap: 10, fontSize: 11 }}>
+                                  <span style={{ color: "#22c55e", fontWeight: 600 }}>施策経由 {r.qtyAttributed}個 (¥{Math.round(r.revenueAttributed).toLocaleString()})</span>
+                                  {r.qty - r.qtyAttributed > 0 && <span style={{ color: "#94a3b8" }}>直接 {r.qty - r.qtyAttributed}個</span>}
+                                  <span style={{ color: "#94a3b8" }}>施策貢献率 {attrPct}%</span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
 
           {/* ===== Section 1.5: 日別トレンド ===== */}
           <div style={{ marginBottom: 32 }}>

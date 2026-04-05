@@ -131,6 +131,12 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // ── BOオペレーター管理（読み取りは認証済み、書き込みはスーパー管理者のみ）──
+    match /ops_admins/{email} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && request.auth.token.email == "iwatanabe@branberyheag.com";
+    }
+
     // ── お知らせ（認証済みは読める、書き込みはplatform adminのみ）──
     match /announcements/{announcementId} {
       allow read: if isSignedIn();

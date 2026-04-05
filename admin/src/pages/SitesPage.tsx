@@ -108,7 +108,7 @@ export default function SitesPage() {
   const [id, setId] = useState(() => genId('site'));
   const [name, setName] = useState('');
   const [workspaceId, setWorkspaceId] = useState('');
-  const [domainsText, setDomainsText] = useState('https://nurihiro.website');
+  const [domainsText, setDomainsText] = useState('');
   const [publicKey, setPublicKey] = useState('');
 
   const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([]);
@@ -116,6 +116,7 @@ export default function SitesPage() {
   const [error, setError] = useState('');
   const [currentUid, setCurrentUid] = useState('');
   const [copyMessage, setCopyMessage] = useState('');
+  const [copyPixelMessage, setCopyPixelMessage] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [tagMode, setTagMode] = useState<'direct' | 'gtm' | 'shopify'>('direct');
   const [isSaving, setIsSaving] = useState(false);
@@ -294,6 +295,19 @@ export default function SitesPage() {
     setError('');
     setCopyMessage('');
     setIsModalOpen(true);
+  }
+
+  async function copyPixelCode() {
+    const safeSiteId = String(id || '').trim();
+    const code = `analytics.subscribe("checkout_completed", (event) => {\n  const checkout = event.data.checkout;\n  const revenue = parseFloat(String(checkout.totalPrice?.amount || "0")) || 0;\n  const orderId = String(checkout.order?.id || checkout.token || "");\n  const currency = String(checkout.totalPrice?.currencyCode || "JPY");\n  const vid = String(browser.cookie.get("cx_vid") || "");\n  const sid = String(browser.cookie.get("cx_sid_${safeSiteId}") || "");\n  let items = [];\n  try {\n    items = Array.from(checkout.lineItems || []).map((item) => ({\n      title: String(item.title || item.variant?.product?.title || ""),\n      qty: Number(item.quantity) || 1,\n      price: parseFloat(String(item.variant?.price?.amount || "0")) || 0,\n    }));\n  } catch (e) {}\n\n  browser.sendBeacon(\n    "https://asia-northeast1-cx-platform-v1.cloudfunctions.net/api/v1/log",\n    JSON.stringify({\n      site_id: "${safeSiteId}",\n      event: "purchase",\n      revenue: revenue,\n      order_id: orderId,\n      currency: currency,\n      vid: vid,\n      sid: sid,\n      items: items,\n    })\n  );\n});`;
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopyPixelMessage('コピーしました');
+      window.setTimeout(() => setCopyPixelMessage(''), 2000);
+    } catch {
+      setCopyPixelMessage('コピー失敗');
+      window.setTimeout(() => setCopyPixelMessage(''), 2000);
+    }
   }
 
   async function copyEmbedTag() {
@@ -651,7 +665,7 @@ export default function SitesPage() {
                   label="対象ドメイン"
                   value={domainsText}
                   onChange={setDomainsText}
-                  help="このサイトで許可するドメインを1行ずつ入力します。未入力の場合は workspace 側のドメイン設定を利用します。"
+                  help="許可するドメインを1行ずつ入力します（例: https://example.com）。未入力の場合はワークスペースのドメイン設定を引き継ぎます。"
                 />
               </div>
 
@@ -795,6 +809,38 @@ export default function SitesPage() {
 
                   {tagMode === 'shopify' && (
                     <div style={{ marginTop: 16 }}>
+                      {/* ── Web Pixel（売上計測）── */}
+                      <div style={{ marginBottom: 20, padding: '14px 16px', background: 'rgba(34,197,94,.07)', border: '1px solid rgba(34,197,94,.25)', borderRadius: 10 }}>
+                        <div className="small" style={{ fontWeight: 700, marginBottom: 4 }}>
+                          💰 売上計測 — Shopify Web Pixel（推奨）
+                        </div>
+                        <div className="small" style={{ opacity: 0.75, marginBottom: 10 }}>
+                          購入完了時の売上をMOKKEDAに送信します。<br />
+                          Shopify管理画面 → <b>設定 → Customer events → カスタムピクセルを追加</b> に下のコードを貼り付けてください。
+                        </div>
+                        <pre style={{
+                          margin: 0,
+                          padding: '14px',
+                          background: '#1a2a3a',
+                          color: '#e2f0f5',
+                          borderRadius: 10,
+                          fontSize: 12,
+                          lineHeight: 1.75,
+                          overflowX: 'auto',
+                          whiteSpace: 'pre',
+                          userSelect: 'all',
+                          cursor: 'text',
+                          border: '1px solid rgba(255,255,255,.06)',
+                        }}>
+                          {`analytics.subscribe("checkout_completed", (event) => {\n  const checkout = event.data.checkout;\n  const revenue = parseFloat(String(checkout.totalPrice?.amount || "0")) || 0;\n  const orderId = String(checkout.order?.id || checkout.token || "");\n  const currency = String(checkout.totalPrice?.currencyCode || "JPY");\n  const vid = String(browser.cookie.get("cx_vid") || "");\n  const sid = String(browser.cookie.get("cx_sid_${String(id || '').trim()}") || "");\n  let items = [];\n  try {\n    items = Array.from(checkout.lineItems || []).map((item) => ({\n      title: String(item.title || item.variant?.product?.title || ""),\n      qty: Number(item.quantity) || 1,\n      price: parseFloat(String(item.variant?.price?.amount || "0")) || 0,\n    }));\n  } catch (e) {}\n\n  browser.sendBeacon(\n    "https://asia-northeast1-cx-platform-v1.cloudfunctions.net/api/v1/log",\n    JSON.stringify({\n      site_id: "${String(id || '').trim()}",\n      event: "purchase",\n      revenue: revenue,\n      order_id: orderId,\n      currency: currency,\n      vid: vid,\n      sid: sid,\n      items: items,\n    })\n  );\n});`}
+                        </pre>
+                        <div style={{ marginTop: 8, textAlign: 'right' }}>
+                          <button className="btn btn--primary" onClick={copyPixelCode} style={{ fontSize: 12, padding: '5px 14px' }}>
+                            {copyPixelMessage ? `✓ ${copyPixelMessage}` : '📋 コピー'}
+                          </button>
+                        </div>
+                      </div>
+
                       <div className="small" style={{ fontWeight: 700, marginBottom: 6, opacity: 0.9 }}>
                         🛒 カートイベントフック（任意）
                       </div>

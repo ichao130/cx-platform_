@@ -19,8 +19,27 @@ function readSelectedWorkspaceId(uid?: string | null) {
   );
 }
 
+const LS_SITE_KEY = 'cx_admin_site_id';
+function readSelectedSiteId(): string {
+  try { return localStorage.getItem(LS_SITE_KEY) || ''; } catch { return ''; }
+}
+function writeSelectedSiteId(siteId: string) {
+  try {
+    localStorage.setItem(LS_SITE_KEY, siteId);
+    window.dispatchEvent(new CustomEvent('cx_admin_site_changed', { detail: { siteId } }));
+  } catch { /* ignore */ }
+}
+
+type SiteRow = { id: string; data?: { name?: string; workspaceId?: string } };
+
+function siteLabel(site: SiteRow | undefined) {
+  if (!site) return '';
+  return String(site.data?.name || site.id || '');
+}
+
 type TemplateDoc = {
   workspaceId: string;
+  siteId?: string;
   type: 'modal' | 'banner' | 'toast' | 'launcher';
   name: string;
   html: string;
@@ -187,10 +206,12 @@ const DEFAULTS: Record<TemplateDoc['type'], { html: string; css: string }> = {
 export default function TemplatesPage() {
   const [currentUid, setCurrentUid] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<Array<{ id: string; data?: { name?: string } }>>([]);
+  const [sites, setSites] = useState<SiteRow[]>([]);
   const [rows, setRows] = useState<Array<{ id: string; data: TemplateDoc }>>([]);
 
   const [id, setId] = useState(() => genId('tpl'));
   const [workspaceId, setWorkspaceId] = useState('');
+  const [siteId, setSiteId] = useState(() => readSelectedSiteId());
   const templateLimit = usePlanLimit(workspaceId, "templates");
   const [type, setType] = useState<TemplateDoc['type']>('modal');
   const [name, setName] = useState('Default');
@@ -226,7 +247,45 @@ export default function TemplatesPage() {
     return () => window.removeEventListener('cx_admin_workspace_changed', handler);
   }, [currentUid]);
 
-  // テンプレート一覧をリアルタイム取得
+  // サイト一覧をリアルタイム取得
+  useEffect(() => {
+    const q = query(collection(db, 'sites'));
+    return onSnapshot(q, (snap) => {
+      setSites(snap.docs.map((d) => ({ id: d.id, data: d.data() as SiteRow['data'] })));
+    });
+  }, []);
+
+  // ワークスペースに紐づくサイト一覧
+  const visibleSites = useMemo(() => {
+    if (!workspaceId) return sites;
+    return sites.filter((s) => String(s.data?.workspaceId || '') === String(workspaceId));
+  }, [sites, workspaceId]);
+
+  const selectedSite = useMemo(() => visibleSites.find((s) => s.id === siteId), [visibleSites, siteId]);
+  const selectedSiteName = useMemo(() => siteLabel(selectedSite), [selectedSite]);
+
+  // サイト選択が無効になった場合、最初のサイトへ自動切替
+  useEffect(() => {
+    if (!visibleSites.length) { setSiteId(''); return; }
+    const exists = siteId && visibleSites.some((s) => s.id === siteId);
+    if (!exists) {
+      const nextSiteId = visibleSites[0]?.id || '';
+      setSiteId(nextSiteId);
+      if (nextSiteId) writeSelectedSiteId(nextSiteId);
+    }
+  }, [visibleSites, siteId]);
+
+  // サイト変更イベントを受け取る
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const next = (e as CustomEvent)?.detail?.siteId;
+      if (next) setSiteId(next);
+    };
+    window.addEventListener('cx_admin_site_changed', handler);
+    return () => window.removeEventListener('cx_admin_site_changed', handler);
+  }, []);
+
+  // テンプレート一覧をリアルタイム取得（ワークスペース単位で取得し、サイトはメモリフィルタ）
   useEffect(() => {
     if (!workspaceId) { setRows([]); return; }
     const q = query(
@@ -241,14 +300,21 @@ export default function TemplatesPage() {
     );
   }, [workspaceId]);
 
+  // サイトでフィルタリングされた表示用テンプレート
+  // siteId未設定の既存テンプレートはどのサイトでも表示する（後方互換）
+  const filteredRows = useMemo(() => {
+    if (!siteId) return rows;
+    return rows.filter((r) => !r.data.siteId || r.data.siteId === siteId);
+  }, [rows, siteId]);
+
   // タイプ変更で自動適用すべきデフォルトかを判定するヘルパー
   // いずれかのタイプのデフォルト値と完全一致する場合のみデフォルト適用対象とみなす
   const ALL_DEFAULT_CSS = Object.values(DEFAULTS).map((d) => d.css);
   const ALL_DEFAULT_HTML = Object.values(DEFAULTS).map((d) => d.html);
 
   const payload: TemplateDoc = useMemo(
-    () => ({ workspaceId, type, name: name.trim() || 'Template', html, css }),
-    [workspaceId, type, name, html, css]
+    () => ({ workspaceId, siteId: siteId || undefined, type, name: name.trim() || 'Template', html, css }),
+    [workspaceId, siteId, type, name, html, css]
   );
 
   const previewSrcDoc = useMemo(() => {
@@ -271,6 +337,7 @@ export default function TemplatesPage() {
   function openEditModal(row: { id: string; data: TemplateDoc }) {
     setId(row.id);
     setWorkspaceId(row.data.workspaceId);
+    if (row.data.siteId) setSiteId(row.data.siteId);
     setType(row.data.type);
     setName(row.data.name || 'Template');
     // ?? を使い、空文字列も意図的な値として保持する（|| だと空文字→デフォルトに戻ってしまう）
@@ -316,6 +383,33 @@ export default function TemplatesPage() {
         </div>
       </div>
 
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="h2">サイト</div>
+        {visibleSites.length > 0 ? (
+          <select
+            className="input"
+            value={siteId}
+            onChange={(e) => { setSiteId(e.target.value); writeSelectedSiteId(e.target.value); }}
+          >
+            {visibleSites.map((s) => (
+              <option key={s.id} value={s.id}>
+                {siteLabel(s)}{siteLabel(s) !== s.id ? ` (${s.id})` : ''}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <div className="small" style={{ opacity: 0.6 }}>
+            {workspaceId ? 'サイトが登録されていません' : 'ワークスペースを選択してください'}
+          </div>
+        )}
+        {selectedSiteName && (
+          <div className="small" style={{ marginTop: 4, opacity: 0.65 }}>
+            選択中: <b>{selectedSiteName}</b>
+            {siteId && selectedSiteName !== siteId ? <> / <code>{siteId}</code></> : null}
+          </div>
+        )}
+      </div>
+
       <div className="card">
         <div className="list-toolbar">
           <div className="list-toolbar__filters">
@@ -333,7 +427,7 @@ export default function TemplatesPage() {
             <thead>
               <tr>
                 <th>テンプレート</th>
-                <th>ワークスペース</th>
+                <th>サイト</th>
                 <th>表示タイプ</th>
                 <th>テンプレート名</th>
                 <th>詳細</th>
@@ -341,29 +435,36 @@ export default function TemplatesPage() {
               </tr>
             </thead>
             <tbody>
-            {rows.map((r) => (
-              <tr key={r.id}>
-                <td>
-                  <div style={{ fontWeight: 700 }}>{r.data.name || '名称未設定'}</div>
-                  <div className="small" style={{ opacity: 0.72 }}>
-                    ID: <code>{r.id}</code>
-                  </div>
-                </td>
-                <td>
-                  <div>{workspaceLabel(workspaces, r.data.workspaceId)}</div>
-                  <div className="small" style={{ opacity: 0.72 }}>
-                    <code>{r.data.workspaceId}</code>
-                  </div>
-                </td>
-                <td>{r.data.type === 'modal' ? 'モーダル' : r.data.type === 'banner' ? 'バナー' : r.data.type === 'launcher' ? 'ランチャー' : 'トースト'}</td>
-                <td>{r.data.name}</td>
-                <td>
-                  <button className="btn" onClick={() => openEditModal(r)}>編集</button>
-                  <span style={{ width: 8, display: 'inline-block' }} />
-                  <button className="btn btn--danger" onClick={() => deleteDoc(doc(db, 'templates', r.id))}>削除</button>
-                </td>
-              </tr>
-            ))}
+            {filteredRows.map((r) => {
+              const rowSite = sites.find((s) => s.id === r.data.siteId);
+              return (
+                <tr key={r.id}>
+                  <td>
+                    <div style={{ fontWeight: 700 }}>{r.data.name || '名称未設定'}</div>
+                    <div className="small" style={{ opacity: 0.72 }}>
+                      ID: <code>{r.id}</code>
+                    </div>
+                  </td>
+                  <td>
+                    {r.data.siteId ? (
+                      <Fragment>
+                        <div>{siteLabel(rowSite)}</div>
+                        <div className="small" style={{ opacity: 0.72 }}><code>{r.data.siteId}</code></div>
+                      </Fragment>
+                    ) : (
+                      <span className="small" style={{ opacity: 0.5 }}>未設定</span>
+                    )}
+                  </td>
+                  <td>{r.data.type === 'modal' ? 'モーダル' : r.data.type === 'banner' ? 'バナー' : r.data.type === 'launcher' ? 'ランチャー' : 'トースト'}</td>
+                  <td>{r.data.name}</td>
+                  <td>
+                    <button className="btn" onClick={() => openEditModal(r)}>編集</button>
+                    <span style={{ width: 8, display: 'inline-block' }} />
+                    <button className="btn btn--danger" onClick={() => deleteDoc(doc(db, 'templates', r.id))}>削除</button>
+                  </td>
+                </tr>
+              );
+            })}
             </tbody>
           </table>
         </div>
@@ -414,6 +515,28 @@ export default function TemplatesPage() {
                 <div className="small" style={{ opacity: 0.72, marginBottom: 8 }}>
                   ワークスペース: <b>{selectedWorkspaceName || workspaceId || '（未選択）'}</b>
                 </div>
+
+                <div style={{ height: 10 }} />
+                <div className="h2">サイト</div>
+                {visibleSites.length > 0 ? (
+                  <select
+                    className="input"
+                    value={siteId}
+                    onChange={(e) => { setSiteId(e.target.value); writeSelectedSiteId(e.target.value); }}
+                  >
+                    {visibleSites.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {siteLabel(s)}{siteLabel(s) !== s.id ? ` (${s.id})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="small" style={{ opacity: 0.6 }}>サイトが登録されていません</div>
+                )}
+                <div className="small" style={{ marginTop: 4, opacity: 0.65 }}>
+                  テンプレートはサイト単位で管理されます。
+                </div>
+
                 <div style={{ height: 10 }} />
 
                 <div className="row">

@@ -56,12 +56,24 @@
   }
 
   // ------------------ LOGGING (beta) ------------------
+  function setCookieId(key, value) {
+    try {
+      var expires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString();
+      document.cookie = key + "=" + value + "; expires=" + expires + "; path=/; SameSite=Lax";
+    } catch (e) {}
+  }
+
   function getOrCreateId(key) {
     try {
       var v = localStorage.getItem(key);
-      if (v) return v;
+      if (v) {
+        // Shopify Web Pixel がcookieからも読めるよう同期
+        setCookieId(key, v);
+        return v;
+      }
       v = "id_" + Math.random().toString(36).slice(2) + "_" + Date.now();
       localStorage.setItem(key, v);
+      setCookieId(key, v);
       return v;
     } catch (e) {
       return "id_" + Math.random().toString(36).slice(2) + "_" + Date.now();

@@ -20,14 +20,14 @@ function StatusBadge({ status }: { status: string }) {
   return <span style={{ display: "inline-block", padding: "2px 10px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: `${color}22`, color, border: `1px solid ${color}44` }}>{label}</span>;
 }
 
-type NewForm = { type: "workspace" | "account"; target_id: string; target_name: string; expires_at: string; note: string; };
+type NewForm = { type: "workspace" | "account"; target_id: string; target_name: string; expires_at: string; forever: boolean; note: string; };
 
 export default function TrialsPage() {
   const [trials, setTrials] = useState<Trial[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showNew, setShowNew] = useState(false);
-  const [form, setForm] = useState<NewForm>({ type: "workspace", target_id: "", target_name: "", expires_at: "", note: "" });
+  const [form, setForm] = useState<NewForm>({ type: "workspace", target_id: "", target_name: "", expires_at: "", forever: false, note: "" });
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
   const [revoking, setRevoking] = useState<string | null>(null);
@@ -51,12 +51,12 @@ export default function TrialsPage() {
         type: form.type,
         target_id: form.target_id.trim(),
         target_name: form.target_name.trim() || form.target_id.trim(),
-        expires_at: form.expires_at || null,
+        expires_at: form.forever ? null : (form.expires_at || null),
         note: form.note.trim(),
       });
       setSaveMsg("登録しました ✓");
       await load();
-      setTimeout(() => { setShowNew(false); setSaveMsg(""); setForm({ type: "workspace", target_id: "", target_name: "", expires_at: "", note: "" }); }, 800);
+      setTimeout(() => { setShowNew(false); setSaveMsg(""); setForm({ type: "workspace", target_id: "", target_name: "", expires_at: "", forever: false, note: "" }); }, 800);
     } catch (e: any) { setSaveMsg(`エラー: ${e.message}`); }
     finally { setSaving(false); }
   };
@@ -179,8 +179,36 @@ export default function TrialsPage() {
                   style={inputStyle} />
               </div>
               <div>
-                <label style={{ fontSize: 12, opacity: 0.6, display: "block", marginBottom: 5 }}>有効期限（空欄で無期限）</label>
-                <input type="date" value={form.expires_at} onChange={(e) => setForm({ ...form, expires_at: e.target.value })} style={inputStyle} />
+                <label style={{ fontSize: 12, opacity: 0.6, display: "block", marginBottom: 8 }}>有効期限</label>
+                <div style={{ display: "flex", gap: 8, marginBottom: form.forever ? 0 : 8 }}>
+                  {[
+                    { label: "14日", days: 14 },
+                    { label: "30日", days: 30 },
+                    { label: "90日", days: 90 },
+                    { label: "180日", days: 180 },
+                  ].map(({ label, days }) => {
+                    const d = new Date(); d.setDate(d.getDate() + days);
+                    const v = d.toISOString().slice(0, 10);
+                    return (
+                      <button key={days} type="button"
+                        onClick={() => setForm({ ...form, expires_at: v, forever: false })}
+                        style={{ flex: 1, padding: "6px 0", borderRadius: 7, border: `1.5px solid ${!form.forever && form.expires_at === v ? "#3b82f6" : "rgba(255,255,255,.12)"}`, background: !form.forever && form.expires_at === v ? "rgba(59,130,246,.15)" : "rgba(255,255,255,.04)", color: !form.forever && form.expires_at === v ? "#93c5fd" : "rgba(255,255,255,.6)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                        {label}
+                      </button>
+                    );
+                  })}
+                  <button type="button"
+                    onClick={() => setForm({ ...form, forever: true, expires_at: "" })}
+                    style={{ flex: 1, padding: "6px 0", borderRadius: 7, border: `1.5px solid ${form.forever ? "#f59e0b" : "rgba(255,255,255,.12)"}`, background: form.forever ? "rgba(245,158,11,.15)" : "rgba(255,255,255,.04)", color: form.forever ? "#fbbf24" : "rgba(255,255,255,.6)", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                    ♾️ 永久
+                  </button>
+                </div>
+                {!form.forever && (
+                  <input type="date" value={form.expires_at} onChange={(e) => setForm({ ...form, expires_at: e.target.value })} style={inputStyle} />
+                )}
+                {form.forever && (
+                  <div style={{ fontSize: 12, color: "#fbbf24", opacity: 0.8, marginTop: 4 }}>期限なし・永久にアクセス可能</div>
+                )}
               </div>
               <div>
                 <label style={{ fontSize: 12, opacity: 0.6, display: "block", marginBottom: 5 }}>メモ（社内用）</label>

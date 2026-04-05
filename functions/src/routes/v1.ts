@@ -58,7 +58,7 @@ const LogReqSchema = z.object({
   action_id: z.string().nullable().optional(),
   template_id: z.string().nullable().optional(),
   variant_id: z.string().nullable().optional(),
-  event: z.enum(["impression", "click", "click_link", "close", "conversion", "pageview"]),
+  event: z.enum(["impression", "click", "click_link", "close", "conversion", "pageview", "purchase"]),
   url: z.string().nullable().optional(),
   path: z.string().nullable().optional(),
   ref: z.string().nullable().optional(),
@@ -67,6 +67,15 @@ const LogReqSchema = z.object({
   utm_source: z.string().nullable().optional(),
   utm_medium: z.string().nullable().optional(),
   utm_campaign: z.string().nullable().optional(),
+  // 購入イベント用（Shopify Web Pixelから送信）
+  revenue: z.number().nonnegative().nullable().optional(),
+  order_id: z.string().nullable().optional(),
+  currency: z.string().max(8).nullable().optional(),
+  items: z.array(z.object({
+    title: z.string().max(200),
+    qty: z.number().nonnegative(),
+    price: z.number().nonnegative(),
+  })).max(100).nullable().optional(),
 });
 
 const AiInsightReqSchema = z.object({
@@ -175,6 +184,7 @@ const PlanLimitsSchema = z.object({
   members: PlanLimitValueSchema.optional(),
   templates: PlanLimitValueSchema.optional(),
   media: PlanLimitValueSchema.optional(),
+  log_sample_rate: z.number().min(0).max(1).optional(), // 0〜1 のログサンプリングレート
 });
 
 const WorkspaceBillingUpdateReqSchema = z.object({
@@ -566,18 +576,26 @@ function defaultPlanLimits() {
     members: null as number | null,
     templates: null as number | null,
     media: null as number | null,
+    log_sample_rate: 1 as number, // デフォルト100%
   };
 }
 
 function normalizePlanLimits(input: any) {
   const base = defaultPlanLimits();
-  for (const key of Object.keys(base) as Array<keyof typeof base>) {
+  // カウント制限（整数 or null）
+  const countKeys = ["workspaces", "sites", "scenarios", "actions", "aiInsights", "members", "templates", "media"] as const;
+  for (const key of countKeys) {
     const v = input?.[key];
     if (v === null) {
       base[key] = null;
     } else if (typeof v === "number" && isFinite(v) && v >= 0) {
       base[key] = Math.floor(v);
     }
+  }
+  // log_sample_rate は 0〜1 のfloat
+  const rate = input?.log_sample_rate;
+  if (typeof rate === "number" && isFinite(rate) && rate >= 0 && rate <= 1) {
+    base.log_sample_rate = rate;
   }
   return base;
 }
@@ -600,6 +618,24 @@ async function getEffectiveLimits(wsId: string) {
   const planSnap = await db.collection("plans").where("code", "==", plan).limit(1).get();
   if (planSnap.empty) return null;
   return normalizePlanLimits(planSnap.docs[0].data().limits || {});
+}
+
+/** ワークスペースの有効なログサンプリングレートを返す。特別トライアル中は常に1（100%）。 */
+async function getEffectiveLogSampleRate(wsId: string): Promise<number> {
+  const db = adminDb();
+  const billingSnap = await db.collection("workspace_billing").doc(wsId).get();
+  const billing = (billingSnap.data() || {}) as any;
+  // 特別トライアル中は100%
+  if (billing.access_override_active && billing.access_override_until) {
+    const until = new Date(billing.access_override_until);
+    if (until > new Date()) return 1;
+  }
+  const plan = String(billing.plan || "free");
+  const planSnap = await db.collection("plans").where("code", "==", plan).limit(1).get();
+  if (planSnap.empty) return 1;
+  const rate = planSnap.docs[0].data()?.limits?.log_sample_rate;
+  if (typeof rate === "number" && isFinite(rate) && rate >= 0 && rate <= 1) return rate;
+  return 1; // デフォルト100%
 }
 
 async function countResource(wsId: string, resource: LimitKey, uid?: string) {
@@ -3086,6 +3122,8 @@ export function registerV1Routes(app: Express) {
         });
       }
 
+      const logSampleRate = await getEffectiveLogSampleRate(site.workspaceId);
+
       return res.json({
         ok: true,
         site: {
@@ -3093,6 +3131,7 @@ export function registerV1Routes(app: Express) {
           publicKey: site.publicKey,
           workspaceId: site.workspaceId,
         },
+        log_sample_rate: logSampleRate,
         scenarios,
       });
     } catch (e: any) {
@@ -3150,7 +3189,7 @@ export function registerV1Routes(app: Express) {
       const event = body.event;
 
       // ---- raw logs (詳細分析・検証用) ----
-      const logPayload = {
+      const logPayload: Record<string, any> = {
         site_id: siteId,
         scenario_id: body.scenario_id ?? null,
         action_id: body.action_id ?? null,
@@ -3168,6 +3207,13 @@ export function registerV1Routes(app: Express) {
         createdAt: nowIso,
         updatedAt: nowIso,
       };
+      // 購入イベントの追加フィールド
+      if (event === "purchase") {
+        logPayload.revenue = body.revenue ?? null;
+        logPayload.order_id = body.order_id ?? null;
+        logPayload.currency = body.currency ?? "JPY";
+        logPayload.items = body.items ?? null;
+      }
       await db.collection("logs").add(logPayload);
 
       // ---- stats_daily (集計) ----
@@ -3175,20 +3221,22 @@ export function registerV1Routes(app: Express) {
       const statsDocId = `${siteId}__${day}__${scenarioId}__${actionId}__${variantId}__${event}`;
       const statsRef = db.collection("stats_daily").doc(statsDocId);
 
-      await statsRef.set(
-        {
-          siteId,
-          day,
-          scenarioId: body.scenario_id ?? null,
-          actionId: body.action_id ?? null,
-          templateId,
-          variantId, // always a string like "A"/"B"/"na"
-          event,
-          count: FieldValue.increment(1),
-          updatedAt: FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
+      const statsPayload: Record<string, any> = {
+        siteId,
+        day,
+        scenarioId: body.scenario_id ?? null,
+        actionId: body.action_id ?? null,
+        templateId,
+        variantId,
+        event,
+        count: FieldValue.increment(1),
+        updatedAt: FieldValue.serverTimestamp(),
+      };
+      // 購入イベントは売上合計も加算
+      if (event === "purchase" && typeof body.revenue === "number" && body.revenue >= 0) {
+        statsPayload.revenue_total = FieldValue.increment(body.revenue);
+      }
+      await statsRef.set(statsPayload, { merge: true });
 
       return res.json({ ok: true });
     } catch (e: any) {

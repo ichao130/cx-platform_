@@ -10,6 +10,7 @@ const https_1 = require("firebase-functions/v2/https");
 const params_1 = require("firebase-functions/params");
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
+const express_rate_limit_1 = require("express-rate-limit");
 const storage_1 = require("firebase-admin/storage");
 const admin_1 = require("./services/admin");
 // ★ ここ超重要：君のURLは asia-northeast1 なので揃える
@@ -35,16 +36,70 @@ app.use(express_1.default.json({
     limit: "1mb",
     verify: (req, _res, buf) => { req.rawBody = buf; },
 }));
+// Shopify Web Pixel の sendBeacon は text/plain で送ってくるため JSON としてパース
+app.use(express_1.default.text({ type: "text/plain", limit: "1mb" }));
+app.use((req, _res, next) => {
+    if (typeof req.body === "string") {
+        try {
+            req.body = JSON.parse(req.body);
+        }
+        catch { }
+    }
+    next();
+});
 // Firebase Hosting 経由（/api/v1/...）と直接URL（/v1/...）の両方に対応
 app.use((req, _res, next) => {
     if (req.url.startsWith("/api/"))
         req.url = req.url.slice(4); // "/api" を除去
     next();
 });
+/* ──────────────────────────────────────────────────────────
+   レートリミット設定
+   ※ Cloud Functions はインスタンスが複数立ち上がる可能性があるため
+      per-instance の制限になる。グローバル制限が必要な場合は
+      Cloud Armor（GCP WAF）を追加で設定すること。
+────────────────────────────────────────────────────────── */
+// AI系（OpenAI コスト保護）: 1分あたり15リクエスト/IP
+const aiLimiter = (0, express_rate_limit_1.rateLimit)({
+    windowMs: 60 * 1000,
+    max: 15,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    message: { error: "rate_limit_exceeded", message: "Too many requests, please try again later." },
+    skip: (req) => req.method === "OPTIONS",
+});
+// ログ・トラッキング（公開エンドポイント）: 1分あたり60リクエスト/IP
+const logLimiter = (0, express_rate_limit_1.rateLimit)({
+    windowMs: 60 * 1000,
+    max: 60,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    message: { error: "rate_limit_exceeded" },
+    skip: (req) => req.method === "OPTIONS",
+});
+// 一般API（認証あり）: 1分あたり120リクエスト/IP
+const apiLimiter = (0, express_rate_limit_1.rateLimit)({
+    windowMs: 60 * 1000,
+    max: 120,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    message: { error: "rate_limit_exceeded", message: "Too many requests, please try again later." },
+    skip: (req) => req.method === "OPTIONS",
+});
+app.use("/v1/ai/", aiLimiter);
+app.use("/v1/log", logLimiter);
+app.use("/v1/variant", logLimiter);
+app.use("/v1/serve", logLimiter);
+app.use("/v1/", apiLimiter);
 app.get("/", (_req, res) => res.status(200).send("ok"));
 (0, v1_1.registerV1Routes)(app);
 exports.api = (0, https_1.onRequest)({
     region: "asia-northeast1",
+    // コスト爆発防止: インスタンスの最大数を制限
+    maxInstances: 20,
+    // メモリとタイムアウトの上限設定
+    memory: "256MiB",
+    timeoutSeconds: 60,
     secrets: [OPENAI_API_KEY, POSTMARK_SERVER_TOKEN, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, MISOCA_CLIENT_ID, MISOCA_CLIENT_SECRET],
 }, app);
 /**

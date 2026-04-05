@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from "react";
-import { auth, signInWithGoogle, signOutNow, OPS_EMAIL, authReady } from "./firebase";
+import { auth, db, signInWithGoogle, signOutNow, OPS_EMAIL, authReady } from "./firebase";
 import { onAuthStateChanged } from "firebase/auth";
+import { collection, getDocs } from "firebase/firestore";
 import WorkspacesPage from "./pages/WorkspacesPage";
 import TrialsPage from "./pages/TrialsPage";
 import AnnouncementsPage from "./pages/AnnouncementsPage";
 import PlansPage from "./pages/PlansPage";
+import AdminsPage from "./pages/AdminsPage";
 
 const s: Record<string, React.CSSProperties> = {
   layout: { minHeight: "100vh", display: "flex", flexDirection: "column" },
@@ -15,20 +17,47 @@ const s: Record<string, React.CSSProperties> = {
   card: { background: "#1e293b", border: "1px solid rgba(255,255,255,.1)", borderRadius: 16, padding: 40, textAlign: "center", maxWidth: 380, width: "90vw" },
 };
 
-type Page = "workspaces" | "trials" | "announcements" | "plans";
+type Page = "workspaces" | "trials" | "announcements" | "plans" | "admins";
+
+async function loadOpsAdmins(): Promise<string[]> {
+  try {
+    const snap = await getDocs(collection(db, "ops_admins"));
+    return snap.docs.map((d) => d.data().email as string).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
 
 export default function App() {
   const [email, setEmail] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState<Page>("workspaces");
+  const [opsAdmins, setOpsAdmins] = useState<string[]>([]);
 
   useEffect(() => {
-    authReady.then(() => {
-      setEmail(auth.currentUser?.email ?? null);
+    authReady.then(async () => {
+      const u = auth.currentUser;
+      setEmail(u?.email ?? null);
+      if (u?.email) {
+        const admins = await loadOpsAdmins();
+        setOpsAdmins(admins);
+      }
       setLoading(false);
     });
-    return onAuthStateChanged(auth, (u) => setEmail(u?.email ?? null));
+
+    return onAuthStateChanged(auth, async (u) => {
+      setEmail(u?.email ?? null);
+      if (u?.email) {
+        const admins = await loadOpsAdmins();
+        setOpsAdmins(admins);
+      } else {
+        setOpsAdmins([]);
+      }
+    });
   }, []);
+
+  const isSuperAdmin = email === OPS_EMAIL;
+  const isAllowed = isSuperAdmin || opsAdmins.includes(email ?? "");
 
   if (loading) return (
     <div style={s.loginBox}>
@@ -49,7 +78,7 @@ export default function App() {
     </div>
   );
 
-  if (email !== OPS_EMAIL) return (
+  if (!isAllowed) return (
     <div style={s.loginBox}>
       <div style={s.card}>
         <div style={{ fontSize: 32, marginBottom: 12 }}>🚫</div>
@@ -79,6 +108,7 @@ export default function App() {
         <NavBtn id="trials" label="特別トライアル" />
         <NavBtn id="plans" label="プラン管理" />
         <NavBtn id="announcements" label="お知らせ管理" />
+        {isSuperAdmin && <NavBtn id="admins" label="管理者" />}
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 12, opacity: 0.45, marginRight: 12 }}>{email}</span>
         <button onClick={signOutNow} style={{ fontSize: 12, padding: "5px 12px", background: "rgba(255,255,255,.06)", border: "1px solid rgba(255,255,255,.12)", borderRadius: 6, color: "rgba(255,255,255,.6)", cursor: "pointer" }}>
@@ -90,6 +120,7 @@ export default function App() {
         {page === "trials" && <TrialsPage />}
         {page === "plans" && <PlansPage />}
         {page === "announcements" && <AnnouncementsPage />}
+        {page === "admins" && isSuperAdmin && <AdminsPage />}
       </main>
     </div>
   );
