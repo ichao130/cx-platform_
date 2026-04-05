@@ -468,8 +468,8 @@ export default function ScenariosPage() {
   }, [sites, workspaceId]);
 
   const actionsForWorkspace = useMemo(() => {
-    return actions.filter((a) => a.data?.workspaceId === workspaceId);
-  }, [actions, workspaceId]);
+    return actions.filter((a) => a.data?.siteId === siteId);
+  }, [actions, siteId]);
 
   const selectedSite = useMemo(() => visibleSites.find((s) => s.id === siteId), [visibleSites, siteId]);
   const selectedSiteName = useMemo(() => siteLabel(selectedSite), [selectedSite]);

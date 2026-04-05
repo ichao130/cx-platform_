@@ -1112,6 +1112,16 @@
       variant_id: null
     };
 
+    // Shopify カート属性に cx_vid を同期（チェックアウトドメインが異なる場合でも Web Pixel から取得できるよう）
+    try {
+      fetch("/cart/update.js", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ attributes: { _cx_vid: ctx.vid, _cx_sid: ctx.sid } }),
+        credentials: "same-origin"
+      }).catch(function () {});
+    } catch (e) {}
+
     // pageview ログを送信
     postLog(apiBase, {
       site_id: siteId,

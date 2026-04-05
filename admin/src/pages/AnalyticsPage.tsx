@@ -327,9 +327,6 @@ export default function AnalyticsPage() {
   // ---- リアルタイムログ ----
   const [recentLogs, setRecentLogs] = useState<any[]>([]);
 
-  // ---- pageview logs（流入元用） ----
-  const [pvLogs, setPvLogs] = useState<any[]>([]);
-  const [pvLoading, setPvLoading] = useState(false);
 
   // ---- stats_daily（ファネル用） ----
   const [statRows, setStatRows] = useState<any[]>([]);
@@ -404,25 +401,6 @@ export default function AnalyticsPage() {
     });
   }, [siteId]);
 
-  // ---- pageview logs（流入元用） ----
-  useEffect(() => {
-    if (!siteId) { setPvLogs([]); return; }
-    setPvLoading(true);
-    const since = effectiveFrom.toISOString();
-    getDocs(
-      query(
-        collection(db, "logs"),
-        where("site_id", "==", siteId),
-        where("event", "==", "pageview"),
-        where("createdAt", ">", since),
-        limit(2000)
-      )
-    ).then((snap) => {
-      const to = effectiveTo.toISOString();
-      setPvLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((l) => (l.createdAt || "") <= to));
-      setPvLoading(false);
-    }).catch(() => setPvLoading(false));
-  }, [siteId, effectiveFrom, effectiveTo]);
 
   // ---- 訪問者ジャーニー用ログ（全イベント取得） ----
   useEffect(() => {
@@ -492,6 +470,9 @@ export default function AnalyticsPage() {
       setStatRows(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
     });
   }, [siteId, effectiveFrom, effectiveTo]);
+
+  // pvLogs は journeyLogs から派生（pageview のみ）
+  const pvLogs = useMemo(() => journeyLogs.filter((l: any) => l.event === "pageview"), [journeyLogs]);
 
   // ---- computed: リアルタイム ----
   const activeVisitors = useMemo(() => {
@@ -923,6 +904,27 @@ export default function AnalyticsPage() {
                     <StatCard label="平均注文額" value={`¥${Math.round(avgOrderValue).toLocaleString()}`} sub="AOV" accent="#0891b2" />
                     <StatCard label="購入件数" value={fmtInt(purchaseCount)} sub="ユニーク注文" accent="#7c3aed" />
                   </div>
+                  {/* デバッグ: 購入ログのvid確認 */}
+                  <details style={{ marginBottom: 10 }}>
+                    <summary style={{ fontSize: 11, color: "#94a3b8", cursor: "pointer" }}>🔍 デバッグ情報（帰属が出ない場合はここを確認）</summary>
+                    <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12, marginTop: 6, fontSize: 11, fontFamily: "monospace" }}>
+                      <div style={{ fontWeight: 700, marginBottom: 6 }}>📦 直近の購入ログ（vid が空なら cookie未取得）</div>
+                      {purchaseLogs.slice(0, 5).map((l, i) => (
+                        <div key={i} style={{ marginBottom: 4, color: l.vid ? "#16a34a" : "#dc2626" }}>
+                          {l.vid ? "✅" : "❌"} vid: <b>{l.vid || "（空）"}</b> / order: {l.order_id || "—"} / {String(l.createdAt || "").slice(0, 16)}
+                        </div>
+                      ))}
+                      <div style={{ fontWeight: 700, margin: "10px 0 6px" }}>📺 直近のimpression（scenario_id必須）</div>
+                      {journeyLogs.filter((l: any) => l.event === "impression" && l.scenario_id).slice(0, 5).map((l: any, i: number) => (
+                        <div key={i} style={{ marginBottom: 4, color: "#0891b2" }}>
+                          vid: <b>{l.vid || "（空）"}</b> / scenario: {l.scenario_id}
+                        </div>
+                      ))}
+                      {journeyLogs.filter((l: any) => l.event === "impression" && l.scenario_id).length === 0 && (
+                        <div style={{ color: "#dc2626" }}>❌ impressionログなし（シナリオが表示されていないか、ログが取れていない）</div>
+                      )}
+                    </div>
+                  </details>
                   {revenueByScenario.length > 0 && (
                     <div className="card" style={{ padding: 18, background: "#fff" }}>
                       <div className="small" style={{ fontWeight: 700, marginBottom: 12 }}>施策別売上（ラストタッチ帰属）</div>
@@ -985,7 +987,7 @@ export default function AnalyticsPage() {
               日別トレンド <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel}）</span>
             </div>
 
-            {pvLoading ? (
+            {journeyLoading ? (
               <div className="card" style={{ padding: 24, textAlign: "center", opacity: 0.5, fontSize: 13 }}>読み込み中…</div>
             ) : (
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
@@ -1040,7 +1042,7 @@ export default function AnalyticsPage() {
             )}
 
             {/* 施策別CVトレンド（シナリオがある場合） */}
-            {!pvLoading && scenarios.length > 0 && (
+            {!journeyLoading && scenarios.length > 0 && (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
                 {scenarios.slice(0, 4).map((sc) => {
                   const scTrend = dailyTrend.map((d) => {
@@ -1084,7 +1086,7 @@ export default function AnalyticsPage() {
                   <div className="small" style={{ fontWeight: 700 }}>🔀 流入元</div>
                   <div className="small" style={{ opacity: 0.5, marginTop: 2 }}>utm_source またはリファラー</div>
                 </div>
-                {pvLoading ? (
+                {journeyLoading ? (
                   <div className="small" style={{ opacity: 0.55 }}>読み込み中...</div>
                 ) : referrerData.length === 0 ? (
                   <div className="small" style={{ opacity: 0.55 }}>データなし</div>
@@ -1103,7 +1105,7 @@ export default function AnalyticsPage() {
                   <div className="small" style={{ fontWeight: 700 }}>🚪 離脱ページ</div>
                   <div className="small" style={{ opacity: 0.5, marginTop: 2 }}>セッションの最後に見たページ</div>
                 </div>
-                {pvLoading ? (
+                {journeyLoading ? (
                   <div className="small" style={{ opacity: 0.55 }}>読み込み中...</div>
                 ) : exitData.length === 0 ? (
                   <div className="small" style={{ opacity: 0.55 }}>データなし</div>
@@ -1122,7 +1124,7 @@ export default function AnalyticsPage() {
                   <div className="small" style={{ fontWeight: 700 }}>📄 よく見られたページ</div>
                   <div className="small" style={{ opacity: 0.5, marginTop: 2 }}>PV数の多い順</div>
                 </div>
-                {pvLoading ? (
+                {journeyLoading ? (
                   <div className="small" style={{ opacity: 0.55 }}>読み込み中...</div>
                 ) : pageData.length === 0 ? (
                   <div className="small" style={{ opacity: 0.55 }}>データなし</div>
