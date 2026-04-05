@@ -1,2 +1,7 @@
 node_modules
 .env.local
+
+# ビルド成果物
+public/assets/
+public/ops/assets/
+.firebase/
