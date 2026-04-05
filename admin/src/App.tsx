@@ -962,7 +962,6 @@ function AuthGate({ children }: { children: React.ReactNode }) {
             domains: [],
             defaults: {
               ai: { decision: false, discovery: "suggest", copy: "approve" },
-              log_sample_rate: 1,
               access: defaultAccessMatrix(),
             },
             members: {

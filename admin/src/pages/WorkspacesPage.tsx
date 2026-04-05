@@ -30,7 +30,6 @@ type Workspace = {
   };
   defaults?: {
     ai?: { decision?: boolean; discovery?: 'suggest' | 'off'; copy?: 'approve' | 'auto' };
-    log_sample_rate?: number;
     access?: Record<RoleKey, Partial<Record<AccessKey, boolean>>>;
   };
   createdAt?: any;
@@ -191,7 +190,6 @@ export default function WorkspacesPage() {
   const [decision, setDecision] = useState(false);
   const [discovery, setDiscovery] = useState<'suggest' | 'off'>('suggest');
   const [copyMode, setCopyMode] = useState<'approve' | 'auto'>('approve');
-  const [logSampleRate, setLogSampleRate] = useState(1);
   const [accessMatrix, setAccessMatrix] = useState(() => defaultAccessMatrix());
   const [error, setError] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -294,7 +292,6 @@ export default function WorkspacesPage() {
     setDecision(false);
     setDiscovery('suggest');
     setCopyMode('approve');
-    setLogSampleRate(1);
     setAccentColor('#2563eb');
     setAccessMatrix(defaultAccessMatrix());
     setError('');
@@ -318,7 +315,6 @@ export default function WorkspacesPage() {
     setDecision(!!row.data.defaults?.ai?.decision);
     setDiscovery((row.data.defaults?.ai?.discovery as any) || 'suggest');
     setCopyMode((row.data.defaults?.ai?.copy as any) || 'approve');
-    setLogSampleRate(Number(row.data.defaults?.log_sample_rate ?? 1));
     setAccessMatrix(normalizeAccessMatrix(row.data.defaults?.access));
     setAccentColor(String(row.data.theme?.accent || row.data.accentColor || '#2563eb'));
     setError('');
@@ -413,7 +409,6 @@ export default function WorkspacesPage() {
       domains: safeDomains,
       defaults: {
         ai: { decision, discovery, copy: copyMode },
-        log_sample_rate: Number.isFinite(Number(logSampleRate)) ? Number(logSampleRate) : 1,
         access: accessMatrix,
       },
       updatedAt: new Date(),
@@ -448,10 +443,12 @@ export default function WorkspacesPage() {
           <button
             className="btn btn--primary"
             onClick={openCreateModal}
-            disabled={!workspaceLimit.allowed}
-            title={!workspaceLimit.allowed ? `プランの上限に達しています（${workspaceLimit.current}/${workspaceLimit.limit}）` : undefined}
+            disabled={workspaceLimit.loading || !workspaceLimit.allowed}
+            title={!workspaceLimit.allowed && !workspaceLimit.loading ? `プランの上限に達しています（${workspaceLimit.current}/${workspaceLimit.limit}）` : undefined}
           >
-            新規ワークスペース{workspaceLimit.limit !== null ? ` (${workspaceLimit.current}/${workspaceLimit.limit})` : ""}
+            {workspaceLimit.loading
+              ? "確認中…"
+              : `新規ワークスペース${workspaceLimit.limit !== null ? ` (${workspaceLimit.current}/${workspaceLimit.limit})` : ""}`}
           </button>
         </div>
       </div>
@@ -515,7 +512,6 @@ export default function WorkspacesPage() {
                     </td>
                     <td>
                       <div className="small" style={{ display: 'grid', gap: 4 }}>
-                        <div>ログ率: <b>{Number(r.data.defaults?.log_sample_rate ?? 1)}</b></div>
                       </div>
                     </td>
                     <td>
@@ -743,11 +739,6 @@ export default function WorkspacesPage() {
               </div>
 
               <div style={{ flex: 1, minWidth: 280 }}>
-                <div className="h2">ログ取得サンプル率</div>
-                <div className="small" style={{ marginBottom: 6, opacity: 0.7 }}>アクセスのうち何割をログに記録するか（1 = 全件、0.1 = 10%のみ）。トラフィックが多いサイトでは下げるとコスト削減になります。</div>
-                <input className="input" type="number" min="0" max="1" step="0.1" value={logSampleRate} onChange={(e) => setLogSampleRate(Number(e.target.value))} />
-                <div style={{ height: 14 }} />
-
                 <div className="h2">ロールごとの表示権限</div>
                 <div className="small" style={{ marginBottom: 8 }}>
                   オーナー / 管理者 / メンバー / 閲覧者のそれぞれが、どの画面を見られるかをここで決めます。

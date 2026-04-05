@@ -24,18 +24,31 @@ export function usePlanLimit(workspaceId: string, resource: LimitResource): Plan
   useEffect(() => {
     if (!workspaceId) return;
     let cancelled = false;
-    setState((s) => ({ ...s, loading: true }));
-    apiPostJson<{ ok: boolean; allowed: boolean; current: number; limit: number | null }>(
-      "/v1/check-can-create",
-      { workspace_id: workspaceId, resource }
-    )
-      .then((res) => {
-        if (!cancelled) setState({ allowed: res.allowed, current: res.current, limit: res.limit, loading: false });
-      })
-      .catch(() => {
-        if (!cancelled) setState({ allowed: true, current: 0, limit: null, loading: false });
-      });
-    return () => { cancelled = true; };
+
+    const fetch = () => {
+      setState((s) => ({ ...s, loading: true }));
+      apiPostJson<{ ok: boolean; allowed: boolean; current: number; limit: number | null }>(
+        "/v1/check-can-create",
+        { workspace_id: workspaceId, resource }
+      )
+        .then((res) => {
+          if (!cancelled) setState({ allowed: res.allowed, current: res.current, limit: res.limit, loading: false });
+        })
+        .catch(() => {
+          if (!cancelled) setState({ allowed: true, current: 0, limit: null, loading: false });
+        });
+    };
+
+    fetch();
+
+    // ウィンドウフォーカス時に再取得（特別トライアル付与後などに即反映）
+    const onFocus = () => { if (!cancelled) fetch(); };
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onFocus);
+    };
   }, [workspaceId, resource]);
 
   return state;

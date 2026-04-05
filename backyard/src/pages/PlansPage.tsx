@@ -12,6 +12,7 @@ type PlanLimits = {
   members: number | null;
   templates: number | null;
   media: number | null;
+  log_sample_rate: number; // 0〜1 (1 = 100%)
 };
 
 type Plan = {
@@ -45,6 +46,7 @@ const LIMIT_LABELS: { key: keyof PlanLimits; label: string }[] = [
 const emptyLimits = (): PlanLimits => ({
   workspaces: null, sites: null, scenarios: null, actions: null,
   aiInsights: null, members: null, templates: null, media: null,
+  log_sample_rate: 1,
 });
 
 type FormState = {
@@ -184,6 +186,9 @@ export default function PlansPage() {
                           {label}: <strong style={{ color: p.limits[key] === null ? "#4ade80" : "#e2e8f0" }}>{limitDisplay(p.limits[key])}</strong>
                         </span>
                       ))}
+                      <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                        ログサンプリング: <strong style={{ color: "#e2e8f0" }}>{Math.round((p.limits.log_sample_rate ?? 1) * 100)}%</strong>
+                      </span>
                     </div>
                   </div>
                   <button onClick={() => openEdit(p)} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid rgba(255,255,255,.15)", background: "rgba(255,255,255,.06)", color: "#e2e8f0", cursor: "pointer", fontSize: 12, flexShrink: 0 }}>
@@ -273,6 +278,24 @@ export default function PlansPage() {
                     </div>
                   ))}
                 </div>
+              </div>
+
+              {/* ログサンプリングレート */}
+              <div>
+                <label style={{ fontSize: 12, opacity: 0.6, display: "block", marginBottom: 5 }}>ログサンプリングレート（0〜1、1 = 100%）</label>
+                <input
+                  value={form.limits.log_sample_rate}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value);
+                    setForm((f) => ({ ...f, limits: { ...f.limits, log_sample_rate: isNaN(v) ? 1 : Math.min(1, Math.max(0, v)) } }));
+                  }}
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.1}
+                  style={inputStyle}
+                />
+                <div style={{ fontSize: 11, opacity: 0.45, marginTop: 4 }}>例: 1 = 全件、0.5 = 50%、0.1 = 10%。特別トライアル中は常に100%。</div>
               </div>
             </div>
 

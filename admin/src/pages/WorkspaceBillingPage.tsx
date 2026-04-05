@@ -53,6 +53,7 @@ type PlanMaster = {
   description?: string;
   active: boolean;
   price_monthly: number;
+  log_sample_rate?: number; // ログサンプリングレート（0〜1）
 };
 
 const CODE_COLOR: Record<string, string> = {
@@ -176,7 +177,7 @@ export default function WorkspaceBillingPage() {
       const list: PlanMaster[] = snap.docs
         .map((d) => {
           const p = d.data() as any;
-          return { id: d.id, code: p.code || d.id, name: p.name || d.id, description: p.description || "", active: true, price_monthly: Number(p.price_monthly || 0) };
+          return { id: d.id, code: p.code || d.id, name: p.name || d.id, description: p.description || "", active: true, price_monthly: Number(p.price_monthly || 0), log_sample_rate: typeof p.limits?.log_sample_rate === "number" ? p.limits.log_sample_rate : 1 };
         })
         .sort((a, b) => a.price_monthly - b.price_monthly);
       setPlanMasterList(list);
@@ -307,6 +308,15 @@ export default function WorkspaceBillingPage() {
                   {billing.access_override_note && <span style={{ fontWeight: 400, marginLeft: 8 }}>— {billing.access_override_note}</span>}
                 </div>
               )}
+              {(() => {
+                const master = planMasterList.find((p) => p.code === planCode);
+                const rate = billing.access_override_active ? 1 : (master?.log_sample_rate ?? 1);
+                return (
+                  <div style={{ marginTop: 12, fontSize: 13, color: "#64748b" }}>
+                    ログサンプリングレート: <b style={{ color: "#1e293b" }}>{Math.round(rate * 100)}%</b>
+                  </div>
+                );
+              })()}
             </div>
           </div>
 
