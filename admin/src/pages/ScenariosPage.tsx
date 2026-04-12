@@ -347,11 +347,12 @@ export default function ScenariosPage() {
   const [toast, setToast] = useState<{ msg: string; type: "success" | "error" } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
 
-  // entry rules (URL)
-  const [urlEnabled, setUrlEnabled] = useState(false);
-  const [urlMode, setUrlMode] = useState<"contains" | "equals" | "prefix" | "regex">("contains");
-  const [urlValue, setUrlValue] = useState("/products/");
-  const [urlTarget, setUrlTarget] = useState<"url" | "path">("path");
+  // entry rules (URL) - 複数条件対応
+  const [urlRules, setUrlRules] = useState<Array<{ mode: "contains" | "equals" | "prefix" | "regex"; value: string; target: "url" | "path" }>>([]);
+
+  // 配信頻度
+  const [displayUnit, setDisplayUnit] = useState<"pageview" | "session" | "user">("pageview");
+  const [displayInterval, setDisplayInterval] = useState<1 | 3 | 5>(1);
 
   useEffect(() => {
     if (!currentUid) { setSites([]); return; }
@@ -468,8 +469,11 @@ export default function ScenariosPage() {
   }, [sites, workspaceId]);
 
   const actionsForWorkspace = useMemo(() => {
-    return actions.filter((a) => a.data?.siteId === siteId);
-  }, [actions, siteId]);
+    return actions.filter((a) =>
+      a.data?.siteId === siteId &&
+      (!a.data?.workspaceId || a.data?.workspaceId === workspaceId)
+    );
+  }, [actions, siteId, workspaceId]);
 
   const selectedSite = useMemo(() => visibleSites.find((s) => s.id === siteId), [visibleSites, siteId]);
   const selectedSiteName = useMemo(() => siteLabel(selectedSite), [selectedSite]);
@@ -478,6 +482,8 @@ export default function ScenariosPage() {
   }, [visibleSites, workspaceId]);
 
   useEffect(() => {
+    // loadScenario 直後は siteId を上書きしない（シナリオのサイトを保持）
+    if (loadingBaseRef.current) return;
     if (!visibleSites.length) {
       setSiteId("");
       return;
@@ -507,10 +513,7 @@ export default function ScenariosPage() {
   const entry_rules = useMemo(
     () => ({
       page: {
-        page_type_in: pageTypeIn,
-        url: urlEnabled
-          ? { mode: urlMode, value: String(urlValue || "").trim(), target: urlTarget }
-          : undefined,
+        urls: urlRules.length > 0 ? urlRules.map((r) => ({ ...r, value: r.value.trim() })).filter((r) => r.value) : undefined,
       },
       behavior: triggerType === 'cart_add'
         ? { stay_gte_sec: 0 }
@@ -524,8 +527,11 @@ export default function ScenariosPage() {
             type: triggerType === 'scroll' ? "scroll" : "stay",
             ms: Number(staySec) * 1000,
           },
+      display: (displayUnit === "pageview" && displayInterval === 1)
+        ? undefined  // デフォルト（毎回）は保存しない
+        : { unit: displayUnit, interval: displayInterval },
     }),
-    [pageTypeIn, staySec, scrollDepthPct, triggerType, urlEnabled, urlMode, urlValue, urlTarget]
+    [pageTypeIn, staySec, scrollDepthPct, triggerType, urlRules, displayUnit, displayInterval]
   );
 
 
@@ -792,10 +798,10 @@ export default function ScenariosPage() {
     ]);
     setVariantIdToEdit("A");
 
-    setUrlEnabled(false);
-    setUrlMode("contains");
-    setUrlValue("/products/");
-    setUrlTarget("path");
+    setUrlRules([]);
+
+    setDisplayUnit("pageview");
+    setDisplayInterval(1);
 
     setScheduleEnabled(false);
     setScheduleStart("");
@@ -865,17 +871,24 @@ export default function ScenariosPage() {
 
     setActionRefs(reorder(normalizeActionRefs(s.actionRefs)));
 
-    const u = s.entry_rules?.page?.url;
-    if (u?.mode && u?.value) {
-      setUrlEnabled(true);
-      setUrlMode(u.mode);
-      setUrlValue(String(u.value || ""));
-      setUrlTarget(u.target === "url" ? "url" : "path");
+    const savedUrls = s.entry_rules?.page?.urls;
+    const savedUrl = s.entry_rules?.page?.url;
+    if (Array.isArray(savedUrls) && savedUrls.length > 0) {
+      setUrlRules(savedUrls.map((u: any) => ({ mode: u.mode || "prefix", value: String(u.value || ""), target: u.target === "url" ? "url" : "path" })));
+    } else if (savedUrl?.mode && savedUrl?.value) {
+      setUrlRules([{ mode: savedUrl.mode, value: String(savedUrl.value || ""), target: savedUrl.target === "url" ? "url" : "path" }]);
     } else {
-      setUrlEnabled(false);
-      setUrlMode("contains");
-      setUrlValue("/products/");
-      setUrlTarget("path");
+      setUrlRules([]);
+    }
+
+    // 配信頻度
+    const disp = (s.entry_rules as any)?.display;
+    if (disp?.unit) {
+      setDisplayUnit(disp.unit);
+      setDisplayInterval(disp.interval === 3 ? 3 : disp.interval === 5 ? 5 : 1);
+    } else {
+      setDisplayUnit("pageview");
+      setDisplayInterval(1);
     }
 
     // schedule
@@ -1190,7 +1203,7 @@ export default function ScenariosPage() {
                 <button className="btn" onClick={() => {
                   if (isDirty && !window.confirm("保存されていない変更があります。閉じますか？")) return;
                   setIsModalOpen(false);
-                }}>閉じる</button>
+                }}>✕ 閉じる</button>
               </div>
             </div>
 
@@ -1256,8 +1269,23 @@ export default function ScenariosPage() {
                 <div style={{ height: 14 }} />
                 <div className="h2">アクション設定（通常配信）</div>
                 <div className="small" style={{ opacity: 0.72, marginBottom: 8 }}>
-                  A/Bテストは「③ 誰に表示？」で設定できます。
+                  表示するアクション（モーダル・バナーなど）を追加してください。A/Bテストは「③ 誰に表示？」で設定できます。
                 </div>
+                {/* デバッグ: siteIdとアクション確認 */}
+                <details style={{ marginBottom: 8 }}>
+                  <summary className="small" style={{ cursor: "pointer", color: "#94a3b8" }}>🔍 デバッグ</summary>
+                  <div style={{ fontSize: 11, fontFamily: "monospace", background: "#f8fafc", padding: 8, borderRadius: 6, marginTop: 4 }}>
+                    <div>siteId: <b>{siteId || "（空）"}</b></div>
+                    <div>workspaceId: <b>{workspaceId || "（空）"}</b></div>
+                    <div>全アクション数: {actions.length}</div>
+                    <div>フィルタ後: {actionsForWorkspace.length}</div>
+                    {actions.slice(0, 5).map(a => (
+                      <div key={a.id} style={{ color: a.data?.siteId === siteId ? "#16a34a" : "#dc2626" }}>
+                        {a.data?.siteId === siteId ? "✅" : "❌"} [{a.data?.siteId || "siteId無し"}] {a.data?.creative?.title || a.id}
+                      </div>
+                    ))}
+                  </div>
+                </details>
                 <div className="row">
                   <select
                     className="input"
@@ -1368,16 +1396,6 @@ export default function ScenariosPage() {
             {/* STEP 2: いつ表示？ */}
             {currentStep === 2 && (
               <div>
-                <div className="h2">表示条件（基本設定）</div>
-                <div className="row">
-                  {PAGE_TYPES.map((pt) => (
-                    <label key={pt} className="badge" style={{ cursor: "pointer" }}>
-                      <input type="checkbox" checked={pageTypeIn.includes(pt)} onChange={() => togglePageType(pt)} />
-                      {pt}
-                    </label>
-                  ))}
-                </div>
-
                 <div style={{ height: 10 }} />
                 <div className="h2">発動タイミング</div>
                 <div className="row" style={{ gap: 8, marginBottom: 12 }}>
@@ -1441,85 +1459,132 @@ export default function ScenariosPage() {
                 )}
 
                 <div style={{ height: 14 }} />
-                <div className="h2">URL条件</div>
-                <div className="row" style={{ alignItems: "center", gap: 10 }}>
-                  <label className="badge" style={{ cursor: "pointer" }}>
-                    <input type="checkbox" checked={urlEnabled} onChange={(e) => setUrlEnabled(e.target.checked)} />
-                    特定のページだけに表示する
-                  </label>
+                <div className="row" style={{ alignItems: "center", justifyContent: "space-between" }}>
+                  <div className="h2" style={{ margin: 0 }}>URL条件</div>
+                  <button
+                    className="btn"
+                    style={{ fontSize: 12, padding: "3px 10px" }}
+                    onClick={() => setUrlRules((r) => [...r, { mode: "prefix", value: "", target: "path" }])}
+                  >+ 追加</button>
                 </div>
-                {urlEnabled && (
-                  <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
-                    <div>
-                      <div className="small" style={{ marginBottom: 4, fontWeight: 600 }}>対象URL（フルURLでもパスだけでもOK）</div>
+
+                {urlRules.length === 0 && (
+                  <div className="small" style={{ opacity: 0.5, marginTop: 4 }}>URL条件なし（全ページで配信）</div>
+                )}
+
+                {urlRules.map((rule, idx) => (
+                  <div key={idx} style={{ marginTop: 10, padding: "10px 12px", background: "rgba(0,0,0,.03)", borderRadius: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <input
                         className="input"
-                        style={{ width: "100%" }}
-                        value={urlValue}
+                        style={{ flex: 1 }}
+                        value={rule.value}
                         onChange={(e) => {
                           const v = e.target.value;
-                          // フルURLが貼られたらパスだけ抽出
+                          let parsed = v;
                           try {
                             if (v.startsWith("http://") || v.startsWith("https://")) {
                               const u = new URL(v);
-                              setUrlValue(u.pathname + u.search);
-                            } else {
-                              setUrlValue(v);
+                              parsed = u.pathname + u.search;
                             }
-                          } catch {
-                            setUrlValue(v);
-                          }
+                          } catch {}
+                          setUrlRules((r) => r.map((x, i) => i === idx ? { ...x, value: parsed } : x));
                         }}
-                        placeholder="例: /service/web_customer_service/　（フルURLを貼り付けてもOK）"
+                        placeholder="例: /products/  （フルURLを貼り付けてもOK）"
                       />
+                      <button
+                        className="btn"
+                        style={{ fontSize: 12, padding: "4px 8px", color: "#ef4444", background: "none", border: "1px solid #fca5a5", flexShrink: 0 }}
+                        onClick={() => setUrlRules((r) => r.filter((_, i) => i !== idx))}
+                      >✕ 削除</button>
                     </div>
-                    <div>
-                      <div className="small" style={{ marginBottom: 6, fontWeight: 600 }}>マッチ方法</div>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                        {[
-                          { mode: "equals", target: "path", label: "このページだけ", desc: "URLが完全に一致するページのみ" },
-                          { mode: "prefix", target: "path", label: "このページ以下すべて", desc: "このパスで始まるすべてのページ" },
-                          { mode: "contains", target: "path", label: "URLのどこかに含む", desc: "URLの一部に指定文字列が含まれるページ" },
-                          { mode: "regex", target: "path", label: "正規表現で指定", desc: "上級者向け：正規表現パターンで細かく指定" },
-                        ].map(({ mode, target, label, desc }) => (
-                          <label
-                            key={mode}
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 10,
-                              cursor: "pointer",
-                              padding: "7px 12px",
-                              borderRadius: 8,
-                              background: urlMode === mode ? "rgba(var(--brand-rgb,59,130,246),.08)" : "rgba(0,0,0,.03)",
-                              border: urlMode === mode ? "1.5px solid var(--brand, #3b82f6)" : "1.5px solid transparent",
-                              transition: "all .15s",
-                            }}
-                          >
-                            <input
-                              type="radio"
-                              name="urlMode"
-                              value={mode}
-                              checked={urlMode === mode}
-                              onChange={() => { setUrlMode(mode as any); setUrlTarget(target as any); }}
-                              style={{ accentColor: "var(--brand, #3b82f6)" }}
-                            />
-                            <span style={{ fontWeight: 600, fontSize: 13 }}>{label}</span>
-                            <span className="small" style={{ opacity: 0.65, marginLeft: 2 }}>{desc}</span>
-                          </label>
-                        ))}
-                      </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      {[
+                        { mode: "prefix", label: "このページ以下すべて", desc: "このパスで始まるすべてのページ" },
+                        { mode: "equals", label: "このページだけ", desc: "URLが完全に一致するページのみ" },
+                        { mode: "contains", label: "URLのどこかに含む", desc: "URLの一部に指定文字列が含まれるページ" },
+                        { mode: "regex", label: "正規表現で指定", desc: "上級者向け：正規表現パターンで細かく指定" },
+                      ].map(({ mode, label, desc }) => (
+                        <label key={mode} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", padding: "5px 8px", borderRadius: 6, background: rule.mode === mode ? "rgba(59,130,246,.08)" : "transparent", border: rule.mode === mode ? "1.5px solid #3b82f6" : "1.5px solid transparent", transition: "all .15s" }}>
+                          <input type="radio" name={`urlMode_${idx}`} checked={rule.mode === mode} onChange={() => setUrlRules((r) => r.map((x, i) => i === idx ? { ...x, mode: mode as any, target: "path" } : x))} style={{ accentColor: "#3b82f6" }} />
+                          <span style={{ fontWeight: 600, fontSize: 12 }}>{label}</span>
+                          <span className="small" style={{ opacity: 0.6 }}>{desc}</span>
+                        </label>
+                      ))}
                     </div>
-                    {urlValue && (
-                      <div className="small" style={{ padding: "8px 12px", background: "rgba(0,0,0,.04)", borderRadius: 8, lineHeight: 1.7 }}>
-                        {urlMode === "equals" && <>✅ <strong>{urlValue}</strong> と完全一致するページのみ表示</>}
-                        {urlMode === "prefix" && <>✅ <strong>{urlValue}</strong> で始まるすべてのページで表示</>}
-                        {urlMode === "contains" && <>✅ URLに <strong>{urlValue}</strong> が含まれるページで表示</>}
-                        {urlMode === "regex" && <>✅ パターン <code>{urlValue}</code> に一致するページで表示</>}
+                    {rule.value && (
+                      <div className="small" style={{ padding: "6px 10px", background: "rgba(0,0,0,.04)", borderRadius: 6, lineHeight: 1.7 }}>
+                        {rule.mode === "equals" && <>✅ <strong>{rule.value}</strong> と完全一致するページのみ表示</>}
+                        {rule.mode === "prefix" && <>✅ <strong>{rule.value}</strong> で始まるすべてのページで表示</>}
+                        {rule.mode === "contains" && <>✅ URLに <strong>{rule.value}</strong> が含まれるページで表示</>}
+                        {rule.mode === "regex" && <>✅ パターン <code>{rule.value}</code> に一致するページで表示</>}
                       </div>
                     )}
                   </div>
+                ))}
+                {urlRules.length > 1 && (
+                  <div className="small" style={{ marginTop: 6, opacity: 0.6 }}>※複数指定した場合はOR条件（いずれかに一致で配信）</div>
                 )}
+
+                <div style={{ height: 14 }} />
+                <div className="h2">配信頻度</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {/* 配信単位 */}
+                  <div className="row" style={{ gap: 6 }}>
+                    {(["pageview", "session", "user"] as const).map((u) => (
+                      <button
+                        key={u}
+                        type="button"
+                        onClick={() => setDisplayUnit(u)}
+                        style={{
+                          flex: 1, padding: "8px 4px", fontSize: 12, fontWeight: displayUnit === u ? 700 : 400,
+                          background: displayUnit === u ? "#2563eb" : "#f1f5f9",
+                          color: displayUnit === u ? "#fff" : "#64748b",
+                          border: "none", borderRadius: 8, cursor: "pointer", transition: "all .15s",
+                        }}
+                      >
+                        {u === "pageview" ? "🖥 アクセスごと" : u === "session" ? "⏱ セッションごと" : "👤 ユーザーごと"}
+                      </button>
+                    ))}
+                  </div>
+                  {/* 頻度（ユーザーごとは表示回数上限として使う） */}
+                  <div className="row" style={{ gap: 6 }}>
+                    {([1, 3, 5] as const).map((n) => {
+                      const labels: Record<number, string> =
+                        displayUnit === "user"
+                          ? { 1: "1回まで", 3: "3回まで", 5: "5回まで" }
+                          : displayUnit === "session"
+                          ? { 1: "毎セッション", 3: "3セッションに1回", 5: "5セッションに1回" }
+                          : { 1: "毎アクセス", 3: "3アクセスに1回", 5: "5アクセスに1回" };
+                      return (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => setDisplayInterval(n)}
+                          style={{
+                            flex: 1, padding: "8px 4px", fontSize: 12, fontWeight: displayInterval === n ? 700 : 400,
+                            background: displayInterval === n ? "#0f172a" : "#f1f5f9",
+                            color: displayInterval === n ? "#fff" : "#64748b",
+                            border: "none", borderRadius: 8, cursor: "pointer", transition: "all .15s",
+                          }}
+                        >
+                          {labels[n]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="small" style={{ opacity: 0.6 }}>
+                    {displayUnit === "pageview" && displayInterval === 1 && "ページを開くたびに表示します（デフォルト）"}
+                    {displayUnit === "pageview" && displayInterval === 3 && "3ページビューごとに1回表示します"}
+                    {displayUnit === "pageview" && displayInterval === 5 && "5ページビューごとに1回表示します"}
+                    {displayUnit === "session" && displayInterval === 1 && "同じセッション内では1回だけ表示します"}
+                    {displayUnit === "session" && displayInterval === 3 && "3セッションに1回表示します"}
+                    {displayUnit === "session" && displayInterval === 5 && "5セッションに1回表示します"}
+                    {displayUnit === "user" && displayInterval === 1 && "同じユーザーには一生1回だけ表示します"}
+                    {displayUnit === "user" && displayInterval === 3 && "同じユーザーに最大3回まで表示します"}
+                    {displayUnit === "user" && displayInterval === 5 && "同じユーザーに最大5回まで表示します"}
+                  </div>
+                </div>
 
                 <div style={{ height: 14 }} />
                 <div className="h2">配信スケジュール</div>
@@ -1556,7 +1621,7 @@ export default function ScenariosPage() {
             {/* STEP 3: 誰に表示？ */}
             {currentStep === 3 && (
               <div>
-                <div className="h2">ターゲット設定（Phase 1）</div>
+                <div className="h2">ターゲット設定</div>
                 <div className="row" style={{ alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   <label className="badge" style={{ cursor: "pointer" }}>
                     <input type="checkbox" checked={targetingEnabled} onChange={(e) => setTargetingEnabled(e.target.checked)} />
@@ -1645,9 +1710,9 @@ export default function ScenariosPage() {
                   </label>
                   <div style={{ width: 10 }} />
                   <div className="small">固定単位</div>
-                  <select className="input" style={{ width: 120 }} disabled={!expEnabled} value={expSticky} onChange={(e) => setExpSticky(e.target.value as any)}>
-                    <option value="vid">vid</option>
-                    <option value="sid">sid</option>
+                  <select className="input" style={{ width: 220 }} disabled={!expEnabled} value={expSticky} onChange={(e) => setExpSticky(e.target.value as any)}>
+                    <option value="vid">訪問者ID（vid）— 同じ人に毎回同じパターン</option>
+                    <option value="sid">セッションID（sid）— セッションごとにランダム</option>
                   </select>
                   <div style={{ flex: 1 }} />
                   {expEnabled ? <button className="btn" onClick={normalizeWeightsTo100}>配分合計を100に調整</button> : null}
@@ -1789,13 +1854,17 @@ export default function ScenariosPage() {
                     <input type="checkbox" checked={goalEnabled} onChange={(e) => setGoalEnabled(e.target.checked)} />
                     コンバージョン計測を有効化
                   </label>
-                  <select className="input" style={{ width: 180 }} disabled={!goalEnabled} value={goalType} onChange={(e) => setGoalType(e.target.value as any)}>
-                    {GOAL_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  <select className="input" style={{ width: 220 }} disabled={!goalEnabled} value={goalType} onChange={(e) => setGoalType(e.target.value as any)}>
+                    <option value="path_prefix">URL前方一致（/thanksで始まる）</option>
+                    <option value="path_exact">URLパス完全一致</option>
+                    <option value="url_contains">URL部分一致（文字列を含む）</option>
                   </select>
-                  <input className="input" style={{ flex: 1, minWidth: 180 }} disabled={!goalEnabled} value={goalValue} onChange={(e) => setGoalValue(e.target.value)} placeholder="例：/thanks  or  complete" />
+                  <input className="input" style={{ flex: 1, minWidth: 180 }} disabled={!goalEnabled} value={goalValue} onChange={(e) => setGoalValue(e.target.value)} placeholder={goalType === "path_prefix" ? "例：/thanks" : goalType === "path_exact" ? "例：/order/complete" : "例：complete"} />
                 </div>
-                <div className="small" style={{ marginTop: 6 }}>
-                  例：<code>path_prefix=/thanks</code> / <code>url_contains=complete</code>
+                <div className="small" style={{ marginTop: 6, opacity: 0.6 }}>
+                  {goalType === "path_prefix" && "✅ 入力したパスで始まるURLにアクセスしたときにCV計測（例：/thanks → /thanks, /thanks/123 が対象）"}
+                  {goalType === "path_exact" && "✅ 入力したパスと完全に一致するURLにアクセスしたときにCV計測"}
+                  {goalType === "url_contains" && "✅ URLのどこかに入力した文字列が含まれる場合にCV計測（例：complete → checkout/complete も対象）"}
                 </div>
 
                 <div style={{ height: 14 }} />
@@ -1828,8 +1897,14 @@ export default function ScenariosPage() {
                     <button className="btn btn--primary" onClick={createOrUpdate}>保存</button>
                   </>
                 )}
-                {currentStep < 3 && (
-                  <button className="btn btn--primary" onClick={() => setCurrentStep((s) => (s + 1) as 1 | 2 | 3)}>次へ →</button>
+                {currentStep === 1 && (
+                  <button className="btn btn--primary" onClick={() => {
+                    if ((actionRefs || []).length === 0 && !window.confirm("⚠️ アクションがまだ追加されていません。このままではシナリオが何も表示されません。続けますか？")) return;
+                    setCurrentStep(2);
+                  }}>次へ →</button>
+                )}
+                {currentStep === 2 && (
+                  <button className="btn btn--primary" onClick={() => setCurrentStep(3)}>次へ →</button>
                 )}
               </div>
             </div>

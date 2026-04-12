@@ -352,7 +352,7 @@ function MediaPickerModal(props: {
           <div style={{ fontWeight: 800, fontSize: 16 }}>Media Picker</div>
           <div style={{ marginLeft: "auto" }}>
             <button className="btn" onClick={onClose}>
-              閉じる
+              ✕ 閉じる
             </button>
           </div>
         </div>
@@ -1135,7 +1135,7 @@ export default function ActionsPage() {
               </div>
               <div className="page-header__actions">
                 <button className="btn" onClick={() => { setIsModalOpen(false); setUploadErr(''); }}>
-                  閉じる
+                  ✕ 閉じる
                 </button>
               </div>
             </div>

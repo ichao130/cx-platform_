@@ -164,6 +164,7 @@ const EVENT_COLOR: Record<string, { bg: string; text: string; label: string }> =
   click:      { bg: "#fffbeb", text: "#d97706", label: "クリック" },
   click_link: { bg: "#fff7ed", text: "#ea580c", label: "リンク" },
   conversion: { bg: "#f0fdf4", text: "#16a34a", label: "CV ✓" },
+  purchase:   { bg: "#fefce8", text: "#ca8a04", label: "💰 購入" },
   close:      { bg: "#f8fafc", text: "#94a3b8", label: "閉じる" },
   pageleave:  { bg: "#faf5ff", text: "#7c3aed", label: "離脱" },
 };
@@ -505,13 +506,13 @@ export default function AnalyticsPage() {
     for (const l of sorted) {
       if (l.vid) vidToScenario.set(l.vid, l.scenario_id);
     }
-    const map = new Map<string, { name: string; revenue: number; count: number }>();
+    const map = new Map<string, { id: string | null; name: string; revenue: number; count: number }>();
     for (const purchase of purchaseLogs) {
       const scenarioId = vidToScenario.get(purchase.vid || "") || null;
       const key = scenarioId || "__none__";
       const sc = scenarios.find((s) => s.id === scenarioId);
       const name = sc ? String(sc.data?.name || sc.id) : "（施策なし）";
-      if (!map.has(key)) map.set(key, { name, revenue: 0, count: 0 });
+      if (!map.has(key)) map.set(key, { id: scenarioId, name, revenue: 0, count: 0 });
       const entry = map.get(key)!;
       entry.revenue += typeof purchase.revenue === "number" ? purchase.revenue : 0;
       entry.count++;
@@ -528,20 +529,21 @@ export default function AnalyticsPage() {
       if (l.vid && l.scenario_id) vidToScenario.set(l.vid, l.scenario_id);
     }
 
-    const map = new Map<string, { title: string; qty: number; revenue: number; qtyAttributed: number; revenueAttributed: number }>();
+    const map = new Map<string, { title: string; qty: number; revenue: number; qtyAttributed: number; revenueAttributed: number; scenarioIds: Set<string> }>();
     for (const log of purchaseLogs) {
       if (!Array.isArray(log.items)) continue;
-      const isAttributed = !!vidToScenario.get(log.vid || "");
+      const scenarioId = vidToScenario.get(log.vid || "") || null;
       for (const item of log.items) {
         const title = String(item.title || "（不明）");
-        if (!map.has(title)) map.set(title, { title, qty: 0, revenue: 0, qtyAttributed: 0, revenueAttributed: 0 });
+        if (!map.has(title)) map.set(title, { title, qty: 0, revenue: 0, qtyAttributed: 0, revenueAttributed: 0, scenarioIds: new Set() });
         const entry = map.get(title)!;
         const itemRevenue = (Number(item.qty) || 0) * (Number(item.price) || 0);
         entry.qty += Number(item.qty) || 0;
         entry.revenue += itemRevenue;
-        if (isAttributed) {
+        if (scenarioId) {
           entry.qtyAttributed += Number(item.qty) || 0;
           entry.revenueAttributed += itemRevenue;
+          entry.scenarioIds.add(scenarioId);
         }
       }
     }
@@ -678,14 +680,15 @@ export default function AnalyticsPage() {
     const map = new Map<string, {
       vid: string; firstSeen: string; lastSeen: string;
       pvCount: number; totalDuration: number;
-      hasConversion: boolean; hasImpression: boolean;
+      hasConversion: boolean; hasImpression: boolean; hasPurchase: boolean;
+      purchaseRevenue: number; purchaseCount: number;
       pages: string[]; eventCount: number; firstRef: string;
     }>();
     const sorted = [...journeyLogs].sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
     for (const l of sorted) {
       const vid = l.vid || "unknown";
       if (!map.has(vid)) {
-        map.set(vid, { vid, firstSeen: l.createdAt || "", lastSeen: l.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, pages: [], eventCount: 0, firstRef: "" });
+        map.set(vid, { vid, firstSeen: l.createdAt || "", lastSeen: l.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, pages: [], eventCount: 0, firstRef: "" });
       }
       const v = map.get(vid)!;
       v.lastSeen = l.createdAt || v.lastSeen;
@@ -699,18 +702,41 @@ export default function AnalyticsPage() {
       if (l.event === "impression") v.hasImpression = true;
       if (l.event === "pageleave" && l.duration_sec) v.totalDuration += Number(l.duration_sec);
     }
+    // 購入ログを紐付け
+    for (const p of purchaseLogs) {
+      const vid = p.vid || "unknown";
+      if (!map.has(vid)) continue;
+      const v = map.get(vid)!;
+      v.hasPurchase = true;
+      v.purchaseRevenue += typeof p.revenue === "number" ? p.revenue : 0;
+      v.purchaseCount++;
+    }
     return Array.from(map.values())
       .sort((a, b) => b.lastSeen.localeCompare(a.lastSeen))
       .slice(0, 50);
-  }, [journeyLogs]);
+  }, [journeyLogs, purchaseLogs]);
 
-  // ---- computed: 選択中訪問者のイベント一覧 ----
+  // ---- computed: 選択中訪問者のイベント一覧（購入ログ含む） ----
   const selectedJourney = useMemo(() => {
     if (!selectedVid) return [];
-    return journeyLogs
-      .filter((l) => l.vid === selectedVid)
+    const logs = journeyLogs.filter((l) => l.vid === selectedVid);
+    // 購入ログを purchase イベントとして混ぜる
+    const purchases = purchaseLogs
+      .filter((p) => p.vid === selectedVid)
+      .map((p) => ({ ...p, event: "purchase", id: p.id || p.order_id || String(p.createdAt) }));
+    return [...logs, ...purchases]
       .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
-  }, [journeyLogs, selectedVid]);
+  }, [journeyLogs, purchaseLogs, selectedVid]);
+
+  // ---- computed: vid → 直前のシナリオID（購入時の施策特定用） ----
+  const vidToLastScenario = useMemo(() => {
+    const map = new Map<string, string>();
+    const sorted = [...journeyLogs].sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+    for (const l of sorted) {
+      if (l.vid && l.scenario_id) map.set(l.vid, l.scenario_id);
+    }
+    return map;
+  }, [journeyLogs]);
 
   const selectedSiteName = useMemo(() => {
     const s = sites.find((s) => s.id === siteId);
@@ -826,26 +852,37 @@ export default function AnalyticsPage() {
 
       {/* 管理者除外ブックマークレット */}
       {siteDomain && (
-        <div className="card" style={{ padding: "12px 16px", marginBottom: 16, background: "rgba(99,102,241,.06)", border: "1px solid rgba(99,102,241,.15)", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-          <div style={{ fontSize: 18 }}>🚫</div>
-          <div style={{ flex: 1, minWidth: 200 }}>
-            <div className="small" style={{ fontWeight: 700, marginBottom: 2 }}>自分の訪問を計測から除外する</div>
-            <div className="small" style={{ opacity: 0.7 }}>
-              下のボタンをブラウザのブックマークバーにドラッグ → サイト閲覧中にクリックで除外ON/OFFを切り替えられます
-            </div>
-          </div>
-          <a
-            href={`javascript:(function(){var k='cx_no_track',v=localStorage.getItem(k)==='1';localStorage.setItem(k,v?'0':'1');alert(v?'✅ 計測を再開しました（除外OFF）':'🚫 管理者として除外しました（除外ON）');})();`}
-            onClick={(e) => e.preventDefault()}
-            className="btn"
-            style={{ flexShrink: 0, background: "rgba(99,102,241,.15)", border: "1px solid rgba(99,102,241,.3)", color: "inherit", textDecoration: "none", cursor: "grab" }}
-            title="ここをブックマークバーにドラッグしてください"
-          >
-            🔖 管理者除外トグル
-          </a>
-          <div className="small" style={{ opacity: 0.55, width: "100%", marginTop: -4 }}>
-            ※ ドメインごとに有効です。<code>{siteDomain}</code> を閲覧中にブックマークをクリックしてください。除外中はSDKのログが一切送信されません。
-          </div>
+        <div style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span className="small" style={{ opacity: 0.5 }}>🚫 自分の訪問を除外:</span>
+          {siteDomain ? (
+            <>
+              <button
+                className="small"
+                onClick={() => window.open(`${siteDomain}${siteDomain.includes("?") ? "&" : "?"}cx_exclude=1`, "_blank")}
+                style={{ padding: "2px 12px", borderRadius: 20, background: "#fef2f2", border: "1px solid #fca5a5", color: "#dc2626", fontWeight: 700, cursor: "pointer" }}
+              >
+                🚫 除外ON
+              </button>
+              <button
+                className="small"
+                onClick={() => window.open(`${siteDomain}${siteDomain.includes("?") ? "&" : "?"}cx_exclude=0`, "_blank")}
+                style={{ padding: "2px 12px", borderRadius: 20, background: "#f0fdf4", border: "1px solid #86efac", color: "#16a34a", fontWeight: 700, cursor: "pointer" }}
+              >
+                ✅ 除外OFF
+              </button>
+              <span className="small" style={{ opacity: 0.4 }}>（クリックするとサイトが開いて自動で設定されます）</span>
+            </>
+          ) : (
+            <a
+              href={`javascript:(function(){var k='cx_no_track',v=localStorage.getItem(k)==='1';localStorage.setItem(k,v?'0':'1');alert(v?'✅ 計測を再開しました（除外OFF）':'🚫 管理者として除外しました（除外ON）');})();`}
+              onClick={(e) => e.preventDefault()}
+              className="small"
+              style={{ padding: "2px 10px", borderRadius: 20, background: "rgba(99,102,241,.1)", border: "1px solid rgba(99,102,241,.25)", color: "#6366f1", textDecoration: "none", cursor: "grab", fontWeight: 600, whiteSpace: "nowrap" }}
+              title="ブックマークバーにドラッグ → サイト閲覧中にクリックで除外ON/OFF"
+            >
+              🔖 ブックマークへドラッグ
+            </a>
+          )}
         </div>
       )}
 
@@ -964,8 +1001,12 @@ export default function AnalyticsPage() {
                                 <div style={{ minWidth: 50, fontSize: 12, color: "#94a3b8", textAlign: "right" }}>{r.qty}個</div>
                               </div>
                               {r.qtyAttributed > 0 && (
-                                <div style={{ marginLeft: 180, display: "flex", gap: 10, fontSize: 11 }}>
+                                <div style={{ marginLeft: 180, display: "flex", flexWrap: "wrap", gap: 8, fontSize: 11 }}>
                                   <span style={{ color: "#22c55e", fontWeight: 600 }}>施策経由 {r.qtyAttributed}個 (¥{Math.round(r.revenueAttributed).toLocaleString()})</span>
+                                  {Array.from(r.scenarioIds).map((scId) => {
+                                    const scName = scenarios.find((s) => s.id === scId)?.data?.name || scId;
+                                    return <span key={scId} style={{ background: "#dcfce7", color: "#15803d", borderRadius: 4, padding: "1px 6px", fontWeight: 600 }}>📢 {scName}</span>;
+                                  })}
                                   {r.qty - r.qtyAttributed > 0 && <span style={{ color: "#94a3b8" }}>直接 {r.qty - r.qtyAttributed}個</span>}
                                   <span style={{ color: "#94a3b8" }}>施策貢献率 {attrPct}%</span>
                                 </div>
@@ -1051,11 +1092,26 @@ export default function AnalyticsPage() {
                     const cv  = scRows.filter((r) => r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
                     return { ...d, imp, cv };
                   });
+                  const scRevenue = revenueByScenario.find((r) => r.id === sc.id);
                   return (
                     <div key={sc.id} className="card" style={{ padding: "16px 16px 8px", background: "#fff" }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: 0.8 }} title={sc.data?.name}>
+                      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: 0.8 }} title={sc.data?.name}>
                         📊 {sc.data?.name || sc.id}
                       </div>
+                      {scRevenue && scRevenue.count > 0 ? (
+                        <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+                          <div style={{ background: "#f0fdf4", borderRadius: 6, padding: "4px 10px", fontSize: 12 }}>
+                            <span style={{ color: "#15803d", fontWeight: 700 }}>¥{Math.round(scRevenue.revenue).toLocaleString()}</span>
+                            <span style={{ color: "#86efac", fontSize: 11, marginLeft: 4 }}>売上</span>
+                          </div>
+                          <div style={{ background: "#eff6ff", borderRadius: 6, padding: "4px 10px", fontSize: 12 }}>
+                            <span style={{ color: "#1d4ed8", fontWeight: 700 }}>{scRevenue.count}件</span>
+                            <span style={{ color: "#93c5fd", fontSize: 11, marginLeft: 4 }}>購入</span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ marginBottom: 10 }} />
+                      )}
                       <ResponsiveContainer width="100%" height={140}>
                         <ComposedChart data={scTrend} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
                           <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,.06)" />
@@ -1167,11 +1223,25 @@ export default function AnalyticsPage() {
               </div>
             ) : (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
-                {funnelData.slice(0, 6).map((sc) => (
+                {funnelData.slice(0, 6).map((sc) => {
+                  const scRev = revenueByScenario.find((r) => r.id === sc.id);
+                  return (
                   <div key={sc.id} className="card" style={{ padding: 18, background: "#fff" }}>
-                    <div style={{ fontWeight: 700, marginBottom: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={sc.name}>
+                    <div style={{ fontWeight: 700, marginBottom: scRev && scRev.revenue > 0 ? 8 : 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={sc.name}>
                       {sc.name}
                     </div>
+                    {scRev && scRev.count > 0 && (
+                      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                        <div style={{ background: "#f0fdf4", borderRadius: 6, padding: "4px 10px", fontSize: 12 }}>
+                          <span style={{ color: "#15803d", fontWeight: 700 }}>¥{Math.round(scRev.revenue).toLocaleString()}</span>
+                          <span style={{ color: "#86efac", fontSize: 11, marginLeft: 4 }}>売上</span>
+                        </div>
+                        <div style={{ background: "#eff6ff", borderRadius: 6, padding: "4px 10px", fontSize: 12 }}>
+                          <span style={{ color: "#1d4ed8", fontWeight: 700 }}>{scRev.count}件</span>
+                          <span style={{ color: "#93c5fd", fontSize: 11, marginLeft: 4 }}>購入</span>
+                        </div>
+                      </div>
+                    )}
                     <FunnelStep label="表示（インプレッション）" count={sc.imp} total={sc.imp} color="#2563eb" />
                     <FunnelStep label="クリック" count={sc.clk} total={sc.imp} color="#f59e0b" />
                     <FunnelStep label="コンバージョン" count={sc.cv} total={sc.imp} color="#16a34a" />
@@ -1184,7 +1254,8 @@ export default function AnalyticsPage() {
                       </span>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1342,15 +1413,23 @@ export default function AnalyticsPage() {
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
                                 <code style={{ fontSize: 11, opacity: 0.7 }}>{vidShort}</code>
-                                {v.hasConversion && (
+                                {v.hasPurchase && (
+                                  <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 20, background: "#fefce8", color: "#ca8a04" }}>💰 購入</span>
+                                )}
+                                {v.hasConversion && !v.hasPurchase && (
                                   <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 20, background: "#f0fdf4", color: "#16a34a" }}>CV</span>
                                 )}
-                                {v.hasImpression && !v.hasConversion && (
+                                {v.hasImpression && !v.hasConversion && !v.hasPurchase && (
                                   <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 20, background: "#eff6ff", color: "#2563eb" }}>施策</span>
                                 )}
                               </div>
                               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                                 <span className="small" style={{ opacity: 0.55 }}>{v.pvCount} PV</span>
+                                {v.hasPurchase && (
+                                  <span className="small" style={{ fontWeight: 700, color: "#ca8a04" }}>
+                                    ¥{v.purchaseRevenue.toLocaleString()} ({v.purchaseCount}件)
+                                  </span>
+                                )}
                                 {v.totalDuration > 0 && (
                                   <span className="small" style={{ opacity: 0.55 }}>
                                     {durationMin > 0 ? `${durationMin}分` : `${v.totalDuration}秒`}滞在
@@ -1397,6 +1476,7 @@ export default function AnalyticsPage() {
                                     {v.pvCount} ページ閲覧 · {v.eventCount} イベント
                                     {v.totalDuration > 0 && ` · 計${Math.round(v.totalDuration / 60) > 0 ? Math.round(v.totalDuration / 60) + "分" : v.totalDuration + "秒"}滞在`}
                                     {v.hasConversion && " · CV達成 ✓"}
+                                    {v.hasPurchase && <span style={{ color: "#ca8a04", fontWeight: 700 }}> · 💰 ¥{v.purchaseRevenue.toLocaleString()} ({v.purchaseCount}件購入)</span>}
                                   </div>
                                 )}
                               </div>
@@ -1416,35 +1496,80 @@ export default function AnalyticsPage() {
                             <div style={{ display: "grid", gap: 0 }}>
                               {selectedJourney.map((ev, i) => {
                                 const isConversion = ev.event === "conversion";
+                                const isPurchase = ev.event === "purchase";
                                 const isPageleave = ev.event === "pageleave";
                                 const time = ev.createdAt
                                   ? new Date(ev.createdAt).toLocaleTimeString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })
                                   : "—";
-                                const dotColor = isConversion ? "#16a34a" : EVENT_COLOR[ev.event]?.text || "#94a3b8";
+                                const dotColor = isPurchase ? "#ca8a04" : isConversion ? "#16a34a" : EVENT_COLOR[ev.event]?.text || "#94a3b8";
+                                // 購入時の施策特定
+                                const attributedScenarioId = isPurchase ? (ev.scenario_id || vidToLastScenario.get(ev.vid || "") || null) : null;
+                                const attributedScenario = attributedScenarioId ? scenarios.find((s) => s.id === attributedScenarioId) : null;
                                 return (
                                   <div key={ev.id || i} style={{ display: "flex", gap: 16, paddingBottom: 16, position: "relative" }}>
                                     {/* ドット */}
                                     <div style={{ flexShrink: 0, width: 32, display: "flex", justifyContent: "center", paddingTop: 2 }}>
                                       <div style={{
-                                        width: isConversion ? 14 : 10, height: isConversion ? 14 : 10,
+                                        width: isPurchase ? 16 : isConversion ? 14 : 10,
+                                        height: isPurchase ? 16 : isConversion ? 14 : 10,
                                         borderRadius: 99, background: dotColor,
-                                        border: isConversion ? `2px solid #fff` : "none",
-                                        boxShadow: isConversion ? `0 0 0 3px ${dotColor}40` : "none",
-                                        marginTop: isConversion ? -2 : 0,
+                                        border: (isPurchase || isConversion) ? `2px solid #fff` : "none",
+                                        boxShadow: (isPurchase || isConversion) ? `0 0 0 3px ${dotColor}40` : "none",
+                                        marginTop: isPurchase ? -3 : isConversion ? -2 : 0,
                                         zIndex: 1, position: "relative",
                                       }} />
                                     </div>
                                     {/* コンテンツ */}
                                     <div style={{
-                                      flex: 1, background: isConversion ? "#f0fdf4" : "rgba(15,23,42,.025)",
+                                      flex: 1,
+                                      background: isPurchase ? "#fefce8" : isConversion ? "#f0fdf4" : "rgba(15,23,42,.025)",
                                       borderRadius: 8, padding: "8px 12px",
-                                      border: isConversion ? "1px solid #bbf7d0" : "1px solid transparent",
+                                      border: isPurchase ? "1px solid #fde68a" : isConversion ? "1px solid #bbf7d0" : "1px solid transparent",
                                     }}>
                                       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
                                         <EventBadge event={ev.event} />
                                         <span className="small" style={{ opacity: 0.5, fontSize: 11 }}>{time}</span>
+                                        {isPurchase && ev.revenue != null && (
+                                          <span style={{ fontSize: 13, fontWeight: 800, color: "#ca8a04" }}>
+                                            ¥{Number(ev.revenue).toLocaleString()}
+                                          </span>
+                                        )}
                                       </div>
-                                      {ev.path && (
+                                      {isPurchase && (
+                                        <>
+                                          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 6 }}>
+                                            {ev.order_id && (
+                                              <div className="small" style={{ opacity: 0.6 }}>注文ID: <code style={{ fontSize: 10 }}>{ev.order_id}</code></div>
+                                            )}
+                                            {ev.currency && ev.currency !== "JPY" && (
+                                              <div className="small" style={{ opacity: 0.6 }}>{ev.currency}</div>
+                                            )}
+                                          </div>
+                                          {Array.isArray(ev.items) && ev.items.length > 0 && (
+                                            <div style={{ marginBottom: 6 }}>
+                                              {ev.items.map((item: any, idx: number) => (
+                                                <div key={idx} className="small" style={{ display: "flex", gap: 8, opacity: 0.8, paddingLeft: 8, borderLeft: "2px solid #fde68a", marginBottom: 3 }}>
+                                                  <span style={{ flex: 1 }}>{item.title || "商品"}</span>
+                                                  <span style={{ opacity: 0.6 }}>×{item.qty || 1}</span>
+                                                  <span style={{ fontWeight: 600 }}>¥{((item.price || 0) * (item.qty || 1)).toLocaleString()}</span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                          {attributedScenario ? (
+                                            <div className="small" style={{ padding: "4px 8px", background: "#eff6ff", borderRadius: 6, color: "#2563eb", fontWeight: 600 }}>
+                                              📌 経由施策: {attributedScenario.data?.name || attributedScenarioId}
+                                            </div>
+                                          ) : attributedScenarioId ? (
+                                            <div className="small" style={{ padding: "4px 8px", background: "#eff6ff", borderRadius: 6, color: "#2563eb", fontWeight: 600 }}>
+                                              📌 経由施策: <code style={{ fontSize: 10 }}>{attributedScenarioId}</code>
+                                            </div>
+                                          ) : (
+                                            <div className="small" style={{ opacity: 0.45 }}>施策なし（直接購入）</div>
+                                          )}
+                                        </>
+                                      )}
+                                      {!isPurchase && ev.path && (
                                         <div className="small" style={{ fontWeight: 600, opacity: 0.8, marginBottom: isPageleave || ev.scenario_id ? 4 : 0 }}>
                                           {ev.path}
                                         </div>
@@ -1454,7 +1579,7 @@ export default function AnalyticsPage() {
                                           滞在時間: {ev.duration_sec >= 60 ? `${Math.floor(ev.duration_sec / 60)}分${ev.duration_sec % 60}秒` : `${ev.duration_sec}秒`}
                                         </div>
                                       )}
-                                      {ev.scenario_id && (
+                                      {!isPurchase && ev.scenario_id && (
                                         <div className="small" style={{ opacity: 0.55 }}>
                                           シナリオ: <code style={{ fontSize: 10 }}>{ev.scenario_id}</code>
                                         </div>

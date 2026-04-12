@@ -28,6 +28,7 @@ type Billing = {
   billing_company_name?: string | null;
   billing_contact_name?: string | null;
   billing_contact_phone?: string | null;
+  free_expires_at?: string | null;
   trial_ends_at?: string | null;
   current_period_ends_at?: string | null;
   stripe_customer_id?: string | null;
@@ -289,12 +290,14 @@ export default function WorkspaceBillingPage() {
                   <span style={{ display: "inline-block", padding: "4px 10px", borderRadius: 20, fontSize: 12, fontWeight: 600, background: statusMeta.bg, color: statusMeta.color }}>
                     {statusMeta.label}
                   </span>
-                  <button
-                    onClick={async () => { setSelectedPlan(planCode); await loadPlanMaster(); setShowUpgrade(true); }}
-                    style={{ padding: "6px 14px", background: planColor, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 600 }}
-                  >
-                    プランを変更
-                  </button>
+                  {!billing.access_override_active && (
+                    <button
+                      onClick={async () => { setSelectedPlan(planCode); await loadPlanMaster(); setShowUpgrade(true); }}
+                      style={{ padding: "6px 14px", background: planColor, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 600 }}
+                    >
+                      プランを変更
+                    </button>
+                  )}
                 </div>
               </div>
               {planPrice && <div style={{ fontSize: 20, fontWeight: 600, color: "#1e293b", marginBottom: 12 }}>{planPrice}</div>}
@@ -320,8 +323,24 @@ export default function WorkspaceBillingPage() {
             </div>
           </div>
 
-          {/* ── 支払い方法カード ── */}
-          <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, marginBottom: 16, padding: "20px 24px" }}>
+          {/* ── 無料プラン期限警告 ── */}
+          {billing.free_expires_at && !billing.access_override_active && (() => {
+            const expMs = new Date(billing.free_expires_at).getTime();
+            const daysLeft = Math.ceil((expMs - Date.now()) / (1000 * 60 * 60 * 24));
+            const deleteDate = new Date(expMs + 10 * 24 * 60 * 60 * 1000).toLocaleDateString("ja-JP");
+            const isExpired = daysLeft <= 0;
+            return (
+              <div style={{ background: isExpired ? "#fef2f2" : "#fffbeb", border: `1px solid ${isExpired ? "#fca5a5" : "#fcd34d"}`, borderRadius: 8, padding: "12px 16px", marginBottom: 16, fontSize: 13 }}>
+                {isExpired
+                  ? <>⚠️ 無料プランの有効期限が切れています。<strong>{deleteDate}</strong> にアカウントが自動削除されます。有料プランへのアップグレードをご検討ください。</>
+                  : <>⏰ 無料プランの有効期限：<strong>{fmtDate(billing.free_expires_at)}</strong>（残り{daysLeft}日）。期限後10日（{deleteDate}）に自動削除されます。</>
+                }
+              </div>
+            );
+          })()}
+
+          {/* ── 支払い方法カード（¥0プランは非表示） ── */}
+          {(billing.plan_master?.price_monthly ?? 0) > 0 && <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, marginBottom: 16, padding: "20px 24px" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <div>
                 <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>支払い方法</div>
@@ -339,7 +358,7 @@ export default function WorkspaceBillingPage() {
                 変更する
               </button>
             </div>
-          </div>
+          </div>}
 
           {/* ── 請求先住所フォーム ── */}
           <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, marginBottom: 16, padding: "20px 24px" }}>

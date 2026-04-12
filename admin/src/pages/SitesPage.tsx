@@ -271,7 +271,7 @@ export default function SitesPage() {
   function resetEditor() {
     setId(genId('site'));
     setName('');
-    setDomainsText('https://nurihiro.website');
+    setDomainsText('');
     setPublicKey(genPublicKey());
     setError('');
     setCopyMessage('');
@@ -372,7 +372,7 @@ export default function SitesPage() {
     const safeName = String(name || '').trim();
     const safeWorkspaceId = String(workspaceId || '').trim();
     const safePublicKey = String(publicKey || '').trim();
-    const domains = parseLines(domainsText);
+    const domains = parseLines(domainsText).map((d) => d.replace(/\/+$/, ""));
 
     if (!safeWorkspaceId) {
       setError('ワークスペースを選択してください。');

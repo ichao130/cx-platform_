@@ -480,7 +480,10 @@ export default function WorkspacesPage() {
               const isSelected = selectedWorkspaceId === r.id;
               return (
                 <Fragment key={r.id}>
-                  <tr>
+                  <tr
+                    onClick={() => { setSelectedWorkspaceId(r.id, currentUid); setSelectedWorkspaceIdState(r.id); }}
+                    style={{ cursor: 'pointer', background: isSelected ? 'rgba(37,99,235,.05)' : undefined }}
+                  >
                     <td>
                       <div style={{ fontWeight: 700 }}>{r.data.name || '名称未設定'}</div>
                       {(r.data.tagline || r.data.description) ? (
@@ -524,17 +527,7 @@ export default function WorkspacesPage() {
                       </div>
                     </td>
                     <td>
-                      <button
-                        className={"btn " + (isSelected ? 'btn--primary' : '')}
-                        onClick={() => {
-                          setSelectedWorkspaceId(r.id, currentUid);
-                          setSelectedWorkspaceIdState(r.id);
-                        }}
-                      >
-                        選択
-                      </button>
-                      <span style={{ width: 8, display: 'inline-block' }} />
-                      <button className="btn" onClick={() => openEditModal(r)}>
+                      <button className="btn" onClick={(e) => { e.stopPropagation(); openEditModal(r); }}>
                         編集
                       </button>
                     </td>

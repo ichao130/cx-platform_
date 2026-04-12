@@ -10,7 +10,7 @@ async function callOpenAIJson(params) {
     if (!apiKey)
         throw new Error("missing OPENAI_API_KEY");
     const client = new openai_1.default({ apiKey });
-    const sys = [
+    const sys = params.systemPrompt ?? [
         "You are an analytics assistant for a website personalization tool.",
         "Do NOT suggest automatic changes. Provide assistive advice only.",
         "Return JSON that matches the required schema exactly.",

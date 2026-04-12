@@ -938,7 +938,7 @@
     mode = String(mode || "contains");
     if (mode === "equals") return a === e;
     if (mode === "contains") return a.indexOf(e) !== -1;
-    if (mode === "starts_with") return a.indexOf(e) === 0;
+    if (mode === "starts_with" || mode === "prefix") return a.indexOf(e) === 0;
     if (mode === "regex") {
       try { return new RegExp(expected).test(actual); } catch (e2) { return false; }
     }
@@ -947,34 +947,152 @@
   }
 
   function shouldRunUrlRule(er, ctx) {
+    // 新フォーマット: urls配列（OR条件）
+    var urls = er && er.page && Array.isArray(er.page.urls) ? er.page.urls : null;
+    if (urls && urls.length) {
+      for (var i = 0; i < urls.length; i++) {
+        var r = urls[i];
+        var t = String(r.target || "path");
+        var actual = t === "url" ? (ctx.url || "") : (ctx.path || "");
+        if (matchStringRule(actual, r.mode || "contains", r.value || "")) return true;
+      }
+      return false;
+    }
+
+    // 旧フォーマット: url単体（後方互換）
     var rule = er && er.page && er.page.url ? er.page.url : null;
     if (!rule) return true;
 
-    var target = String(rule.target || "url"); // url|path|ref
-    var mode = rule.mode || "contains";
-    var value = rule.value || "";
-
-    var actual = "";
-    if (target === "path") actual = ctx.path || "";
-    else if (target === "ref") actual = ctx.ref || "";
-    else actual = ctx.url || "";
-
-    return matchStringRule(actual, mode, value);
+    var target = String(rule.target || "url");
+    var actual2 = target === "path" ? (ctx.path || "") : (ctx.url || "");
+    return matchStringRule(actual2, rule.mode || "contains", rule.value || "");
   }
 
+
+  // ─── コンバージョン計測 ───────────────────────────────────────────
+  // シナリオが発火したときにゴールをsessionStorageに登録する
+  function registerGoal(siteId, scenarioId, actionId, variantId, goal) {
+    if (!goal || !goal.type || !goal.value) return;
+    var storageKey = "cx_goals_" + siteId;
+    try {
+      var stored = sessionStorage.getItem(storageKey);
+      var goals = stored ? JSON.parse(stored) : [];
+      if (!Array.isArray(goals)) goals = [];
+      // 同じscenario_idが既に登録済みなら重複登録しない
+      for (var gi = 0; gi < goals.length; gi++) {
+        if (goals[gi].scenario_id === scenarioId) return;
+      }
+      goals.push({
+        scenario_id: scenarioId,
+        action_id: actionId || null,
+        variant_id: variantId || null,
+        goal_type: String(goal.type || ""),
+        goal_value: String(goal.value || ""),
+      });
+      sessionStorage.setItem(storageKey, JSON.stringify(goals));
+    } catch (e) {}
+  }
+
+  // ページ読み込み時にsessionStorage内のゴールと現在URLを照合し、マッチしたらCVイベントを送信
+  function checkPendingConversions(apiBase, ctx) {
+    var storageKey = "cx_goals_" + ctx.site_id;
+    try {
+      var stored = sessionStorage.getItem(storageKey);
+      if (!stored) return;
+      var goals = JSON.parse(stored);
+      if (!Array.isArray(goals) || !goals.length) return;
+      var remaining = [];
+      for (var ci = 0; ci < goals.length; ci++) {
+        var g = goals[ci];
+        var matched = false;
+        if (g.goal_type === "path_prefix") {
+          matched = ctx.path.indexOf(g.goal_value) === 0;
+        } else if (g.goal_type === "path_exact") {
+          matched = ctx.path === g.goal_value;
+        } else if (g.goal_type === "url_contains") {
+          matched = ctx.url.indexOf(g.goal_value) >= 0;
+        }
+        if (matched) {
+          postLog(apiBase, {
+            site_id: ctx.site_id,
+            scenario_id: g.scenario_id,
+            action_id: g.action_id || null,
+            variant_id: g.variant_id || null,
+            event: "conversion",
+            url: ctx.url,
+            path: ctx.path,
+            vid: ctx.vid,
+            sid: ctx.sid,
+          }, ctx.site_id, ctx.site_key);
+          log("[cx] conversion fired", g.scenario_id, ctx.path);
+          // 消費済み（remainingには入れない）
+        } else {
+          remaining.push(g);
+        }
+      }
+      if (remaining.length !== goals.length) {
+        if (remaining.length > 0) {
+          sessionStorage.setItem(storageKey, JSON.stringify(remaining));
+        } else {
+          sessionStorage.removeItem(storageKey);
+        }
+      }
+    } catch (e) {}
+  }
+  // ────────────────────────────────────────────────────────────────
+
+  // ─── 配信頻度チェック ──────────────────────────────────────────────
+  // display.unit: 'pageview' | 'session' | 'user'
+  // display.interval: 1(毎回) | 3(3回に1回) | 5(5回に1回)
+  function checkAndMarkFrequency(scenarioId, display) {
+    if (!display || !display.unit || display.unit === "pageview" && Number(display.interval || 1) <= 1) {
+      return true; // デフォルト：制限なし
+    }
+    var unit = String(display.unit);
+    var interval = Math.max(1, Number(display.interval || 1));
+    try {
+      if (unit === "session") {
+        var seKey = "cx_se_" + scenarioId;
+        var svKey = "cx_sv_" + scenarioId;
+        // このセッションで既に表示済みなら false
+        if (sessionStorage.getItem(seKey)) return false;
+        // セッション間隔チェック
+        var sv = parseInt(localStorage.getItem(svKey) || "0", 10);
+        if (sv % interval !== 0) {
+          localStorage.setItem(svKey, String(sv + 1));
+          return false;
+        }
+        sessionStorage.setItem(seKey, "1");
+        localStorage.setItem(svKey, String(sv + 1));
+        return true;
+      }
+      if (unit === "user") {
+        var uvKey = "cx_uv_" + scenarioId;
+        var uv = parseInt(localStorage.getItem(uvKey) || "0", 10);
+        if (uv >= interval) return false;
+        localStorage.setItem(uvKey, String(uv + 1));
+        return true;
+      }
+      // pageview
+      var pvKey = "cx_pv_" + scenarioId;
+      var pv = parseInt(localStorage.getItem(pvKey) || "0", 10) + 1;
+      localStorage.setItem(pvKey, String(pv));
+      return ((pv - 1) % interval) === 0;
+    } catch (e) {
+      return true;
+    }
+  }
+  // ──────────────────────────────────────────────────────────────────
 
   function shouldRunScenario(s, ctx) {
     if (!s || s.status !== "active") return false;
     var er = s.entry_rules || {};
 
-    // page_type_in
-    var allowed = er.page && Array.isArray(er.page.page_type_in) ? er.page.page_type_in : null;
-    if (allowed && allowed.length) {
-      if (allowed.indexOf(ctx.page_type) === -1) return false;
-    }
-
-    // url rule（追加）
+    // url rule
     if (!shouldRunUrlRule(er, ctx)) return false;
+
+    // 配信頻度チェック
+    if (!checkAndMarkFrequency(s.scenario_id || s.id, er.display || null)) return false;
 
     // schedule（訪問者のローカル時間で判定）
     var schedule = s.schedule;
@@ -1008,6 +1126,12 @@
     }
     ctx.scenario_id = s.scenario_id || s.id;
     ctx.variant_id = s.variant_id || null;
+
+    // ゴール登録（コンバージョン計測用）
+    if (s.goal && s.goal.type && s.goal.value) {
+      var firstActionId = actions.length ? (actions[0].action_id || null) : null;
+      registerGoal(ctx.site_id, ctx.scenario_id, firstActionId, ctx.variant_id, s.goal);
+    }
 
     function fire() {
       runActions(actions, apiBase, ctx);
@@ -1066,6 +1190,23 @@
       return;
     }
 
+    // 管理者除外: URLパラメータ cx_exclude=1/0 でlocalStorageフラグをセット
+    try {
+      var excludeParam = new URLSearchParams(window.location.search).get("cx_exclude");
+      if (excludeParam === "1") {
+        localStorage.setItem("cx_no_track", "1");
+        log("[cx] admin opt-out ON (cx_exclude=1)");
+        // パラメータをURLから除去してリロード（履歴汚染を防ぐ）
+        var cleanUrl = window.location.href.replace(/[?&]cx_exclude=1/, "").replace(/\?$/, "").replace(/&$/, "");
+        window.history.replaceState(null, "", cleanUrl);
+      } else if (excludeParam === "0") {
+        localStorage.removeItem("cx_no_track");
+        log("[cx] admin opt-out OFF (cx_exclude=0)");
+        var cleanUrl2 = window.location.href.replace(/[?&]cx_exclude=0/, "").replace(/\?$/, "").replace(/&$/, "");
+        window.history.replaceState(null, "", cleanUrl2);
+      }
+    } catch (e) {}
+
     // 管理者除外: localStorage に cx_no_track=1 がセットされている場合はトラッキングをスキップ
     try {
       if (localStorage.getItem("cx_no_track") === "1") {
@@ -1111,6 +1252,9 @@
       sid: getOrCreateId("cx_sid_" + siteId),
       variant_id: null
     };
+
+    // コンバージョン計測: 前ページのシナリオゴールと現在のURLを照合してCV送信
+    checkPendingConversions(apiBase, ctx);
 
     // Shopify カート属性に cx_vid を同期（チェックアウトドメインが異なる場合でも Web Pixel から取得できるよう）
     try {

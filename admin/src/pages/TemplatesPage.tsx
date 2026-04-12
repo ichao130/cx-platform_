@@ -227,7 +227,7 @@ export default function TemplatesPage() {
     body: 'これが出れば成功🔥\n（テンプレートのプレビュー）',
     image_url: 'https://images.unsplash.com/photo-1520975693411-b7e3c5c8c3f1?auto=format&fit=crop&w=1200&q=60',
     cta_text: 'OK',
-    cta_url: 'https://nurihiro.website/',
+    cta_url: '',
     cta_url_text: '詳細を見る',
   });
 
@@ -501,7 +501,7 @@ export default function TemplatesPage() {
                 <button className="btn" onClick={() => {
                   if (!window.confirm('保存されていない変更があります。閉じますか？')) return;
                   setIsModalOpen(false);
-                }}>閉じる</button>
+                }}>✕ 閉じる</button>
               </div>
             </div>
 
@@ -567,7 +567,18 @@ export default function TemplatesPage() {
                 <div style={{ height: 10 }} />
                 <div className="h2">HTMLテンプレート</div>
                 <CodeEditor value={html} onChange={setHtml} minHeight={240} placeholder="<!-- HTMLをここに書いてください -->" />
-                <div className="small" style={{ marginTop: 6 }}>差し込み変数：title / body / image_url / cta_text / cta_url / cta_url_text。 <code>{'{{#if key}}...{{/if}}'}</code> も使えます。</div>
+                <details style={{ marginTop: 6 }}>
+                  <summary className="small" style={{ cursor: "pointer", color: "#2563eb", userSelect: "none" }}>📌 差し込みタグ一覧を見る</summary>
+                  <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "10px 14px", marginTop: 6, fontSize: 12, lineHeight: 1.8 }}>
+                    <div><code>{"{{title}}"}</code> — タイトル</div>
+                    <div><code>{"{{body}}"}</code> — 本文</div>
+                    <div><code>{"{{image_url}}"}</code> — 画像URL</div>
+                    <div><code>{"{{cta_text}}"}</code> — CTAボタン文言</div>
+                    <div><code>{"{{cta_url}}"}</code> — 遷移先URL</div>
+                    <div><code>{"{{cta_url_text}}"}</code> — 補助リンク文言</div>
+                    <div style={{ marginTop: 6, opacity: 0.7 }}><code>{"{{#if image_url}}"}</code>…<code>{"{{/if}}"}</code> — 条件分岐（値がある場合のみ表示）</div>
+                  </div>
+                </details>
 
                 <div style={{ height: 10 }} />
                 <div className="h2">CSSスタイル</div>
@@ -583,8 +594,20 @@ export default function TemplatesPage() {
                 <div style={{ height: 10 }} />
 
                 <div className="card liquid-page" style={{ background: 'linear-gradient(180deg,#ffffff,#f8fbff)', minWidth: 0 }}>
+                  <div className="h2">プレビュー</div>
+                  <iframe
+                    title="template-preview"
+                    sandbox=""
+                    style={{ width: '100%', height: 420, border: '1px solid rgba(15,23,42,.12)', borderRadius: 12, background: '#0b0b0b' }}
+                    srcDoc={previewSrcDoc}
+                  />
+                </div>
+
+                <div style={{ height: 12 }} />
+
+                <div className="card liquid-page" style={{ background: 'linear-gradient(180deg,#ffffff,#f8fbff)', minWidth: 0 }}>
                   <div className="h2">サンプル値</div>
-                  <div className="small">ここで入力した値を使って、テンプレートの見た目を確認できます。</div>
+                  <div className="small">ここで入力した値を使って、プレビューを確認できます。</div>
                   <div style={{ height: 10 }} />
                   <div className="h2">タイトル</div>
                   <input className="input" value={sample.title} onChange={(e) => setSample((s) => ({ ...s, title: e.target.value }))} />
@@ -608,18 +631,6 @@ export default function TemplatesPage() {
                   <div style={{ height: 10 }} />
                   <div className="h2">補助リンク文言</div>
                   <input className="input" value={sample.cta_url_text} onChange={(e) => setSample((s) => ({ ...s, cta_url_text: e.target.value }))} />
-                </div>
-
-                <div style={{ height: 12 }} />
-
-                <div className="card liquid-page" style={{ background: 'linear-gradient(180deg,#ffffff,#f8fbff)', minWidth: 0 }}>
-                  <div className="h2">見た目（リアルタイム）</div>
-                  <iframe
-                    title="template-preview"
-                    sandbox=""
-                    style={{ width: '100%', height: 420, border: '1px solid rgba(15,23,42,.12)', borderRadius: 12, background: '#0b0b0b' }}
-                    srcDoc={previewSrcDoc}
-                  />
                 </div>
 
               </div>

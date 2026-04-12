@@ -1,6 +1,7 @@
 // functions/src/index.ts
 import { setGlobalOptions } from "firebase-functions/v2";
 import { onCall, HttpsError, onRequest } from "firebase-functions/v2/https";
+import { onSchedule } from "firebase-functions/v2/scheduler";
 import { defineSecret } from "firebase-functions/params";
 
 import express from "express";
@@ -29,6 +30,7 @@ const MISOCA_CLIENT_SECRET = defineSecret("MISOCA_CLIENT_SECRET");
  * ここで Express を関数名 `api` として公開する
  */
 import { registerV1Routes } from "./routes/v1";
+import { registerMcpRoutes } from "./routes/mcp";
 
 const app = express();
 app.set("etag", false);
@@ -98,6 +100,7 @@ app.use("/v1/", apiLimiter);
 
 app.get("/", (_req, res) => res.status(200).send("ok"));
 registerV1Routes(app);
+registerMcpRoutes(app);
 export const api = onRequest(
 {
   region: "asia-northeast1",
@@ -111,6 +114,139 @@ export const api = onRequest(
 app
 );
 
+
+/**
+ * ワークスペースの全データを完全削除するヘルパー
+ * - workspaces, workspace_billing, workspace_limit_overrides, workspace_invites
+ * - sites, scenarios, actions, templates
+ * - media（Firestoreドキュメント＋Storageファイル）
+ * - logs, stats_daily（siteId経由・コスト節約のため全削除）
+ */
+async function deleteWorkspaceAllData(workspaceId: string): Promise<void> {
+  const db = adminDb();
+  const storage = getStorage().bucket();
+
+  /** バッチ削除ヘルパー（400件ずつ）*/
+  async function batchDelete(refs: FirebaseFirestore.DocumentReference[]) {
+    for (let i = 0; i < refs.length; i += 400) {
+      const batch = db.batch();
+      refs.slice(i, i + 400).forEach((r) => batch.delete(r));
+      await batch.commit();
+    }
+  }
+
+  /** クエリ結果を全件削除（大量データ対応・ページネーション）*/
+  async function deleteQuery(q: FirebaseFirestore.Query) {
+    let deleted = 0;
+    while (true) {
+      const snap = await q.limit(400).get();
+      if (snap.empty) break;
+      const batch = db.batch();
+      snap.docs.forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+      deleted += snap.size;
+      if (snap.size < 400) break;
+    }
+    return deleted;
+  }
+
+  // 1. workspaceに紐づく基本コレクションを一括取得
+  const [sitesSnap, scenariosSnap, actionsSnap, templatesSnap, mediaSnap, invitesSnap] = await Promise.all([
+    db.collection("sites").where("workspaceId", "==", workspaceId).get(),
+    db.collection("scenarios").where("workspaceId", "==", workspaceId).get(),
+    db.collection("actions").where("workspaceId", "==", workspaceId).get(),
+    db.collection("templates").where("workspaceId", "==", workspaceId).get(),
+    db.collection("media").where("workspaceId", "==", workspaceId).get(),
+    db.collection("workspace_invites").where("workspaceId", "==", workspaceId).get(),
+  ]);
+
+  // 2. サイトIDを収集してログ・統計を削除（最大30件のwhereIn制約対応）
+  const siteIds = sitesSnap.docs.map((d) => d.id);
+  let logsDeleted = 0;
+  let statsDeleted = 0;
+  if (siteIds.length > 0) {
+    // whereIn は30件まで → チャンク処理
+    for (let i = 0; i < siteIds.length; i += 30) {
+      const chunk = siteIds.slice(i, i + 30);
+      logsDeleted += await deleteQuery(db.collection("logs").where("site_id", "in", chunk));
+      statsDeleted += await deleteQuery(db.collection("stats_daily").where("siteId", "in", chunk));
+    }
+  }
+
+  // 3. メディアのStorageファイルを削除
+  await Promise.allSettled(
+    mediaSnap.docs.map(async (d) => {
+      const storagePath = (d.data() as any).storagePath;
+      if (storagePath) {
+        try { await storage.file(storagePath).delete({ ignoreNotFound: true } as any); } catch {}
+      }
+    })
+  );
+
+  // 4. Firestoreドキュメントを削除（基本コレクション）
+  await batchDelete([
+    ...sitesSnap.docs.map((d) => d.ref),
+    ...scenariosSnap.docs.map((d) => d.ref),
+    ...actionsSnap.docs.map((d) => d.ref),
+    ...templatesSnap.docs.map((d) => d.ref),
+    ...mediaSnap.docs.map((d) => d.ref),
+    ...invitesSnap.docs.map((d) => d.ref),
+    db.collection("workspace_billing").doc(workspaceId),
+    db.collection("workspace_limit_overrides").doc(workspaceId),
+    db.collection("workspaces").doc(workspaceId),
+  ]);
+
+  console.log(`[deleteWorkspaceAllData] workspaceId=${workspaceId}: sites=${sitesSnap.size} scenarios=${scenariosSnap.size} actions=${actionsSnap.size} templates=${templatesSnap.size} media=${mediaSnap.size} logs=${logsDeleted} stats=${statsDeleted}`);
+}
+
+/**
+ * ==========================
+ * Scheduled: 期限切れFreeアカウント自動削除
+ * 毎日JST 03:00 に実行。
+ * free_expires_at + 10日 を過ぎたワークスペースを完全削除する。
+ * 特別トライアル中（access_override_active）は対象外。
+ * ==========================
+ */
+export const cleanupExpiredFreeAccounts = onSchedule(
+  { region: "asia-northeast1", schedule: "0 18 * * *", timeZone: "UTC", timeoutSeconds: 540 }, // UTC 18:00 = JST 03:00
+  async () => {
+    const db = adminDb();
+    const now = Date.now();
+    const GRACE_MS = 10 * 24 * 60 * 60 * 1000; // 10日
+
+    const wsSnap = await db.collection("workspaces").get();
+    let deleted = 0;
+
+    for (const doc of wsSnap.docs) {
+      const ws = doc.data() as any;
+      const billing = (ws.billing || {}) as any;
+      if (!billing.free_expires_at) continue;
+      // 有料プランへ移行済みはスキップ
+      if (billing.plan && billing.plan !== "free") continue;
+
+      // 特別トライアル中はスキップ
+      const accessSnap = await db.collection("workspace_billing").doc(doc.id).get();
+      const access = (accessSnap.data() || {}) as any;
+      if (access.access_override_active) {
+        const until = access.access_override_until ? new Date(access.access_override_until).getTime() : Infinity;
+        if (until > now) continue;
+      }
+
+      const expiresAt = new Date(billing.free_expires_at).getTime();
+      if (now < expiresAt + GRACE_MS) continue;
+
+      // 完全削除
+      try {
+        await deleteWorkspaceAllData(doc.id);
+        deleted++;
+      } catch (e) {
+        console.error(`[cleanupExpiredFreeAccounts] failed to delete workspaceId=${doc.id}:`, e);
+      }
+    }
+
+    console.log(`[cleanupExpiredFreeAccounts] deleted ${deleted} expired workspaces`);
+  }
+);
 
 /**
  * ==========================

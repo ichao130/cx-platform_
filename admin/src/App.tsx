@@ -191,6 +191,13 @@ function genWorkspaceId() {
   return `ws_${Math.random().toString(36).slice(2, 10)}_${Date.now()}`;
 }
 
+function genPublicKey() {
+  const d = new Date();
+  const date = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+  const rand = Math.random().toString(36).slice(2, 8).toUpperCase();
+  return `PK${date}-${rand}`;
+}
+
 
 function readMemberRole(raw: any): RoleKey | null {
   if (typeof raw === "string") return raw as RoleKey;
@@ -228,6 +235,121 @@ function SidebarLink({
     >
       {children}
     </NavLink>
+  );
+}
+
+function McpTokenButton({ user }: { user: User }) {
+  const [apiKey, setApiKey] = React.useState<string | null>(null);
+  const [copied, setCopied] = React.useState(false);
+  const [loading, setLoading] = React.useState(false);
+  const [generating, setGenerating] = React.useState(false);
+
+  // マウント時にAPIキーを取得
+  React.useEffect(() => {
+    let cancelled = false;
+    user.getIdToken().then(async (token) => {
+      try {
+        const res = await fetch(`${API_BASE}/v1/mcp-key`, { headers: { Authorization: `Bearer ${token}` } });
+        const json = await res.json();
+        if (!cancelled) setApiKey(json.key || null);
+      } catch {}
+    });
+    return () => { cancelled = true; };
+  }, [user]);
+
+  const handleGenerate = async () => {
+    if (!confirm("新しいAPIキーを発行します。既存のキーは使えなくなります。よろしいですか？")) return;
+    setGenerating(true);
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch(`${API_BASE}/v1/mcp-key/generate`, { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+      const json = await res.json();
+      setApiKey(json.key || null);
+    } catch {
+      alert("APIキーの発行に失敗しました。");
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const MCP_URL = apiKey
+    ? `https://api-o56523at7q-an.a.run.app/mcp?key=${apiKey}`
+    : null;
+
+  const handleCopy = async () => {
+    if (!MCP_URL) return;
+    setLoading(true);
+    try {
+      await navigator.clipboard.writeText(MCP_URL);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {}
+    setLoading(false);
+  };
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      {apiKey ? (
+        <>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,.38)", fontWeight: 600, letterSpacing: ".06em", marginBottom: 4 }}>MCP URL</div>
+          <div style={{ display: "flex", gap: 4 }}>
+            <button
+              onClick={handleCopy}
+              disabled={loading}
+              title={MCP_URL || ""}
+              style={{
+                flex: 1, minWidth: 0,
+                background: copied ? "rgba(73,177,184,.22)" : "rgba(255,255,255,.07)",
+                border: "1px solid rgba(255,255,255,.12)",
+                borderRadius: 8,
+                color: copied ? "#59cfe0" : "rgba(255,255,255,.55)",
+                fontSize: 10, fontWeight: 600,
+                padding: "6px 8px",
+                cursor: "pointer",
+                textAlign: "left",
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              }}
+            >
+              {copied ? "✅ コピーしました" : "🔑 MCP URLをコピー"}
+            </button>
+            <button
+              onClick={handleGenerate}
+              disabled={generating}
+              title="APIキーを再発行する"
+              style={{
+                background: "rgba(255,255,255,.07)",
+                border: "1px solid rgba(255,255,255,.12)",
+                borderRadius: 8,
+                color: "rgba(255,255,255,.38)",
+                fontSize: 11, padding: "6px 8px",
+                cursor: generating ? "wait" : "pointer",
+                flexShrink: 0,
+              }}
+            >
+              {generating ? "⏳" : "🔄"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <button
+          onClick={handleGenerate}
+          disabled={generating}
+          style={{
+            width: "100%",
+            background: "rgba(255,255,255,.07)",
+            border: "1px solid rgba(255,255,255,.12)",
+            borderRadius: 8,
+            color: "rgba(255,255,255,.55)",
+            fontSize: 11, fontWeight: 600,
+            padding: "6px 10px",
+            cursor: generating ? "wait" : "pointer",
+            textAlign: "left",
+          }}
+        >
+          {generating ? "⏳ 発行中..." : "🔑 MCPキーを発行する"}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -529,12 +651,12 @@ function AppShell({ children }: { children: React.ReactNode }) {
           <div style={{ display: "grid", gap: 4 }}>
             {canShow(canAccess, "dashboard") && <SidebarLink to="/dashboard">ダッシュボード</SidebarLink>}
             {canShow(canAccess, "analytics") && <SidebarLink to="/analytics">流入計測</SidebarLink>}
-            {canShow(canAccess, "sites") && <SidebarLink to="/sites">サイト</SidebarLink>}
             {canShow(canAccess, "scenarios") && <SidebarLink to="/scenarios">シナリオ</SidebarLink>}
             {canShow(canAccess, "actions") && <SidebarLink to="/actions">アクション</SidebarLink>}
             {canShow(canAccess, "templates") && <SidebarLink to="/templates">テンプレート</SidebarLink>}
             {canShow(canAccess, "media") && <SidebarLink to="/media">メディア</SidebarLink>}
             {canShow(canAccess, "ai") && <SidebarLink to="/ai">AIインサイト</SidebarLink>}
+            {canShow(canAccess, "ai") && <SidebarLink to="/ai/optimize">配信最適化</SidebarLink>}
           </div>
         </div>
 
@@ -544,10 +666,12 @@ function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <div style={{ display: "grid", gap: 4 }}>
             {(isPlatformAdmin || canShow(canAccess, "workspaces")) && <SidebarLink to="/workspaces">ワークスペース</SidebarLink>}
+            {canShow(canAccess, "sites") && <SidebarLink to="/sites">サイト</SidebarLink>}
             {canShow(canAccess, "members") && <SidebarLink to="/workspace/members">メンバー</SidebarLink>}
             {canShow(canAccess, "billing") && <SidebarLink to="/workspace/billing">契約 / Billing</SidebarLink>}
           </div>
         </div>
+
 
         <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid rgba(15,23,42,.08)" }}>
           <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "rgba(255,255,255,.38)", marginBottom: 8, paddingLeft: 12 }}>
@@ -596,6 +720,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
               ↩
             </button>
           </div>
+          <McpTokenButton user={user} />
         </div>
       </aside>
 
@@ -760,6 +885,98 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     access: defaultAccessMatrix(),
   });
   const [bootstrapping, setBootstrapping] = useState(false);
+  const [bootstrapDone, setBootstrapDone] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
+  const [wizardStep, setWizardStep] = useState(1);
+  const [wizardName, setWizardName] = useState("");
+  const [wizardContact, setWizardContact] = useState("");
+  const [wizardEmail, setWizardEmail] = useState("");
+  const [wizardSiteName, setWizardSiteName] = useState("");
+  const [wizardSiteDomain, setWizardSiteDomain] = useState("");
+  const [wizardCreatedSiteId, setWizardCreatedSiteId] = useState("");
+  const [wizardCreatedPublicKey, setWizardCreatedPublicKey] = useState("");
+  const [wizardCopied, setWizardCopied] = useState(false);
+  const [wizardTagMode, setWizardTagMode] = useState<"direct" | "gtm" | "shopify">("direct");
+
+  const completeWizard = useCallback(async (wsName: string, contactName: string, contactEmail: string, siteName: string, siteDomain: string) => {
+    if (!user) return;
+    try {
+      setBootstrapping(true);
+      const workspaceId = genWorkspaceId();
+      const freeExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      await setDoc(doc(db, "workspaces", workspaceId), {
+        name: wsName.trim() || "My Workspace",
+        domains: [],
+        defaults: { ai: { decision: false, discovery: "suggest", copy: "approve" }, access: defaultAccessMatrix() },
+        members: { [user.uid]: "owner" },
+        billing: {
+          plan: "free",
+          status: "inactive",
+          billing_company_name: wsName.trim(),
+          billing_contact_name: contactName.trim(),
+          billing_email: contactEmail.trim() || user.email || "",
+          free_expires_at: freeExpiresAt,
+        },
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        createdBy: user.uid,
+      }, { merge: true });
+      await setDoc(doc(db, "users", user.uid), {
+        uid: user.uid,
+        email: user.email || "",
+        displayName: contactName.trim() || user.displayName || "",
+        photoURL: user.photoURL || "",
+        primaryWorkspaceId: workspaceId,
+        updatedAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+      }, { merge: true });
+      writeSelectedWorkspaceId(workspaceId, user.uid);
+
+      // ウェルカムメール送信（失敗してもUIには影響させない）
+      try {
+        const idToken = await user.getIdToken();
+        await fetch(`${API_BASE}/v1/welcome-email`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+          body: JSON.stringify({
+            to: contactEmail.trim() || user.email || "",
+            workspaceName: wsName.trim(),
+            contactName: contactName.trim(),
+          }),
+        });
+      } catch {}
+
+      // 最初のサイトを作成
+      const publicKey = genPublicKey();
+      const domains = siteDomain.trim() ? [siteDomain.trim().replace(/^https?:\/\//, "").split("/")[0]] : [];
+      let createdSiteId = "";
+      let createdPublicKey = publicKey;
+      try {
+        const idToken = await user.getIdToken();
+        const siteRes = await fetch(`${API_BASE}/v1/sites/create`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+          body: JSON.stringify({
+            workspace_id: workspaceId,
+            name: siteName.trim() || wsName.trim() || "My Site",
+            public_key: publicKey,
+            domains,
+          }),
+        });
+        const siteJson = await siteRes.json().catch(() => ({}));
+        createdSiteId = siteJson.site_id || "";
+        createdPublicKey = siteJson.public_key || publicKey;
+      } catch {}
+
+      setWizardCreatedSiteId(createdSiteId);
+      setWizardCreatedPublicKey(createdPublicKey);
+      setWizardStep(5); // コードスニペットステップへ
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setBootstrapping(false);
+    }
+  }, [user]);
 
   useEffect(() => {
     let unsub: (() => void) | null = null;
@@ -909,9 +1126,13 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   }, [user]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      setBootstrapDone(false);
+      return;
+    }
 
     let cancelled = false;
+    setBootstrapDone(false);
 
     const ensureBootstrap = async () => {
       try {
@@ -952,50 +1173,21 @@ function AuthGate({ children }: { children: React.ReactNode }) {
           }
         }
 
-        const workspaceId = genWorkspaceId();
-        const workspaceRef = doc(db, "workspaces", workspaceId);
-
-        await setDoc(
-          workspaceRef,
-          {
-            name: user.displayName ? `${user.displayName} Workspace` : "My Workspace",
-            domains: [],
-            defaults: {
-              ai: { decision: false, discovery: "suggest", copy: "approve" },
-              access: defaultAccessMatrix(),
-            },
-            members: {
-              [user.uid]: "owner",
-            },
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-            createdBy: user.uid,
-          },
-          { merge: true }
-        );
-
-        await setDoc(
-          userRef,
-          {
-            uid: user.uid,
-            email: user.email || "",
-            displayName: user.displayName || "",
-            photoURL: user.photoURL || "",
-            primaryWorkspaceId: workspaceId,
-            updatedAt: serverTimestamp(),
-            createdAt: userSnap.exists() ? (userSnap.data() as any)?.createdAt || serverTimestamp() : serverTimestamp(),
-          },
-          { merge: true }
-        );
-
+        // 初回ログイン → ウィザードでワークスペース名を入力させる
         if (!cancelled) {
-          writeSelectedWorkspaceId(workspaceId, user.uid);
+          setWizardName(user.displayName ? `${user.displayName}のワークスペース` : "My Workspace");
+          setShowWizard(true);
+          setBootstrapping(false);
         }
+        return;
       } catch (e: any) {
-        console.error("[AuthGate] bootstrap failed", e);
+        console.error("[AuthGate] bootstrap wizard failed", e);
         if (!cancelled) setError(e?.message || String(e));
       } finally {
-        if (!cancelled) setBootstrapping(false);
+        if (!cancelled) {
+          setBootstrapping(false);
+          setBootstrapDone(true);
+        }
       }
     };
 
@@ -1089,7 +1281,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 
   }, [user, getIdToken, apiFetch, apiPost, logout, workspaceInfo, canAccess]);
 
-  if (checking || (user && bootstrapping && !workspaceInfo.workspaceId)) {
+  if (checking || (user && !bootstrapDone)) {
     return <LoadingScreen label={bootstrapping ? "ワークスペースを初期化しています..." : "読み込み中..."} />;
   }
 
@@ -1139,7 +1331,320 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
+  // 初回ログインウィザード（モーダル）
+  if (showWizard) {
+    const STEPS = [
+      { label: "ショップ情報", icon: "🏪" },
+      { label: "担当者", icon: "👤" },
+      { label: "メールアドレス", icon: "✉️" },
+      { label: "サイト登録", icon: "🌐" },
+      { label: "コードをはりつける", icon: "📋" },
+    ];
+    const canNext =
+      (wizardStep === 1 && !!wizardName.trim()) ||
+      (wizardStep === 2 && !!wizardContact.trim()) ||
+      (wizardStep === 3 && !!wizardEmail.trim()) ||
+      (wizardStep === 4 && !!wizardSiteName.trim() && !bootstrapping) ||
+      wizardStep === 5;
 
+    return (
+      <>
+        <AuthContext.Provider value={ctxValue}>{children}</AuthContext.Provider>
+        {/* オーバーレイ */}
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 9000,
+          background: "rgba(15,23,42,.55)",
+          backdropFilter: "blur(4px)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          padding: 16,
+        }}>
+          <div style={{
+            background: "#fff",
+            borderRadius: 20,
+            width: "100%",
+            maxWidth: 480,
+            boxShadow: "0 24px 64px rgba(15,23,42,.22)",
+            overflow: "hidden",
+          }}>
+            {/* ヘッダー */}
+            <div style={{
+              background: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)",
+              padding: "28px 32px 24px",
+              textAlign: "center",
+              color: "#fff",
+            }}>
+              <img
+                src="/logo_mokkeda_v1.svg"
+                alt="MOKKEDA"
+                style={{ width: 140, height: "auto", filter: "brightness(0) invert(1)", marginBottom: 16, display: "block", margin: "0 auto 16px" }}
+              />
+              <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 6 }}>
+                ようこそ！🎉
+              </div>
+              <div style={{ fontSize: 13, opacity: .85 }}>
+                はじめに、いくつか教えてください（30秒で完了）
+              </div>
+            </div>
+
+            {/* ステップインジケーター */}
+            <div style={{ display: "flex", borderBottom: "1px solid rgba(15,23,42,.07)" }}>
+              {STEPS.map((st, i) => {
+                const step = i + 1;
+                const isActive = step === wizardStep;
+                const isDone = step < wizardStep;
+                return (
+                  <div key={step} style={{
+                    flex: 1,
+                    padding: "12px 8px",
+                    textAlign: "center",
+                    borderBottom: isActive ? "2px solid #2563eb" : "2px solid transparent",
+                    transition: "border-color .2s",
+                  }}>
+                    <div style={{
+                      width: 28, height: 28, borderRadius: "50%",
+                      margin: "0 auto 4px",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      fontSize: isDone ? 14 : 13,
+                      background: isDone ? "#2563eb" : isActive ? "#eff6ff" : "#f1f5f9",
+                      color: isDone ? "#fff" : isActive ? "#2563eb" : "#94a3b8",
+                      fontWeight: 700,
+                      transition: "all .2s",
+                    }}>
+                      {isDone ? "✓" : st.icon}
+                    </div>
+                    <div style={{ fontSize: 11, color: isActive ? "#2563eb" : isDone ? "#64748b" : "#94a3b8", fontWeight: isActive ? 700 : 400 }}>
+                      {st.label}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* コンテンツ */}
+            <div style={{ padding: "28px 32px 24px" }}>
+              {wizardStep === 1 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <label style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>
+                    会社名・ショップ名 <span style={{ color: "#ef4444" }}>*</span>
+                  </label>
+                  <input
+                    className="input"
+                    placeholder="例：山田商店 / 株式会社〇〇"
+                    value={wizardName}
+                    onChange={(e) => setWizardName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter" && wizardName.trim()) setWizardStep(2); }}
+                    autoFocus
+                    style={{ fontSize: 15, padding: "11px 14px" }}
+                  />
+                  <div style={{ fontSize: 12, color: "#6b7280" }}>ワークスペース名として使用されます。後から変更できます。</div>
+                </div>
+              )}
+              {wizardStep === 2 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <label style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>
+                    担当者名 <span style={{ color: "#ef4444" }}>*</span>
+                  </label>
+                  <input
+                    className="input"
+                    placeholder="例：山田 太郎"
+                    value={wizardContact}
+                    onChange={(e) => setWizardContact(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter" && wizardContact.trim()) setWizardStep(3); }}
+                    autoFocus
+                    style={{ fontSize: 15, padding: "11px 14px" }}
+                  />
+                  <div style={{ fontSize: 12, color: "#6b7280" }}>サービスのご案内やサポート連絡時にご利用します。</div>
+                </div>
+              )}
+              {wizardStep === 3 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <label style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>
+                    連絡先メールアドレス <span style={{ color: "#ef4444" }}>*</span>
+                  </label>
+                  <input
+                    className="input"
+                    type="email"
+                    placeholder="例：yamada@example.com"
+                    value={wizardEmail}
+                    onChange={(e) => setWizardEmail(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter" && wizardEmail.trim()) setWizardStep(4); }}
+                    autoFocus
+                    style={{ fontSize: 15, padding: "11px 14px" }}
+                  />
+                  <div style={{ fontSize: 12, color: "#6b7280" }}>請求書や重要なお知らせをお送りします。</div>
+                </div>
+              )}
+              {wizardStep === 4 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    <label style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>
+                      サイト名 <span style={{ color: "#ef4444" }}>*</span>
+                    </label>
+                    <input
+                      className="input"
+                      placeholder="例：山田商店 公式サイト"
+                      value={wizardSiteName}
+                      onChange={(e) => setWizardSiteName(e.target.value)}
+                      autoFocus
+                      style={{ fontSize: 15, padding: "11px 14px" }}
+                    />
+                    <div style={{ fontSize: 12, color: "#6b7280" }}>管理画面でサイトを識別するための名前です。</div>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    <label style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>
+                      サイトURL <span style={{ color: "#94a3b8", fontWeight: 400 }}>（任意）</span>
+                    </label>
+                    <input
+                      className="input"
+                      placeholder="例：https://example.com"
+                      value={wizardSiteDomain}
+                      onChange={(e) => setWizardSiteDomain(e.target.value)}
+                      style={{ fontSize: 15, padding: "11px 14px" }}
+                    />
+                    <div style={{ fontSize: 12, color: "#6b7280" }}>後から追加・変更できます。</div>
+                  </div>
+                </div>
+              )}
+              {wizardStep === 5 && (() => {
+                const siteId = wizardCreatedSiteId;
+                const pubKey = wizardCreatedPublicKey;
+                const apiBase = "https://asia-northeast1-cx-platform-v1.cloudfunctions.net/api/v1/serve";
+                const copyCode =
+                  wizardTagMode === "gtm"
+                    ? `(function() {\n  var s = document.createElement('script');\n  s.src = 'https://app.mokkeda.com/sdk.js';\n  s.setAttribute('data-site-id', '${siteId}');\n  s.setAttribute('data-site-key', '${pubKey}');\n  s.setAttribute('data-api-base', '${apiBase}');\n  document.head.appendChild(s);\n})();`
+                    : wizardTagMode === "shopify"
+                    ? `{% comment %}Mokkeda{% endcomment %}\n<script\n  src="https://app.mokkeda.com/sdk.js"\n  data-site-id="${siteId}"\n  data-site-key="${pubKey}"\n  data-api-base="${apiBase}"\n  defer\n></script>`
+                    : `<script\n  src="https://app.mokkeda.com/sdk.js"\n  data-site-id="${siteId}"\n  data-site-key="${pubKey}"\n  data-api-base="${apiBase}"\n  defer\n></script>`;
+
+                const TAB_STYLES = (active: boolean) => ({
+                  flex: 1, padding: "7px 4px", fontSize: 12, fontWeight: active ? 700 : 400,
+                  background: active ? "#2563eb" : "#f1f5f9",
+                  color: active ? "#fff" : "#64748b",
+                  border: "none", borderRadius: 6, cursor: "pointer", transition: "all .15s",
+                });
+
+                return (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    {/* タブ切り替え */}
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {(["direct", "gtm", "shopify"] as const).map((mode) => (
+                        <button key={mode} style={TAB_STYLES(wizardTagMode === mode)} onClick={() => setWizardTagMode(mode)}>
+                          {mode === "direct" ? "🌐 通常" : mode === "gtm" ? "📦 GTM" : "🛒 Shopify"}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* 説明文 */}
+                    <div style={{ fontSize: 12, color: "#374151", fontWeight: 600 }}>
+                      {wizardTagMode === "direct" && <>サイトの <code style={{ background: "#f1f5f9", padding: "1px 5px", borderRadius: 4 }}>&lt;head&gt;</code> タグ内にはりつけてください。</>}
+                      {wizardTagMode === "gtm" && <>Google Tag Manager の <b>カスタムHTML タグ</b> に貼り付けてください。</>}
+                      {wizardTagMode === "shopify" && <>Shopify管理画面 → <b>テーマ → テーマの編集 → theme.liquid</b> の <code style={{ background: "#f1f5f9", padding: "1px 5px", borderRadius: 4 }}>&lt;/head&gt;</code> の直前に貼り付けてください。</>}
+                    </div>
+
+                    {/* コードブロック */}
+                    <div style={{ position: "relative" }}>
+                      <pre style={{
+                        margin: 0, padding: "16px",
+                        background: "#1a2a3a", color: "#e2f0f5",
+                        borderRadius: 10, fontSize: 12, lineHeight: 1.75,
+                        overflowX: "auto", whiteSpace: "pre", userSelect: "all",
+                        border: "1px solid rgba(255,255,255,.06)",
+                      }}>
+                        {wizardTagMode === "gtm" ? (
+                          <>
+                            <span style={{ color: "#94a3b8" }}>{"(function() {"}</span>{"\n"}
+                            {"  "}<span style={{ color: "#94a3b8" }}>var s = </span><span style={{ color: "#a8d8a8" }}>document</span><span style={{ color: "#94a3b8" }}>.createElement(</span><span style={{ color: "#ffd580" }}>'script'</span><span style={{ color: "#94a3b8" }}>);</span>{"\n"}
+                            {"  "}<span style={{ color: "#94a3b8" }}>s.src = </span><span style={{ color: "#ffd580" }}>'https://app.mokkeda.com/sdk.js'</span><span style={{ color: "#94a3b8" }}>;</span>{"\n"}
+                            {"  "}<span style={{ color: "#94a3b8" }}>s.setAttribute(</span><span style={{ color: "#ffd580" }}>'data-site-id'</span><span style={{ color: "#94a3b8" }}>, </span><span style={{ color: "#ffd580" }}>'{siteId}'</span><span style={{ color: "#94a3b8" }}>);</span>{"\n"}
+                            {"  "}<span style={{ color: "#94a3b8" }}>s.setAttribute(</span><span style={{ color: "#ffd580" }}>'data-site-key'</span><span style={{ color: "#94a3b8" }}>, </span><span style={{ color: "#ffd580" }}>'{pubKey}'</span><span style={{ color: "#94a3b8" }}>);</span>{"\n"}
+                            {"  "}<span style={{ color: "#94a3b8" }}>s.setAttribute(</span><span style={{ color: "#ffd580" }}>'data-api-base'</span><span style={{ color: "#94a3b8" }}>, </span><span style={{ color: "#ffd580" }}>'{apiBase}'</span><span style={{ color: "#94a3b8" }}>);</span>{"\n"}
+                            {"  "}<span style={{ color: "#a8d8a8" }}>document</span><span style={{ color: "#94a3b8" }}>.head.appendChild(s);</span>{"\n"}
+                            <span style={{ color: "#94a3b8" }}>{"})();"}</span>
+                          </>
+                        ) : wizardTagMode === "shopify" ? (
+                          <>
+                            <span style={{ color: "#94a3b8" }}>{"{%"} comment {"%}"}</span><span style={{ color: "#a8d8a8" }}>Mokkeda</span><span style={{ color: "#94a3b8" }}>{"{%"} endcomment {"%}"}</span>{"\n"}
+                            <span style={{ color: "#7ec8e3" }}>&lt;script</span>{"\n"}
+                            {"  "}<span style={{ color: "#a8d8a8" }}>src</span><span style={{ color: "#e2f0f5" }}>="</span><span style={{ color: "#ffd580" }}>https://app.mokkeda.com/sdk.js</span><span style={{ color: "#e2f0f5" }}>"</span>{"\n"}
+                            {"  "}<span style={{ color: "#a8d8a8" }}>data-site-id</span><span style={{ color: "#e2f0f5" }}>="</span><span style={{ color: "#ffd580" }}>{siteId}</span><span style={{ color: "#e2f0f5" }}>"</span>{"\n"}
+                            {"  "}<span style={{ color: "#a8d8a8" }}>data-site-key</span><span style={{ color: "#e2f0f5" }}>="</span><span style={{ color: "#ffd580" }}>{pubKey}</span><span style={{ color: "#e2f0f5" }}>"</span>{"\n"}
+                            {"  "}<span style={{ color: "#a8d8a8" }}>data-api-base</span><span style={{ color: "#e2f0f5" }}>="</span><span style={{ color: "#ffd580" }}>{apiBase}</span><span style={{ color: "#e2f0f5" }}>"</span>{"\n"}
+                            {"  "}<span style={{ color: "#a8d8a8" }}>defer</span>{"\n"}
+                            <span style={{ color: "#7ec8e3" }}>&gt;&lt;/script&gt;</span>
+                          </>
+                        ) : (
+                          <>
+                            <span style={{ color: "#7ec8e3" }}>&lt;script</span>{"\n"}
+                            {"  "}<span style={{ color: "#a8d8a8" }}>src</span><span style={{ color: "#e2f0f5" }}>="</span><span style={{ color: "#ffd580" }}>https://app.mokkeda.com/sdk.js</span><span style={{ color: "#e2f0f5" }}>"</span>{"\n"}
+                            {"  "}<span style={{ color: "#a8d8a8" }}>data-site-id</span><span style={{ color: "#e2f0f5" }}>="</span><span style={{ color: "#ffd580" }}>{siteId}</span><span style={{ color: "#e2f0f5" }}>"</span>{"\n"}
+                            {"  "}<span style={{ color: "#a8d8a8" }}>data-site-key</span><span style={{ color: "#e2f0f5" }}>="</span><span style={{ color: "#ffd580" }}>{pubKey}</span><span style={{ color: "#e2f0f5" }}>"</span>{"\n"}
+                            {"  "}<span style={{ color: "#a8d8a8" }}>data-api-base</span><span style={{ color: "#e2f0f5" }}>="</span><span style={{ color: "#ffd580" }}>{apiBase}</span><span style={{ color: "#e2f0f5" }}>"</span>{"\n"}
+                            {"  "}<span style={{ color: "#a8d8a8" }}>defer</span>{"\n"}
+                            <span style={{ color: "#7ec8e3" }}>&gt;&lt;/script&gt;</span>
+                          </>
+                        )}
+                      </pre>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(copyCode).then(() => {
+                            setWizardCopied(true);
+                            setTimeout(() => setWizardCopied(false), 2000);
+                          }).catch(() => {});
+                        }}
+                        style={{
+                          position: "absolute", top: 10, right: 10,
+                          background: wizardCopied ? "#22c55e" : "rgba(255,255,255,.12)",
+                          color: "#fff", border: "none", borderRadius: 6,
+                          padding: "5px 12px", fontSize: 12, cursor: "pointer",
+                          transition: "background .2s",
+                        }}
+                      >
+                        {wizardCopied ? "✓ コピー済み" : "📋 コピー"}
+                      </button>
+                    </div>
+                    <div style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.6 }}>
+                      このコードはサイト管理画面からいつでも確認できます。
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {error && (
+                <div style={{ marginTop: 12, padding: "10px 14px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, fontSize: 13, color: "#dc2626" }}>
+                  {error}
+                </div>
+              )}
+
+              {/* ボタン */}
+              <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+                {wizardStep > 1 && wizardStep < 5 && (
+                  <button
+                    className="btn"
+                    onClick={() => setWizardStep((s) => s - 1)}
+                    style={{ padding: "11px 20px", fontSize: 14 }}
+                  >
+                    ← 戻る
+                  </button>
+                )}
+                <button
+                  className="btn btn--primary"
+                  disabled={!canNext}
+                  onClick={() => {
+                    if (wizardStep < 4) setWizardStep((s) => s + 1);
+                    else if (wizardStep === 4) completeWizard(wizardName, wizardContact, wizardEmail, wizardSiteName, wizardSiteDomain);
+                    else setShowWizard(false);
+                  }}
+                  style={{ flex: 1, padding: "11px 24px", fontSize: 15, fontWeight: 700 }}
+                >
+                  {wizardStep < 4 ? "次へ →" : wizardStep === 4 ? (bootstrapping ? "作成中..." : "はじめる 🚀") : "完了 →"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
 
   return <AuthContext.Provider value={ctxValue}>{children}</AuthContext.Provider>;
 }

@@ -201,7 +201,11 @@ const WorkspaceBillingUpdateReqSchema = zod_1.z.object({
     trial_days: zod_1.z.number().int().min(0).max(365).optional(),
     trial_ends_at: zod_1.z.string().datetime().optional(),
     current_period_ends_at: zod_1.z.string().datetime().optional(),
+    free_expires_at: zod_1.z.string().datetime().nullable().optional(),
     billing_email: zod_1.z.preprocess((v) => (v === "" ? undefined : v), zod_1.z.string().email().optional().nullable()),
+    billing_company_name: zod_1.z.string().max(200).nullable().optional(),
+    billing_contact_name: zod_1.z.string().max(200).nullable().optional(),
+    billing_contact_phone: zod_1.z.string().max(100).nullable().optional(),
     stripe_customer_id: zod_1.z.string().min(1).optional(),
     stripe_subscription_id: zod_1.z.string().min(1).optional(),
     stripe_price_id: zod_1.z.string().min(1).optional(),
@@ -626,12 +630,16 @@ function normalizeBillingProvider(input, plan) {
         return raw;
     return String(plan || "") === "custom" ? "manual" : "stripe";
 }
-function buildBillingResponse(billing, planDoc, overrideDoc) {
+function buildBillingResponse(billing, planDoc, overrideDoc, accessOverride) {
     return {
-        plan: billing?.plan || "standard",
+        plan: billing?.plan || "free",
         status: billing?.status || "inactive",
         provider: normalizeBillingProvider(billing?.provider, billing?.plan),
         billing_email: billing?.billing_email || null,
+        billing_company_name: billing?.billing_company_name || null,
+        billing_contact_name: billing?.billing_contact_name || null,
+        billing_contact_phone: billing?.billing_contact_phone || null,
+        free_expires_at: billing?.free_expires_at || null,
         trial_ends_at: billing?.trial_ends_at || null,
         current_period_ends_at: billing?.current_period_ends_at || null,
         stripe_customer_id: billing?.stripe_customer_id || null,
@@ -639,6 +647,9 @@ function buildBillingResponse(billing, planDoc, overrideDoc) {
         stripe_price_id: billing?.stripe_price_id || null,
         custom_limit_override_id: billing?.custom_limit_override_id || null,
         manual_billing_note: billing?.manual_billing_note || "",
+        access_override_active: accessOverride?.access_override_active || false,
+        access_override_until: accessOverride?.access_override_until || null,
+        access_override_note: accessOverride?.access_override_note || "",
         plan_master: planDoc
             ? {
                 id: planDoc.id || "",
@@ -2330,12 +2341,16 @@ function registerV1Routes(app) {
                 : null;
             const planDoc = planSnap && !planSnap.empty ? { id: planSnap.docs[0].id, ...(planSnap.docs[0].data() || {}) } : null;
             const overrideId = String(billing.custom_limit_override_id || body.workspace_id);
-            const overrideSnap = await db.collection("workspace_limit_overrides").doc(overrideId).get();
+            const [overrideSnap, accessOverrideSnap] = await Promise.all([
+                db.collection("workspace_limit_overrides").doc(overrideId).get(),
+                db.collection("workspace_billing").doc(body.workspace_id).get(),
+            ]);
             const overrideDoc = overrideSnap.exists ? (overrideSnap.data() || {}) : null;
+            const accessOverride = accessOverrideSnap.exists ? (accessOverrideSnap.data() || {}) : null;
             const responseBilling = buildBillingResponse({
                 ...billing,
                 updatedAt: billing.updatedAt || w.updatedAt || null,
-            }, planDoc, overrideDoc);
+            }, planDoc, overrideDoc, accessOverride);
             return res.json({
                 ok: true,
                 workspace_id: body.workspace_id,
@@ -2388,6 +2403,14 @@ function registerV1Routes(app) {
                 patch.provider = normalizeBillingProvider(body.provider, body.plan);
             if (body.billing_email)
                 patch.billing_email = body.billing_email.toLowerCase();
+            if (body.billing_company_name !== undefined)
+                patch.billing_company_name = body.billing_company_name;
+            if (body.billing_contact_name !== undefined)
+                patch.billing_contact_name = body.billing_contact_name;
+            if (body.billing_contact_phone !== undefined)
+                patch.billing_contact_phone = body.billing_contact_phone;
+            if (body.free_expires_at !== undefined)
+                patch.free_expires_at = body.free_expires_at;
             if (body.stripe_customer_id)
                 patch.stripe_customer_id = body.stripe_customer_id;
             if (body.stripe_subscription_id)
@@ -2426,12 +2449,16 @@ function registerV1Routes(app) {
                 : null;
             const planDoc = planSnap && !planSnap.empty ? { id: planSnap.docs[0].id, ...(planSnap.docs[0].data() || {}) } : null;
             const overrideId = String(billing.custom_limit_override_id || body.workspace_id);
-            const overrideSnap = await db.collection("workspace_limit_overrides").doc(overrideId).get();
-            const overrideDoc = overrideSnap.exists ? (overrideSnap.data() || {}) : null;
+            const [overrideSnap2, accessOverrideSnap2] = await Promise.all([
+                db.collection("workspace_limit_overrides").doc(overrideId).get(),
+                db.collection("workspace_billing").doc(body.workspace_id).get(),
+            ]);
+            const overrideDoc = overrideSnap2.exists ? (overrideSnap2.data() || {}) : null;
+            const accessOverride2 = accessOverrideSnap2.exists ? (accessOverrideSnap2.data() || {}) : null;
             const responseBilling = buildBillingResponse({
                 ...billing,
                 updatedAt: billing.updatedAt || w2.updatedAt || null,
-            }, planDoc, overrideDoc);
+            }, planDoc, overrideDoc, accessOverride2);
             return res.json({
                 ok: true,
                 workspace_id: body.workspace_id,
@@ -2684,6 +2711,9 @@ function registerV1Routes(app) {
                     if (!aSnap.exists)
                         continue;
                     const a = aSnap.data();
+                    // siteId が異なるアクションは配信しない（他サイトのアクションの誤配信を防ぐ）
+                    if (a.siteId && a.siteId !== site_id)
+                        continue;
                     // templateId があれば templates コレクションからデータを取得して埋め込む
                     let template = a.template || null;
                     if (!template && a.templateId) {
@@ -2719,6 +2749,7 @@ function registerV1Routes(app) {
                     priority: s.priority ?? 0,
                     entry_rules: s.entry_rules || {},
                     schedule: s.schedule || null,
+                    goal: s.goal || null,
                     actions,
                     experiment: s.experiment || null,
                 });
@@ -3733,7 +3764,7 @@ function registerV1Routes(app) {
         }
     });
     app.options("/v1/ops/special-trials/revoke", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
-    /* --- /v1/ops/workspaces/delete --- ワークスペース削除 */
+    /* --- /v1/ops/workspaces/delete --- ワークスペース完全削除 */
     app.post("/v1/ops/workspaces/delete", async (req, res) => {
         try {
             corsByAdminOrigins(req, res);
@@ -3742,12 +3773,69 @@ function registerV1Routes(app) {
             if (!workspace_id)
                 throw new Error("workspace_id required");
             const db = (0, admin_1.adminDb)();
-            const batch = db.batch();
-            batch.delete(db.collection("workspaces").doc(workspace_id));
-            batch.delete(db.collection("workspace_billing").doc(workspace_id));
-            batch.delete(db.collection("workspace_limit_overrides").doc(workspace_id));
-            await batch.commit();
-            return res.json({ ok: true, workspace_id });
+            const { getStorage } = await Promise.resolve().then(() => __importStar(require("firebase-admin/storage")));
+            const storage = getStorage().bucket();
+            async function batchDeleteRefs(refs) {
+                for (let i = 0; i < refs.length; i += 400) {
+                    const batch = db.batch();
+                    refs.slice(i, i + 400).forEach((r) => batch.delete(r));
+                    await batch.commit();
+                }
+            }
+            const [sitesSnap, scenariosSnap, actionsSnap, templatesSnap, mediaSnap, invitesSnap] = await Promise.all([
+                db.collection("sites").where("workspaceId", "==", workspace_id).get(),
+                db.collection("scenarios").where("workspaceId", "==", workspace_id).get(),
+                db.collection("actions").where("workspaceId", "==", workspace_id).get(),
+                db.collection("templates").where("workspaceId", "==", workspace_id).get(),
+                db.collection("media").where("workspaceId", "==", workspace_id).get(),
+                db.collection("workspace_invites").where("workspaceId", "==", workspace_id).get(),
+            ]);
+            // logs・stats_daily をサイトID経由で削除
+            const siteIds = sitesSnap.docs.map((d) => d.id);
+            async function deleteQueryAll(q) {
+                let n = 0;
+                while (true) {
+                    const s = await q.limit(400).get();
+                    if (s.empty)
+                        break;
+                    const b = db.batch();
+                    s.docs.forEach((d) => b.delete(d.ref));
+                    await b.commit();
+                    n += s.size;
+                    if (s.size < 400)
+                        break;
+                }
+                return n;
+            }
+            let logsDeleted = 0, statsDeleted = 0;
+            for (let i = 0; i < siteIds.length; i += 30) {
+                const chunk = siteIds.slice(i, i + 30);
+                logsDeleted += await deleteQueryAll(db.collection("logs").where("site_id", "in", chunk));
+                statsDeleted += await deleteQueryAll(db.collection("stats_daily").where("siteId", "in", chunk));
+            }
+            // Storageファイルを削除
+            await Promise.allSettled(mediaSnap.docs.map(async (d) => {
+                const sp = d.data().storagePath;
+                if (sp) {
+                    try {
+                        await storage.file(sp).delete({ ignoreNotFound: true });
+                    }
+                    catch { }
+                }
+            }));
+            // Firestoreドキュメントを削除
+            await batchDeleteRefs([
+                ...sitesSnap.docs.map((d) => d.ref),
+                ...scenariosSnap.docs.map((d) => d.ref),
+                ...actionsSnap.docs.map((d) => d.ref),
+                ...templatesSnap.docs.map((d) => d.ref),
+                ...mediaSnap.docs.map((d) => d.ref),
+                ...invitesSnap.docs.map((d) => d.ref),
+                db.collection("workspace_billing").doc(workspace_id),
+                db.collection("workspace_limit_overrides").doc(workspace_id),
+                db.collection("workspaces").doc(workspace_id),
+            ]);
+            return res.json({ ok: true, workspace_id, deleted: { sites: sitesSnap.size, scenarios: scenariosSnap.size, actions: actionsSnap.size, templates: templatesSnap.size, media: mediaSnap.size, logs: logsDeleted, stats: statsDeleted } });
         }
         catch (e) {
             console.error("[/v1/ops/workspaces/delete] error:", e);
@@ -3808,4 +3896,494 @@ function registerV1Routes(app) {
         }
     });
     app.options("/v1/ops/plans/upsert", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /* --- /v1/ops/users --- 全ユーザー一覧（BOページ用） */
+    app.post("/v1/ops/users", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            await requirePlatformAdmin(req);
+            const db = (0, admin_1.adminDb)();
+            const { getAuth: getAdminAuth } = await Promise.resolve().then(() => __importStar(require("firebase-admin/auth")));
+            // Firestoreのusersコレクションを取得
+            const usersSnap = await db.collection("users").orderBy("createdAt", "desc").get();
+            // Firebase Auth の全ユーザーをページネーションで取得してuidでインデックス化
+            const authMap = {};
+            let nextPageToken;
+            do {
+                const result = await getAdminAuth().listUsers(1000, nextPageToken);
+                for (const u of result.users) {
+                    authMap[u.uid] = {
+                        email: u.email,
+                        displayName: u.displayName,
+                        disabled: u.disabled,
+                        lastSignInTime: u.metadata.lastSignInTime,
+                        creationTime: u.metadata.creationTime,
+                    };
+                }
+                nextPageToken = result.pageToken;
+            } while (nextPageToken);
+            // ワークスペース一覧でownerUidを取得してユーザーのワークスペース名を付与
+            const wsSnap = await db.collection("workspaces").get();
+            const userWorkspaceMap = {};
+            for (const ws of wsSnap.docs) {
+                const data = ws.data();
+                const members = data.members || {};
+                for (const uid of Object.keys(members)) {
+                    if (!userWorkspaceMap[uid])
+                        userWorkspaceMap[uid] = [];
+                    userWorkspaceMap[uid].push({ id: ws.id, name: data.name || ws.id });
+                }
+            }
+            const users = usersSnap.docs.map((d) => {
+                const data = d.data();
+                const auth = authMap[d.id] || {};
+                return {
+                    uid: d.id,
+                    email: data.email || auth.email || "",
+                    displayName: data.displayName || auth.displayName || "",
+                    photoURL: data.photoURL || "",
+                    primaryWorkspaceId: data.primaryWorkspaceId || null,
+                    workspaces: userWorkspaceMap[d.id] || [],
+                    disabled: auth.disabled || false,
+                    lastSignInTime: auth.lastSignInTime || null,
+                    creationTime: auth.creationTime || null,
+                    createdAt: data.createdAt || null,
+                };
+            });
+            return res.json({ ok: true, users });
+        }
+        catch (e) {
+            console.error("[/v1/ops/users] error:", e);
+            return res.status(opsErrStatus(e)).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/ops/users", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /* --- /v1/ops/users/delete --- ユーザー削除（Firebase Auth + Firestore users doc） */
+    app.post("/v1/ops/users/delete", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            await requirePlatformAdmin(req);
+            const { uid } = req.body;
+            if (!uid)
+                return res.status(400).json({ error: "uid required" });
+            const db = (0, admin_1.adminDb)();
+            const { getAuth: getAdminAuth } = await Promise.resolve().then(() => __importStar(require("firebase-admin/auth")));
+            // Firebase Auth からユーザーを削除
+            try {
+                await getAdminAuth().deleteUser(uid);
+            }
+            catch (e) {
+                if (e?.code !== "auth/user-not-found")
+                    throw e;
+            }
+            // Firestore users ドキュメントを削除
+            await db.collection("users").doc(uid).delete();
+            console.log(`[/v1/ops/users/delete] deleted uid=${uid}`);
+            return res.json({ ok: true, uid });
+        }
+        catch (e) {
+            console.error("[/v1/ops/users/delete] error:", e);
+            return res.status(opsErrStatus(e)).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/ops/users/delete", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /* ============================================================
+       ウェルカムメール送信（認証済みユーザーが初回登録完了時に呼ぶ）
+       ============================================================ */
+    app.post("/v1/welcome-email", async (req, res) => {
+        try {
+            const token = String(POSTMARK_SERVER_TOKEN.value() || "").trim();
+            if (!token)
+                return res.json({ ok: true, skipped: true }); // トークン未設定なら何もしない
+            const authHeader = req.headers.authorization || "";
+            const idToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+            if (!idToken)
+                return res.status(401).json({ error: "missing_authorization" });
+            const { getAuth: getAdminAuth } = await Promise.resolve().then(() => __importStar(require("firebase-admin/auth")));
+            const decoded = await getAdminAuth().verifyIdToken(idToken).catch(() => null);
+            if (!decoded)
+                return res.status(401).json({ error: "invalid_token" });
+            const { to, workspaceName, contactName } = req.body;
+            const toEmail = String(to || decoded.email || "").trim();
+            if (!toEmail)
+                return res.status(400).json({ error: "to_email_required" });
+            const name = String(contactName || decoded.name || "").trim() || "ご担当者";
+            const wsName = String(workspaceName || "").trim() || "ワークスペース";
+            const from = getInviteFromEmail();
+            const messageStream = getInviteMessageStream();
+            const loginUrl = "https://app.mokkeda.com";
+            const subject = "MOKKEDAへようこそ！🎉";
+            const htmlBody = `
+        <div style="font-family:Arial,Helvetica,sans-serif;line-height:1.7;color:#111827;max-width:560px;margin:0 auto;">
+          <div style="background:linear-gradient(135deg,#d1f0ee,#b2e4e1);padding:32px;text-align:center;border-radius:12px 12px 0 0;">
+            <img src="https://cx-platform-v1.web.app/logo_mokkeda_v1.svg" alt="MOKKEDA" style="width:180px;" />
+          </div>
+          <div style="background:#fff;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
+            <p style="font-size:18px;font-weight:700;margin:0 0 16px;">${name} さん、ようこそ！🎉</p>
+            <p>MOKKEDAへご登録いただきありがとうございます。<br/>
+            <strong>${wsName}</strong> のワークスペースが作成されました。</p>
+            <p>まずはサイトを登録して、シナリオを設定してみましょう。</p>
+            <p style="margin:24px 0;">
+              <a href="${loginUrl}" style="display:inline-block;padding:12px 28px;background:#49b1b8;color:#fff;text-decoration:none;border-radius:8px;font-weight:700;font-size:15px;">
+                管理画面を開く →
+              </a>
+            </p>
+            <hr style="border:none;border-top:1px solid #f3f4f6;margin:24px 0;" />
+            <p style="font-size:12px;color:#9ca3af;">
+              ご不明な点はサポートまでお気軽にご連絡ください。<br/>
+              このメールはMOKKEDAよりお送りしています。
+            </p>
+          </div>
+        </div>
+      `.trim();
+            const textBody = [
+                `${name} さん、ようこそ！`,
+                "",
+                `MOKKEDAへご登録いただきありがとうございます。`,
+                `「${wsName}」のワークスペースが作成されました。`,
+                "",
+                `管理画面: ${loginUrl}`,
+            ].join("\n");
+            const resp = await fetch("https://api.postmarkapp.com/email", {
+                method: "POST",
+                headers: {
+                    Accept: "application/json",
+                    "Content-Type": "application/json",
+                    "X-Postmark-Server-Token": token,
+                },
+                body: JSON.stringify({
+                    From: from,
+                    To: toEmail,
+                    Subject: subject,
+                    HtmlBody: htmlBody,
+                    TextBody: textBody,
+                    MessageStream: messageStream,
+                }),
+            });
+            const json = await resp.json().catch(() => ({}));
+            if (!resp.ok) {
+                console.warn("[/v1/welcome-email] postmark error:", json?.Message);
+                return res.json({ ok: true, skipped: true }); // メール失敗でもユーザー体験は壊さない
+            }
+            console.log("[/v1/welcome-email] sent to:", toEmail);
+            return res.json({ ok: true });
+        }
+        catch (e) {
+            console.error("[/v1/welcome-email] error:", e);
+            return res.status(500).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/welcome-email", (req, res) => {
+        res.setHeader("Access-Control-Allow-Origin", req.headers.origin || "*");
+        res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+        res.status(204).send("");
+    });
+    /* ============================================================
+       /v1/ai/optimize  ★管理画面専用
+       - サイトの全シナリオ・パフォーマンス・ページトラフィックを分析し
+         URL配信条件の変更提案（add_url / remove_url / create_scenario）を返す
+       ============================================================ */
+    const AiOptimizeSuggestionSchema = zod_1.z.object({
+        id: zod_1.z.string(),
+        type: zod_1.z.enum(["add_url", "remove_url", "create_scenario"]),
+        scenario_id: zod_1.z.string().optional(),
+        scenario_name: zod_1.z.string().optional(),
+        action_id: zod_1.z.string().optional(),
+        action_name: zod_1.z.string().optional(),
+        url_mode: zod_1.z.enum(["prefix", "contains", "equals"]),
+        url_value: zod_1.z.string(),
+        reason: zod_1.z.string(),
+        confidence: zod_1.z.enum(["high", "medium", "low"]),
+    });
+    app.post("/v1/ai/optimize", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const { site_id, day_from, day_to } = req.body;
+            if (!site_id)
+                return res.status(400).json({ error: "site_id required" });
+            await requireWorkspaceAccessBySiteId(req, site_id, "ai", ["owner", "admin", "member"]);
+            const site = await (0, site_1.pickSiteById)(site_id);
+            if (!site)
+                return res.status(404).json({ error: "site not found" });
+            const db = (0, admin_1.adminDb)();
+            const dayF = day_from || (() => { const d = new Date(); d.setDate(d.getDate() - 13); return d.toISOString().slice(0, 10); })();
+            const dayT = day_to || new Date().toISOString().slice(0, 10);
+            // ① サイトの全シナリオ取得
+            const scenariosSnap = await db.collection("scenarios")
+                .where("siteId", "==", site_id).get();
+            const allScenarios = scenariosSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+            // ② アクション（クリエイティブ）一覧取得
+            const actionsSnap = await db.collection("actions")
+                .where("siteId", "==", site_id).get();
+            const allActions = actionsSnap.docs.map((d) => {
+                const a = d.data();
+                return { id: d.id, type: a.type || "modal", name: a.name || a.creative?.title || d.id };
+            });
+            // ③ stats_daily でシナリオ別パフォーマンス集計
+            const statsSnap = await db.collection("stats_daily")
+                .where("siteId", "==", site_id)
+                .where("day", ">=", dayF)
+                .where("day", "<=", dayT)
+                .get();
+            const perfMap = {};
+            for (const d of statsSnap.docs) {
+                const row = d.data();
+                const sid = row.scenarioId;
+                if (!sid)
+                    continue;
+                if (!perfMap[sid])
+                    perfMap[sid] = { impressions: 0, clicks: 0, conversions: 0 };
+                const c = Number(row.count || 0);
+                if (row.event === "impression")
+                    perfMap[sid].impressions += c;
+                else if (row.event === "click" || row.event === "click_link")
+                    perfMap[sid].clicks += c;
+                else if (row.event === "conversion")
+                    perfMap[sid].conversions += c;
+            }
+            // ④ pageviewログ集計（直近300件 → pathごとにカウント）
+            const pvSnap = await db.collection("logs")
+                .where("site_id", "==", site_id)
+                .where("event", "==", "pageview")
+                .orderBy("createdAt", "desc")
+                .limit(300)
+                .get();
+            const pvMap = {};
+            for (const d of pvSnap.docs) {
+                const path = String(d.data().path || "");
+                if (path)
+                    pvMap[path] = (pvMap[path] || 0) + 1;
+            }
+            const topPages = Object.entries(pvMap)
+                .sort(([, a], [, b]) => b - a)
+                .slice(0, 20)
+                .map(([path, count]) => ({ path, pageviews: count }));
+            // ⑤ シナリオのURL条件を整形してAIに渡すデータ構築
+            const scenarioData = allScenarios
+                .filter((s) => s.status === "active" || s.status === "inactive")
+                .map((s) => {
+                const perf = perfMap[s.id] || { impressions: 0, clicks: 0, conversions: 0 };
+                const ctr = perf.impressions > 0 ? Math.round((perf.clicks / perf.impressions) * 1000) / 10 : 0;
+                const cvr = perf.impressions > 0 ? Math.round((perf.conversions / perf.impressions) * 1000) / 10 : 0;
+                const urls = (s.entry_rules?.page?.urls || []).map((u) => ({
+                    mode: u.mode || "prefix", value: u.value || "", target: u.target || "path",
+                }));
+                // 旧フォーマット互換
+                if (!urls.length && s.entry_rules?.page?.url) {
+                    const u = s.entry_rules.page.url;
+                    urls.push({ mode: u.mode || "prefix", value: u.value || "", target: u.target || "path" });
+                }
+                return {
+                    id: s.id,
+                    name: s.name || s.id,
+                    status: s.status || "inactive",
+                    current_urls: urls,
+                    metrics: { impressions: perf.impressions, clicks: perf.clicks, conversions: perf.conversions, ctr, cvr },
+                };
+            });
+            // ⑥ カバレッジギャップ検出（高PVページにシナリオが当たっていないもの）
+            const coveredPaths = new Set();
+            for (const s of scenarioData) {
+                for (const u of s.current_urls) {
+                    coveredPaths.add(u.value);
+                }
+            }
+            const gaps = topPages
+                .filter(({ path }) => !Array.from(coveredPaths).some((c) => path.startsWith(c) || path === c))
+                .slice(0, 10);
+            // ⑦ AI呼び出し
+            const systemPrompt = [
+                "You are a CX (customer experience) optimization expert for e-commerce and marketing sites.",
+                "Analyze scenario deployment data and suggest specific URL condition changes to maximize conversions.",
+                "Return JSON that matches the required schema exactly.",
+                "Rules:",
+                "- Suggest 4-8 specific, data-driven changes only",
+                "- add_url: for high-traffic pages (top 20 by pageview) with no scenario coverage, or expanding well-performing scenarios",
+                "- remove_url: for URLs where CTR < 0.5% AND impressions >= 50",
+                "- create_scenario: only when a coverage gap exists AND an appropriate action is available",
+                "- Assign a unique sequential id like 'opt_1', 'opt_2', ...",
+                "- Write reasons in Japanese, concise and data-driven (mention actual numbers)",
+                "- Do not suggest changes without data evidence",
+            ].join("\n");
+            const prompt = {
+                site_id,
+                date_range: { from: dayF, to: dayT },
+                scenarios: scenarioData,
+                top_pages: topPages,
+                coverage_gaps: gaps,
+                available_actions: allActions,
+            };
+            // AIレスポンスをJSONで取得（スキーマ検証はあとで柔軟に）
+            const rawOut = await (0, openaiJson_1.callOpenAIJson)({
+                model: "gpt-4.1-mini",
+                systemPrompt,
+                input: prompt,
+                schema: zod_1.z.record(zod_1.z.unknown()), // まず任意JSONとして受け取る
+            });
+            // suggestions キーがなければ、配列そのものか別キー名の可能性を試みる
+            let suggestionsList = [];
+            if (Array.isArray(rawOut.suggestions)) {
+                suggestionsList = rawOut.suggestions;
+            }
+            else if (Array.isArray(rawOut)) {
+                suggestionsList = rawOut;
+            }
+            else {
+                // 最初のarray値を探す
+                const firstArray = Object.values(rawOut).find((v) => Array.isArray(v));
+                if (firstArray)
+                    suggestionsList = firstArray;
+            }
+            // 各要素を個別にパースして不正な提案を除外（全体失敗を防ぐ）
+            const suggestions = suggestionsList.flatMap((item, idx) => {
+                // idがなければ自動付与
+                if (!item.id)
+                    item.id = `opt_${idx + 1}`;
+                try {
+                    return [AiOptimizeSuggestionSchema.parse(item)];
+                }
+                catch {
+                    return [];
+                }
+            });
+            return res.json({ ok: true, suggestions, meta: { scenarios: scenarioData.length, topPages: topPages.length, gaps: gaps.length } });
+        }
+        catch (e) {
+            console.error("[/v1/ai/optimize] error:", e);
+            return res.status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401
+                : String(e?.message || "").startsWith("workspace_access_denied:") ? 403 : 500).json({ error: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/ai/optimize", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /* ============================================================
+       /v1/ai/optimize/apply  ★管理画面専用
+       - 単一の提案を適用する（URL追加・削除・新規シナリオ作成）
+       ============================================================ */
+    app.post("/v1/ai/optimize/apply", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const { site_id, suggestion } = req.body;
+            if (!site_id || !suggestion)
+                return res.status(400).json({ error: "site_id and suggestion required" });
+            await requireWorkspaceAccessBySiteId(req, site_id, "ai", ["owner", "admin"]);
+            const site = await (0, site_1.pickSiteById)(site_id);
+            if (!site)
+                return res.status(404).json({ error: "site not found" });
+            const db = (0, admin_1.adminDb)();
+            const now = new Date().toISOString();
+            if (suggestion.type === "add_url") {
+                // 既存シナリオのentry_rules.page.urlsに追加
+                const sRef = db.collection("scenarios").doc(suggestion.scenario_id);
+                const sSnap = await sRef.get();
+                if (!sSnap.exists)
+                    return res.status(404).json({ error: "scenario not found" });
+                const s = sSnap.data();
+                const currentUrls = s.entry_rules?.page?.urls || [];
+                // 重複チェック
+                const already = currentUrls.some((u) => u.value === suggestion.url_value && u.mode === suggestion.url_mode);
+                if (!already) {
+                    currentUrls.push({ mode: suggestion.url_mode, value: suggestion.url_value, target: "path" });
+                    await sRef.set({
+                        entry_rules: { ...s.entry_rules, page: { ...(s.entry_rules?.page || {}), urls: currentUrls } },
+                        updatedAt: now,
+                    }, { merge: true });
+                }
+                return res.json({ ok: true, type: "add_url", scenario_id: suggestion.scenario_id });
+            }
+            else if (suggestion.type === "remove_url") {
+                // 既存シナリオのentry_rules.page.urlsから削除
+                const sRef = db.collection("scenarios").doc(suggestion.scenario_id);
+                const sSnap = await sRef.get();
+                if (!sSnap.exists)
+                    return res.status(404).json({ error: "scenario not found" });
+                const s = sSnap.data();
+                const currentUrls = s.entry_rules?.page?.urls || [];
+                const filtered = currentUrls.filter((u) => !(u.value === suggestion.url_value && u.mode === suggestion.url_mode));
+                await sRef.set({
+                    entry_rules: { ...s.entry_rules, page: { ...(s.entry_rules?.page || {}), urls: filtered } },
+                    updatedAt: now,
+                }, { merge: true });
+                return res.json({ ok: true, type: "remove_url", scenario_id: suggestion.scenario_id });
+            }
+            else if (suggestion.type === "create_scenario") {
+                // 新規シナリオを作成してアクションを紐付け
+                const actionSnap = await db.collection("actions").doc(suggestion.action_id).get();
+                if (!actionSnap.exists)
+                    return res.status(404).json({ error: "action not found" });
+                const ws = await (0, site_1.pickWorkspaceById)(site.workspaceId);
+                if (!ws)
+                    return res.status(404).json({ error: "workspace not found" });
+                const scenarioId = `scn_${Math.random().toString(36).slice(2, 12)}`;
+                await db.collection("scenarios").doc(scenarioId).set({
+                    id: scenarioId,
+                    workspaceId: site.workspaceId,
+                    siteId: site_id,
+                    name: suggestion.action_name
+                        ? `${suggestion.action_name} - ${suggestion.url_value}`
+                        : `AI提案: ${suggestion.url_value}`,
+                    status: "inactive", // 人が確認してからactiveに
+                    priority: 0,
+                    entry_rules: {
+                        page: { urls: [{ mode: suggestion.url_mode, value: suggestion.url_value, target: "path" }] },
+                    },
+                    actionRefs: [{ actionId: suggestion.action_id, enabled: true }],
+                    goal: null,
+                    memo: `AIが自動生成したシナリオ。理由: ${suggestion.reason}`,
+                    createdAt: now,
+                    updatedAt: now,
+                    createdBy: "ai_optimize",
+                });
+                return res.json({ ok: true, type: "create_scenario", scenario_id: scenarioId });
+            }
+            else {
+                return res.status(400).json({ error: "unknown suggestion type" });
+            }
+        }
+        catch (e) {
+            console.error("[/v1/ai/optimize/apply] error:", e);
+            return res.status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401
+                : String(e?.message || "").startsWith("workspace_access_denied:") ? 403 : 500).json({ error: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/ai/optimize/apply", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    // ── MCP APIキー管理 ───────────────────────────────────────────────
+    // GET /v1/mcp-key — 現在のAPIキーを取得
+    app.get("/v1/mcp-key", async (req, res) => {
+        corsByAdminOrigins(req, res);
+        try {
+            const uid = await (0, admin_1.requireAuthUid)(req);
+            const db = (0, admin_1.adminDb)();
+            const snap = await db.collection("user_settings").doc(uid).get();
+            const key = snap.exists ? String(snap.data()?.mcp_api_key || "") : "";
+            return res.json({ key: key || null });
+        }
+        catch (e) {
+            return res.status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 500).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/mcp-key", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    // POST /v1/mcp-key/generate — APIキーを新規発行（既存は失効）
+    app.post("/v1/mcp-key/generate", async (req, res) => {
+        corsByAdminOrigins(req, res);
+        try {
+            const uid = await (0, admin_1.requireAuthUid)(req);
+            const db = (0, admin_1.adminDb)();
+            const { randomBytes } = await Promise.resolve().then(() => __importStar(require("crypto")));
+            // 旧キーを削除
+            const settingsSnap = await db.collection("user_settings").doc(uid).get();
+            const oldKey = settingsSnap.exists ? String(settingsSnap.data()?.mcp_api_key || "") : "";
+            if (oldKey) {
+                await db.collection("mcp_api_keys").doc(oldKey).delete();
+            }
+            // 新キーを生成・保存
+            const key = "mcp_" + randomBytes(24).toString("base64url");
+            await db.collection("mcp_api_keys").doc(key).set({ uid, createdAt: new Date().toISOString() });
+            await db.collection("user_settings").doc(uid).set({ mcp_api_key: key }, { merge: true });
+            return res.json({ key });
+        }
+        catch (e) {
+            return res.status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401 : 500).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/mcp-key/generate", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
 }

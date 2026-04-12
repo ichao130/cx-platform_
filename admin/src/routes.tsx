@@ -15,6 +15,7 @@ import WorkspaceMembersPage from "./pages/WorkspaceMembersPage";
 import WorkspaceBillingPage from "./pages/WorkspaceBillingPage";
 import AcceptInvitePage from "./pages/AcceptInvitePage";
 import AnalyticsPage from "./pages/AnalyticsPage";
+import OptimizePage from "./pages/OptimizePage";
 
 type AccessKey =
   | "dashboard"
@@ -78,6 +79,7 @@ export default function AppRoutes({ canAccess, workspaceRole, isPlatformAdmin }:
         <Route path="/scenarios/:scenarioId/review" element={<Guard allow={canShow(canAccess, "ai")} title="AIレビュー"><ScenarioReviewPage /></Guard>} />
         <Route path="/scenarios/:scenarioId/ai" element={<Guard allow={canShow(canAccess, "ai")} title="AIインサイト"><ScenarioAiPage /></Guard>} />
         <Route path="/ai" element={<Guard allow={canShow(canAccess, "ai")} title="AIインサイト"><ScenarioAiPage /></Guard>} />
+        <Route path="/ai/optimize" element={<Guard allow={canShow(canAccess, "ai")} title="配信最適化"><OptimizePage /></Guard>} />
 
         {/* ワークスペース関連 */}
         <Route path="/workspace/members" element={<Guard allow={canShow(canAccess, "members")} title="メンバー"><WorkspaceMembersPage /></Guard>} />
@@ -86,6 +88,7 @@ export default function AppRoutes({ canAccess, workspaceRole, isPlatformAdmin }:
         {/* 旧URL互換 */}
         <Route path="/admin/workspace/members" element={<Guard allow={canShow(canAccess, "members")} title="メンバー"><WorkspaceMembersPage /></Guard>} />
         <Route path="/admin/workspace/billing" element={<Guard allow={canShow(canAccess, "billing")} title="契約 / Billing"><WorkspaceBillingPage /></Guard>} />
+
 
         <Route
           path="*"
