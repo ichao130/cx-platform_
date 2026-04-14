@@ -39,6 +39,12 @@ function daysAgo(n: number) {
   return d;
 }
 
+// UTC ISO文字列をJST日付文字列に変換（UTC+9）
+function utcIsoToJstDay(createdAt: string): string {
+  if (!createdAt) return "";
+  return isoDay(new Date(new Date(createdAt).getTime() + 9 * 60 * 60 * 1000));
+}
+
 function safeNum(n: any) {
   const v = Number(n);
   return Number.isFinite(v) ? v : 0;
@@ -294,6 +300,16 @@ export default function AnalyticsPage() {
   const [customFrom, setCustomFrom] = useState<string>(isoDay(daysAgo(13))); // 2週間前
   const [customTo, setCustomTo] = useState<string>(isoDay(new Date()));
 
+  // 今日の日付（深夜0時に自動更新してクエリを再実行させる）
+  const [todayStr, setTodayStr] = useState<string>(isoDay(new Date()));
+  useEffect(() => {
+    const id = setInterval(() => {
+      const newDay = isoDay(new Date());
+      setTodayStr((prev) => (prev !== newDay ? newDay : prev));
+    }, 60_000); // 1分おきにチェック
+    return () => clearInterval(id);
+  }, []);
+
   // 実効的な開始・終了日
   const effectiveFrom = useMemo(() => {
     if (dateRange === "custom") {
@@ -301,7 +317,7 @@ export default function AnalyticsPage() {
       return isNaN(d.getTime()) ? daysAgo(13) : d;
     }
     return daysAgo(dateRange);
-  }, [dateRange, customFrom]);
+  }, [dateRange, customFrom, todayStr]);
 
   const effectiveTo = useMemo(() => {
     if (dateRange === "custom") {
@@ -311,7 +327,7 @@ export default function AnalyticsPage() {
     const d = new Date();
     d.setHours(23, 59, 59, 999);
     return d;
-  }, [dateRange, customTo]);
+  }, [dateRange, customTo, todayStr]);
 
   const effectiveDays = useMemo(() => {
     const ms = effectiveTo.getTime() - effectiveFrom.getTime();
@@ -496,7 +512,6 @@ export default function AnalyticsPage() {
     return vids.size;
   }, [recentLogs]);
 
-  const todayStr = isoDay(new Date());
   // stats_daily は JST で集計されているため todayStr（JST今日）と一致する
   const todayPvCount = useMemo(() => {
     return statRows.filter((r) => r.day === todayStr && r.event === "pageview").reduce((s: number, r: any) => s + safeNum(r.count), 0);
@@ -664,9 +679,9 @@ export default function AnalyticsPage() {
     while (cur <= end) {
       const day = isoDay(cur);
       const label = `${cur.getMonth() + 1}/${cur.getDate()}`;
-      const dayPvLogs = pvLogs.filter((l) => (l.createdAt || "").startsWith(day));
-      const pv = dayPvLogs.length;
-      const uv = new Set(dayPvLogs.map((l) => l.vid).filter(Boolean)).size;
+      // PVはstats_dailyから（JST集計で正確）、UVはjourneyLogsをUTC→JST変換して集計
+      const pv = statRows.filter((r) => r.day === day && r.event === "pageview").reduce((s: number, r: any) => s + safeNum(r.count), 0);
+      const uv = new Set(pvLogs.filter((l) => utcIsoToJstDay(l.createdAt || "") === day).map((l) => l.vid).filter(Boolean)).size;
       const imp = statRows.filter((r) => r.day === day && r.event === "impression").reduce((s, r) => s + safeNum(r.count), 0);
       const cv = statRows.filter((r) => r.day === day && r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
       result.push({ day, label, pv, uv, imp, cv });
