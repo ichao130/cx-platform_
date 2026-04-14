@@ -714,11 +714,11 @@ export default function AnalyticsPage() {
       if (l.event === "impression") v.hasImpression = true;
       if (l.event === "pageleave" && l.duration_sec) v.totalDuration += Number(l.duration_sec);
     }
-    // 購入ログを紐付け
+    // 購入ログを紐付け（vid が明示されているものだけ紐付ける）
     for (const p of purchaseLogs) {
-      const vid = p.vid || "unknown";
-      if (!map.has(vid)) continue;
-      const v = map.get(vid)!;
+      if (!p.vid) continue;
+      if (!map.has(p.vid)) continue;
+      const v = map.get(p.vid)!;
       v.hasPurchase = true;
       v.purchaseRevenue += typeof p.revenue === "number" ? p.revenue : 0;
       v.purchaseCount++;
@@ -750,7 +750,7 @@ export default function AnalyticsPage() {
     const logs = journeyLogs.filter((l) => l.vid === selectedVid);
     // 購入ログを purchase イベントとして混ぜる
     const purchases = purchaseLogs
-      .filter((p) => p.vid === selectedVid)
+      .filter((p) => p.vid && p.vid === selectedVid)
       .map((p) => ({ ...p, event: "purchase", id: p.id || p.order_id || String(p.createdAt) }));
     return [...logs, ...purchases]
       .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
@@ -1468,16 +1468,7 @@ export default function AnalyticsPage() {
                       return (
                         <div
                           key={v.vid}
-                          onClick={() => {
-                            const next = isSelected ? null : v.vid;
-                            setSelectedVid(next);
-                            // 訪問者を選択したらフィルターをリセット（購入フィルター中でも全員リストに戻す）
-                            if (next) {
-                              setVisitorFilter("all");
-                              setJourneyFilterFrom("");
-                              setJourneyFilterTo("");
-                            }
-                          }}
+                          onClick={() => setSelectedVid(isSelected ? null : v.vid)}
                           style={{
                             padding: "12px 16px", cursor: "pointer", borderBottom: "1px solid rgba(15,23,42,.05)",
                             background: isSelected ? `hsla(${hue},60%,96%,1)` : "transparent",
