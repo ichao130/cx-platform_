@@ -1436,8 +1436,19 @@ export default function AnalyticsPage() {
                 {/* 左: 訪問者リスト */}
                 <div className="card" style={{ padding: 0, overflow: "hidden" }}>
                   <div style={{ padding: "12px 16px", borderBottom: "1px solid rgba(15,23,42,.07)", background: "rgba(15,23,42,.02)" }}>
-                    <div className="small" style={{ fontWeight: 700 }}>
-                      {filteredVisitorList.length === 0 ? "条件に一致する訪問者なし" : `訪問者 ${filteredVisitorList.length}人`}
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                      <div className="small" style={{ fontWeight: 700 }}>
+                        {filteredVisitorList.length === 0 ? "条件に一致する訪問者なし" : `訪問者 ${filteredVisitorList.length}人`}
+                      </div>
+                      {(visitorFilter !== "all" || journeyFilterFrom || journeyFilterTo) && (
+                        <button
+                          type="button"
+                          onClick={() => { setVisitorFilter("all"); setJourneyFilterFrom(""); setJourneyFilterTo(""); setSelectedVid(null); }}
+                          style={{ fontSize: 11, padding: "3px 8px", border: "none", borderRadius: 20, background: "#fde68a", color: "#92400e", cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}
+                        >
+                          {visitorFilter === "purchase" ? "💰 購入フィルター中 ×" : visitorFilter === "cv" ? "✅ CVフィルター中 ×" : "📅 日付フィルター中 ×"}
+                        </button>
+                      )}
                     </div>
                   </div>
                   <div style={{ maxHeight: 560, overflowY: "auto" }}>
