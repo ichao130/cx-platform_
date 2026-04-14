@@ -768,8 +768,9 @@ export default function AnalyticsPage() {
   // ---- computed: 選択中訪問者のイベント一覧（購入ログ含む） ----
   const selectedJourney = useMemo(() => {
     if (!selectedVid) return [];
-    const logs = journeyLogs.filter((l) => l.vid === selectedVid);
-    // 購入ログを purchase イベントとして混ぜる
+    // journeyLogs は全イベントを含むため purchase を除外（purchaseLogs と重複しないように）
+    const logs = journeyLogs.filter((l) => l.vid === selectedVid && l.event !== "purchase");
+    // 購入ログを purchase イベントとして混ぜる（revenue/order_id 等の詳細情報を持つ purchaseLogs を使う）
     const purchases = purchaseLogs
       .filter((p) => p.vid && p.vid === selectedVid)
       .map((p) => ({ ...p, event: "purchase", id: p.id || p.order_id || String(p.createdAt) }));
