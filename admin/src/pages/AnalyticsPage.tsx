@@ -497,7 +497,10 @@ export default function AnalyticsPage() {
   }, [recentLogs]);
 
   const todayStr = isoDay(new Date());
-  const todayPvCount = useMemo(() => pvLogs.filter((l) => (l.createdAt || "").startsWith(todayStr)).length, [pvLogs, todayStr]);
+  // stats_daily は JST で集計されているため todayStr（JST今日）と一致する
+  const todayPvCount = useMemo(() => {
+    return statRows.filter((r) => r.day === todayStr && r.event === "pageview").reduce((s: number, r: any) => s + safeNum(r.count), 0);
+  }, [statRows, todayStr]);
   const todayImpCount = useMemo(() => {
     return statRows.filter((r) => r.day === todayStr && r.event === "impression").reduce((s, r) => s + safeNum(r.count), 0);
   }, [statRows, todayStr]);
