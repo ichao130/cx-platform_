@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { onAuthStateChanged, getAuth } from "firebase/auth";
-import { collection, onSnapshot, orderBy, query, where } from "firebase/firestore";
+import { collection, onSnapshot, orderBy, query, where, Timestamp } from "firebase/firestore";
 import {
   ComposedChart,
   Bar,
@@ -134,6 +134,7 @@ export default function DashboardPage() {
   const [abScenarioId, setAbScenarioId] = useState<string>("");
   const [reviewData, setReviewData] = useState<any | null>(null);
   const [loadingReview, setLoadingReview] = useState(false);
+  const [purchaseLogs, setPurchaseLogs] = useState<any[]>([]);
 
   // Auth
   useEffect(() => {
@@ -231,6 +232,21 @@ export default function DashboardPage() {
     });
   }, [siteId, days]);
 
+  // Purchase logs
+  useEffect(() => {
+    if (!siteId) { setPurchaseLogs([]); return; }
+    const since = new Date();
+    since.setDate(since.getDate() - Math.max(1, days) + 1);
+    since.setHours(0, 0, 0, 0);
+    const q = query(
+      collection(db, "logs"),
+      where("site_id", "==", siteId),
+      where("event", "==", "purchase"),
+      where("createdAt", ">", Timestamp.fromDate(since))
+    );
+    return onSnapshot(q, (snap) => setPurchaseLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), () => setPurchaseLogs([]));
+  }, [siteId, days]);
+
   const latestDay = useMemo(() => {
     const days = [...new Set(rows.map((r) => r.day))].sort();
     return days[days.length - 1] || "";
@@ -252,6 +268,25 @@ export default function DashboardPage() {
     const closeRate = imp > 0 ? Math.round((close / imp) * 10000) / 100 : 0;
     return { imp, clkLink, clk, close, cv, cvr, ctr, closeRate };
   }, [rows]);
+
+  // ---- Computed: 売上KPI ----
+  const totalRevenue = useMemo(() => purchaseLogs.reduce((s, l) => s + (typeof l.revenue === "number" ? l.revenue : 0), 0), [purchaseLogs]);
+  const purchaseCount = useMemo(() => purchaseLogs.length, [purchaseLogs]);
+  const avgOrderValue = useMemo(() => purchaseCount > 0 ? Math.round(totalRevenue / purchaseCount) : 0, [totalRevenue, purchaseCount]);
+
+  // ---- Computed: シナリオ別経由売上（scenario_id直接帰属） ----
+  const revenueByScenarioId = useMemo(() => {
+    const map = new Map<string, { revenue: number; count: number }>();
+    for (const log of purchaseLogs) {
+      const sid = String(log.scenario_id || "");
+      if (!sid) continue;
+      if (!map.has(sid)) map.set(sid, { revenue: 0, count: 0 });
+      const entry = map.get(sid)!;
+      entry.revenue += typeof log.revenue === "number" ? log.revenue : 0;
+      entry.count++;
+    }
+    return map;
+  }, [purchaseLogs]);
 
   // ---- Computed: 日別トレンド（棒: impression、折れ線: CVR%）----
   const trendData = useMemo(() => {
@@ -454,6 +489,29 @@ export default function DashboardPage() {
         />
       </div>
 
+      {/* 売上KPIカード */}
+      {(purchaseLogs.length > 0 || totalRevenue > 0) && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }}>
+          <KpiCard
+            label="💰 売上合計"
+            value={`¥${totalRevenue.toLocaleString("ja-JP")}`}
+            sub={`過去${days}日間`}
+            accent="#16a34a"
+          />
+          <KpiCard
+            label="🛒 購入件数"
+            value={fmtInt(purchaseCount)}
+            sub="購入回数"
+            accent={purchaseCount > 0 ? "#2563eb" : undefined}
+          />
+          <KpiCard
+            label="📊 客単価"
+            value={avgOrderValue > 0 ? `¥${avgOrderValue.toLocaleString("ja-JP")}` : "—"}
+            sub="売上 ÷ 購入件数"
+          />
+        </div>
+      )}
+
       {/* 日別トレンドチャート */}
       <div className="card" style={{ marginBottom: 14, padding: 20 }}>
         <div className="h2" style={{ marginBottom: 4 }}>日別トレンド：表示回数 × CVR%</div>
@@ -609,20 +667,35 @@ export default function DashboardPage() {
                   <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CV</th>
                   <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CVR</th>
                   <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CTR</th>
+                  {purchaseLogs.length > 0 && <>
+                    <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>💰 経由売上</th>
+                    <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>購入件数</th>
+                  </>}
                 </tr>
               </thead>
               <tbody>
-                {scenarioStats.map((s, i) => (
-                  <tr key={s.id} style={{ borderBottom: "1px solid rgba(15,23,42,.05)", background: i === 0 ? "rgba(22,163,74,.03)" : undefined }}>
-                    <td style={{ padding: "10px 12px", fontWeight: 600 }}>
-                      {i === 0 && <span style={{ marginRight: 6 }}>🏆</span>}{s.name}
-                    </td>
-                    <td style={{ padding: "10px 12px", textAlign: "right" }}>{fmtInt(s.imp)}</td>
-                    <td style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: s.cv > 0 ? "#16a34a" : undefined }}>{fmtInt(s.cv)}</td>
-                    <td style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: s.cvr > 0 ? "#16a34a" : undefined }}>{s.cvr > 0 ? `${s.cvr}%` : "—"}</td>
-                    <td style={{ padding: "10px 12px", textAlign: "right" }}>{s.ctr > 0 ? `${s.ctr}%` : "—"}</td>
-                  </tr>
-                ))}
+                {scenarioStats.map((s, i) => {
+                  const rev = revenueByScenarioId.get(s.id);
+                  return (
+                    <tr key={s.id} style={{ borderBottom: "1px solid rgba(15,23,42,.05)", background: i === 0 ? "rgba(22,163,74,.03)" : undefined }}>
+                      <td style={{ padding: "10px 12px", fontWeight: 600 }}>
+                        {i === 0 && <span style={{ marginRight: 6 }}>🏆</span>}{s.name}
+                      </td>
+                      <td style={{ padding: "10px 12px", textAlign: "right" }}>{fmtInt(s.imp)}</td>
+                      <td style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: s.cv > 0 ? "#16a34a" : undefined }}>{fmtInt(s.cv)}</td>
+                      <td style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: s.cvr > 0 ? "#16a34a" : undefined }}>{s.cvr > 0 ? `${s.cvr}%` : "—"}</td>
+                      <td style={{ padding: "10px 12px", textAlign: "right" }}>{s.ctr > 0 ? `${s.ctr}%` : "—"}</td>
+                      {purchaseLogs.length > 0 && <>
+                        <td style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: rev?.revenue ? "#16a34a" : undefined }}>
+                          {rev?.revenue ? `¥${rev.revenue.toLocaleString("ja-JP")}` : "—"}
+                        </td>
+                        <td style={{ padding: "10px 12px", textAlign: "right" }}>
+                          {rev?.count ? fmtInt(rev.count) : "—"}
+                        </td>
+                      </>}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

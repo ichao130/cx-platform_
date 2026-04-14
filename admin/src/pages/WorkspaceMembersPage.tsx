@@ -81,14 +81,23 @@ function roleColor(r: Role) {
 }
 
 function fmtAnyTs(v: any) {
-  // Firestore Timestamp or ISO string etc
   if (!v) return "-";
   try {
-    if (typeof v === "string") return v;
-    if (typeof v?.toDate === "function") return v.toDate().toISOString();
-    if (typeof v?.seconds === "number") return new Date(v.seconds * 1000).toISOString();
+    let date: Date | null = null;
+    if (typeof v?.toDate === "function") {
+      date = v.toDate();
+    } else if (typeof v?.seconds === "number") {
+      date = new Date(v.seconds * 1000);
+    } else if (typeof v === "string") {
+      date = new Date(v);
+    } else if (typeof v === "number") {
+      date = new Date(v);
+    }
+    if (date && !isNaN(date.getTime())) {
+      return date.toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+    }
   } catch {}
-  return String(v);
+  return "-";
 }
 
 function workspaceLabel(row?: WorkspaceRow) {
