@@ -408,14 +408,17 @@ export default function AnalyticsPage() {
   }, [siteId]);
 
 
-  // ---- 訪問者ジャーニー用ログ（全イベント取得） ----
+  // ---- サイト変更時にフィルターをリセット（日付変更では非リセット） ----
   useEffect(() => {
-    // siteId 変更時は即座にクリア（古データと新purchaseLogsが混ざるバグ防止）
-    setJourneyLogs([]);
-    setSelectedVid(null);
     setVisitorFilter("all");
     setJourneyFilterFrom("");
     setJourneyFilterTo("");
+    setSelectedVid(null);
+  }, [siteId]);
+
+  // ---- 訪問者ジャーニー用ログ（全イベント取得） ----
+  useEffect(() => {
+    setJourneyLogs([]);
     if (!siteId) { return; }
     setJourneyLoading(true);
     const since = effectiveFrom.toISOString();
@@ -1540,6 +1543,9 @@ export default function AnalyticsPage() {
                         {(() => {
                           const v = visitorList.find((x) => x.vid === selectedVid);
                           const hue = selectedVid.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360;
+                          // 購入情報は selectedJourney ベースで判定（visitorList の hasPurchase は訪問者切替時に不整合が起きるため）
+                          const journeyPurchases = selectedJourney.filter((ev) => ev.event === "purchase");
+                          const journeyRevenue = journeyPurchases.reduce((sum, ev) => sum + (typeof ev.revenue === "number" ? ev.revenue : 0), 0);
                           return (
                             <>
                               <div style={{ width: 28, height: 28, borderRadius: 99, background: `hsl(${hue},60%,88%)`, color: `hsl(${hue},60%,35%)`, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 12 }}>
@@ -1552,7 +1558,7 @@ export default function AnalyticsPage() {
                                     {v.pvCount} ページ閲覧 · {v.eventCount} イベント
                                     {v.totalDuration > 0 && ` · 計${Math.round(v.totalDuration / 60) > 0 ? Math.round(v.totalDuration / 60) + "分" : v.totalDuration + "秒"}滞在`}
                                     {v.hasConversion && " · CV達成 ✓"}
-                                    {v.hasPurchase && <span style={{ color: "#ca8a04", fontWeight: 700 }}> · 💰 ¥{v.purchaseRevenue.toLocaleString()} ({v.purchaseCount}件購入)</span>}
+                                    {journeyPurchases.length > 0 && <span style={{ color: "#ca8a04", fontWeight: 700 }}> · 💰 ¥{journeyRevenue.toLocaleString()} ({journeyPurchases.length}件購入)</span>}
                                   </div>
                                 )}
                               </div>
