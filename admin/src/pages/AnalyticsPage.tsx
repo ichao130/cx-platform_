@@ -410,7 +410,13 @@ export default function AnalyticsPage() {
 
   // ---- 訪問者ジャーニー用ログ（全イベント取得） ----
   useEffect(() => {
-    if (!siteId) { setJourneyLogs([]); setSelectedVid(null); return; }
+    // siteId 変更時は即座にクリア（古データと新purchaseLogsが混ざるバグ防止）
+    setJourneyLogs([]);
+    setSelectedVid(null);
+    setVisitorFilter("all");
+    setJourneyFilterFrom("");
+    setJourneyFilterTo("");
+    if (!siteId) { return; }
     setJourneyLoading(true);
     const since = effectiveFrom.toISOString();
     getDocs(
@@ -430,7 +436,8 @@ export default function AnalyticsPage() {
 
   // ---- 購入ログ取得（リアルタイム） ----
   useEffect(() => {
-    if (!siteId) { setPurchaseLogs([]); return; }
+    setPurchaseLogs([]); // siteId 変更時に即クリア（古データ混入防止）
+    if (!siteId) { return; }
     setPurchaseLoading(true);
     const since = effectiveFrom.toISOString();
     const to = effectiveTo.toISOString();
