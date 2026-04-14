@@ -1094,6 +1094,18 @@
     // 配信頻度チェック
     if (!checkAndMarkFrequency(s.scenario_id || s.id, er.display || null)) return false;
 
+    // カゴ落ちチェック: 前のセッションでカゴ追加 → 購入せず離脱 → 今回の訪問に配信
+    if (er.visitor && er.visitor.cart_abandoned) {
+      var cartKey = "cx_cart_" + ctx.site_id;
+      var cartActiveKey = "cx_cart_active_" + ctx.site_id;
+      try {
+        var hasCartFlag = localStorage.getItem(cartKey) === "1";
+        var isActiveCartSession = sessionStorage.getItem(cartActiveKey) === "1";
+        // localStorage有り（過去にカゴ追加）かつ今セッションではカゴ追加していない → カゴ落ち
+        if (!hasCartFlag || isActiveCartSession) return false;
+      } catch (e) { return false; }
+    }
+
     // schedule（訪問者のローカル時間で判定）
     var schedule = s.schedule;
     if (schedule) {
@@ -1265,6 +1277,27 @@
         credentials: "same-origin"
       }).catch(function () {});
     } catch (e) {}
+
+    // カゴ落ち追跡: cx:cart:add イベントでフラグをセット
+    var cartKey = "cx_cart_" + siteId;
+    var cartActiveKey = "cx_cart_active_" + siteId;
+    window.addEventListener("cx:cart:add", function () {
+      try {
+        localStorage.setItem(cartKey, "1");
+        sessionStorage.setItem(cartActiveKey, "1"); // 今セッションでのカゴ追加フラグ
+      } catch (e) {}
+    });
+
+    // 購入完了でカゴ落ちフラグをクリア
+    function clearCartFlag() {
+      try { localStorage.removeItem(cartKey); } catch (e) {}
+    }
+    window.addEventListener("cx:purchase", clearCartFlag);
+    // サンキューページのURLパターンでも自動クリア
+    var path = window.location.pathname.toLowerCase();
+    if (/\/(thank|thanks|order[-_]?confirm|checkout\/thank|orders\/[a-z0-9]+\/thank)/.test(path)) {
+      clearCartFlag();
+    }
 
     // pageview ログを送信
     postLog(apiBase, {

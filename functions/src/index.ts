@@ -203,16 +203,20 @@ async function deleteWorkspaceAllData(workspaceId: string): Promise<void> {
  * ==========================
  * Scheduled: 期限切れFreeアカウント自動削除
  * 毎日JST 03:00 に実行。
- * free_expires_at + 10日 を過ぎたワークスペースを完全削除する。
- * 特別トライアル中（access_override_active）は対象外。
+ * 最終ログインから30日間未ログイン + 10日グレース後にFreeアカウントを完全削除する。
+ * - Firebase Auth の lastSignInTime を基準にする
+ * - 有料プランへ移行済みはスキップ
+ * - 特別トライアル中（access_override_active）はスキップ
  * ==========================
  */
 export const cleanupExpiredFreeAccounts = onSchedule(
   { region: "asia-northeast1", schedule: "0 18 * * *", timeZone: "UTC", timeoutSeconds: 540 }, // UTC 18:00 = JST 03:00
   async () => {
     const db = adminDb();
+    const { getAuth: getAdminAuth } = await import("firebase-admin/auth");
     const now = Date.now();
-    const GRACE_MS = 10 * 24 * 60 * 60 * 1000; // 10日
+    const INACTIVE_MS = 30 * 24 * 60 * 60 * 1000; // 未ログイン判定: 30日
+    const GRACE_MS   = 10 * 24 * 60 * 60 * 1000; // 猶予期間: 10日
 
     const wsSnap = await db.collection("workspaces").get();
     let deleted = 0;
@@ -220,7 +224,7 @@ export const cleanupExpiredFreeAccounts = onSchedule(
     for (const doc of wsSnap.docs) {
       const ws = doc.data() as any;
       const billing = (ws.billing || {}) as any;
-      if (!billing.free_expires_at) continue;
+
       // 有料プランへ移行済みはスキップ
       if (billing.plan && billing.plan !== "free") continue;
 
@@ -232,19 +236,36 @@ export const cleanupExpiredFreeAccounts = onSchedule(
         if (until > now) continue;
       }
 
-      const expiresAt = new Date(billing.free_expires_at).getTime();
-      if (now < expiresAt + GRACE_MS) continue;
+      // ワークスペースのオーナーUIDを取得
+      const ownerUid = String(ws.ownerUid || "");
+      if (!ownerUid) continue;
+
+      // Firebase Auth から最終ログイン日時を取得
+      let lastSignInMs: number;
+      try {
+        const authUser = await getAdminAuth().getUser(ownerUid);
+        lastSignInMs = authUser.metadata.lastSignInTime
+          ? new Date(authUser.metadata.lastSignInTime).getTime()
+          : new Date(authUser.metadata.creationTime).getTime();
+      } catch {
+        // ユーザーが存在しない場合はスキップ
+        continue;
+      }
+
+      // 最終ログインから30日+10日（猶予）を過ぎていなければスキップ
+      if (now < lastSignInMs + INACTIVE_MS + GRACE_MS) continue;
 
       // 完全削除
       try {
         await deleteWorkspaceAllData(doc.id);
         deleted++;
+        console.log(`[cleanupExpiredFreeAccounts] deleted workspaceId=${doc.id} ownerUid=${ownerUid} lastSignIn=${new Date(lastSignInMs).toISOString()}`);
       } catch (e) {
         console.error(`[cleanupExpiredFreeAccounts] failed to delete workspaceId=${doc.id}:`, e);
       }
     }
 
-    console.log(`[cleanupExpiredFreeAccounts] deleted ${deleted} expired workspaces`);
+    console.log(`[cleanupExpiredFreeAccounts] deleted ${deleted} expired free workspaces`);
   }
 );
 

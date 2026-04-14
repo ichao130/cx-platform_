@@ -76,6 +76,48 @@ const TOOLS = [
       required: ["site_id", "day_from", "day_to"],
     },
   },
+  // ── 行動分析系 ──
+  {
+    name: "get_visitor_journey",
+    description: "指定した訪問者のページ経路・シナリオ表示・クリック・CV・購入などの行動履歴を時系列で返します。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        site_id: { type: "string", description: "サイトID" },
+        visitor_id: { type: "string", description: "訪問者ID（visitor_id）" },
+        limit: { type: "number", description: "取得件数（デフォルト50）" },
+      },
+      required: ["site_id", "visitor_id"],
+    },
+  },
+  {
+    name: "get_recent_visitors",
+    description: "直近の訪問者一覧を返します。各訪問者のPV数・最終訪問ページ・CV有無・購入有無が確認できます。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        site_id: { type: "string", description: "サイトID" },
+        limit: { type: "number", description: "取得件数（デフォルト20、最大50）" },
+        event_filter: { type: "string", description: "絞り込みイベント: conversion / purchase（省略時=全訪問者）" },
+      },
+      required: ["site_id"],
+    },
+  },
+  {
+    name: "get_page_paths",
+    description: "よく辿られるページ経路パターンを分析します。どのルートでCVや購入に至るかを確認できます。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        site_id: { type: "string", description: "サイトID" },
+        day_from: { type: "string", description: "集計開始日 (YYYY-MM-DD)" },
+        day_to: { type: "string", description: "集計終了日 (YYYY-MM-DD)" },
+        goal_event: { type: "string", description: "ゴールイベント: conversion / purchase（省略時=全訪問者の経路）" },
+        limit: { type: "number", description: "表示する経路パターン数（デフォルト10）" },
+      },
+      required: ["site_id", "day_from", "day_to"],
+    },
+  },
   // ── 作成・更新系 ──
   {
     name: "create_action",
@@ -185,6 +227,28 @@ async function verifyAuth(req: Request): Promise<string | null> {
   return null;
 }
 
+// ── プランチェック ────────────────────────────────────────────────
+
+async function checkMcpPlanEnabled(uid: string): Promise<boolean> {
+  const db = adminDb();
+  // uidが所属するワークスペースのいずれかでmcp_enabledがtrueなら許可
+  const sitesSnap = await db.collection("sites").where("memberUids", "array-contains", uid).limit(1).get();
+  if (sitesSnap.empty) return false;
+  const workspaceId = String((sitesSnap.docs[0].data() as any).workspaceId || "");
+  if (!workspaceId) return false;
+
+  const billingSnap = await db.collection("workspace_billing").doc(workspaceId).get();
+  const billing = (billingSnap.data() || {}) as any;
+  // access_override_active（特別トライアル）は無条件許可
+  if (billing.access_override_active && billing.access_override_until) {
+    if (new Date(billing.access_override_until) > new Date()) return true;
+  }
+  const plan = String(billing.plan || "free");
+  const planSnap = await db.collection("plans").where("code", "==", plan).limit(1).get();
+  if (planSnap.empty) return false;
+  return !!(planSnap.docs[0].data()?.limits?.mcp_enabled);
+}
+
 // ── ツール実行 ────────────────────────────────────────────────────
 
 async function executeTool(name: string, args: any, uid: string): Promise<string> {
@@ -228,6 +292,152 @@ async function executeTool(name: string, args: any, uid: string): Promise<string
     return rows
       .map((r) => `• [${r.status}] ${r.name} (ID: ${r.id}, priority: ${r.priority}, actions: ${r.actionIds.join(", ") || "なし"})`)
       .join("\n");
+  }
+
+  // ── 訪問者ジャーニー ───────────────────────────────────────────────
+  if (name === "get_visitor_journey") {
+    const { site_id, visitor_id, limit = 50 } = args;
+    const site = await getSiteAndWorkspace(site_id);
+    if (!site) return `サイト ${site_id} へのアクセス権がありません。`;
+
+    const snap = await db.collection("logs")
+      .where("site_id", "==", site_id)
+      .where("visitor_id", "==", visitor_id)
+      .orderBy("createdAt", "asc")
+      .limit(Math.min(Number(limit), 100))
+      .get();
+
+    if (snap.empty) return `訪問者 ${visitor_id} のログが見つかりません。`;
+
+    const EVENT_ICON: Record<string, string> = {
+      pageview: "📄", impression: "👁", click: "👆", conversion: "🎯",
+      purchase: "💰", cart_add: "🛒",
+    };
+
+    const lines = [`👤 訪問者: ${visitor_id}`, ``];
+    for (const d of snap.docs) {
+      const data = d.data() as any;
+      const event = String(data.event || "?");
+      const icon = EVENT_ICON[event] || "•";
+      const time = data.createdAt ? new Date(data.createdAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
+      const path = data.path || data.page || "";
+      const extra = event === "purchase"
+        ? ` ¥${Number(data.revenue || 0).toLocaleString()} / ${data.order_id || ""}`
+        : event === "impression" || event === "click"
+        ? ` [シナリオ: ${data.scenario_id || "?"}]`
+        : "";
+      lines.push(`  ${time}  ${icon} ${event.padEnd(12)} ${path}${extra}`);
+    }
+    return lines.join("\n");
+  }
+
+  // ── 直近の訪問者一覧 ────────────────────────────────────────────────
+  if (name === "get_recent_visitors") {
+    const { site_id, limit = 20, event_filter } = args;
+    const site = await getSiteAndWorkspace(site_id);
+    if (!site) return `サイト ${site_id} へのアクセス権がありません。`;
+
+    let q = db.collection("logs")
+      .where("site_id", "==", site_id)
+      .orderBy("createdAt", "desc")
+      .limit(500); // 多めに取って訪問者単位に集約
+
+    if (event_filter) {
+      q = db.collection("logs")
+        .where("site_id", "==", site_id)
+        .where("event", "==", event_filter)
+        .orderBy("createdAt", "desc")
+        .limit(Math.min(Number(limit), 50) * 5);
+    }
+
+    const snap = await q.get();
+
+    // 訪問者ごとに集約
+    const visitorMap = new Map<string, { lastSeen: string; pv: number; cv: boolean; purchase: boolean; revenue: number; lastPath: string }>();
+    for (const d of snap.docs) {
+      const data = d.data() as any;
+      const vid = String(data.visitor_id || "");
+      if (!vid) continue;
+      const existing = visitorMap.get(vid) || { lastSeen: "", pv: 0, cv: false, purchase: false, revenue: 0, lastPath: "" };
+      if (!existing.lastSeen) existing.lastSeen = String(data.createdAt || "");
+      if (data.event === "pageview") { existing.pv++; existing.lastPath = data.path || existing.lastPath; }
+      if (data.event === "conversion") existing.cv = true;
+      if (data.event === "purchase") { existing.purchase = true; existing.revenue += Number(data.revenue || 0); }
+      visitorMap.set(vid, existing);
+    }
+
+    const topN = Array.from(visitorMap.entries()).slice(0, Math.min(Number(limit), 50));
+    if (!topN.length) return `直近の訪問者データがありません。`;
+
+    const lines = [`👥 直近の訪問者 (${topN.length}件)`, ``];
+    for (const [vid, v] of topN) {
+      const badges = [v.cv ? "🎯CV" : "", v.purchase ? `💰¥${v.revenue.toLocaleString()}` : ""].filter(Boolean).join(" ");
+      const time = v.lastSeen ? new Date(v.lastSeen).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
+      lines.push(`  ${time}  ${vid}  PV:${v.pv}  ${v.lastPath}  ${badges}`);
+    }
+    lines.push(`\n詳細は get_visitor_journey で visitor_id を指定してください。`);
+    return lines.join("\n");
+  }
+
+  // ── ページ経路分析 ─────────────────────────────────────────────────
+  if (name === "get_page_paths") {
+    const { site_id, day_from, day_to, goal_event, limit = 10 } = args;
+    const site = await getSiteAndWorkspace(site_id);
+    if (!site) return `サイト ${site_id} へのアクセス権がありません。`;
+
+    // 期間内のログを取得（pageview + goal）
+    const snap = await db.collection("logs")
+      .where("site_id", "==", site_id)
+      .where("createdAt", ">=", day_from)
+      .where("createdAt", "<=", day_to + "T23:59:59Z")
+      .orderBy("createdAt", "asc")
+      .limit(5000)
+      .get();
+
+    // 訪問者ごとにページ経路を構築
+    const visitorPaths = new Map<string, string[]>();
+    const visitorGoals = new Set<string>();
+
+    for (const d of snap.docs) {
+      const data = d.data() as any;
+      const vid = String(data.visitor_id || "");
+      if (!vid) continue;
+      if (data.event === "pageview") {
+        const paths = visitorPaths.get(vid) || [];
+        const path = String(data.path || "/");
+        // 連続同一ページは除外
+        if (paths[paths.length - 1] !== path) paths.push(path);
+        visitorPaths.set(vid, paths);
+      }
+      if (goal_event && data.event === goal_event) visitorGoals.add(vid);
+    }
+
+    // goal_event 指定時はゴール達成訪問者のみ対象
+    const targetVisitors = goal_event
+      ? Array.from(visitorPaths.entries()).filter(([vid]) => visitorGoals.has(vid))
+      : Array.from(visitorPaths.entries());
+
+    if (!targetVisitors.length) return `該当する訪問者の経路データがありません。`;
+
+    // 経路パターンを集計（最大4ページを1パターンとして）
+    const patternMap = new Map<string, number>();
+    for (const [, paths] of targetVisitors) {
+      const key = paths.slice(0, 4).join(" → ");
+      patternMap.set(key, (patternMap.get(key) || 0) + 1);
+    }
+
+    const sorted = Array.from(patternMap.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, Number(limit));
+
+    const goalLabel = goal_event ? `（${goal_event}達成者 ${targetVisitors.length}人）` : `（全訪問者 ${targetVisitors.length}人）`;
+    const lines = [`🗺 ページ経路分析 ${goalLabel}`, ``];
+    sorted.forEach(([pattern, count], i) => {
+      const pct = Math.round((count / targetVisitors.length) * 100);
+      lines.push(`${i + 1}. ${pattern}`);
+      lines.push(`   → ${count}人 (${pct}%)`);
+    });
+    return lines.join("\n");
   }
 
   // ── アクション一覧 ─────────────────────────────────────────────────
@@ -576,7 +786,18 @@ export function registerMcpRoutes(app: Express) {
         return res.json({
           jsonrpc: "2.0", id,
           result: {
-            content: [{ type: "text", text: "認証エラー: Firebase IDトークンが必要です。Claude Desktopの設定でAuthorizationヘッダーを確認してください。" }],
+            content: [{ type: "text", text: "認証エラー: APIキーが無効です。管理画面からMCP URLを再発行してください。" }],
+            isError: true,
+          },
+        });
+      }
+      // プランチェック
+      const mcpEnabled = await checkMcpPlanEnabled(uid);
+      if (!mcpEnabled) {
+        return res.json({
+          jsonrpc: "2.0", id,
+          result: {
+            content: [{ type: "text", text: "プランエラー: 現在のプランではMCPサーバー接続は利用できません。プランをアップグレードしてください。" }],
             isError: true,
           },
         });

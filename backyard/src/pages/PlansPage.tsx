@@ -13,6 +13,7 @@ type PlanLimits = {
   templates: number | null;
   media: number | null;
   log_sample_rate: number; // 0〜1 (1 = 100%)
+  mcp_enabled: boolean;    // MCPサーバー接続
 };
 
 type Plan = {
@@ -47,6 +48,7 @@ const emptyLimits = (): PlanLimits => ({
   workspaces: null, sites: null, scenarios: null, actions: null,
   aiInsights: null, members: null, templates: null, media: null,
   log_sample_rate: 1,
+  mcp_enabled: false,
 });
 
 type FormState = {
@@ -189,6 +191,9 @@ export default function PlansPage() {
                       <span style={{ fontSize: 12, color: "#94a3b8" }}>
                         ログサンプリング: <strong style={{ color: "#e2e8f0" }}>{Math.round((p.limits.log_sample_rate ?? 1) * 100)}%</strong>
                       </span>
+                      <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                        MCP接続: <strong style={{ color: p.limits.mcp_enabled ? "#4ade80" : "#64748b" }}>{p.limits.mcp_enabled ? "✅ ON" : "— OFF"}</strong>
+                      </span>
                     </div>
                   </div>
                   <button onClick={() => openEdit(p)} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid rgba(255,255,255,.15)", background: "rgba(255,255,255,.06)", color: "#e2e8f0", cursor: "pointer", fontSize: 12, flexShrink: 0 }}>
@@ -296,6 +301,22 @@ export default function PlansPage() {
                   style={inputStyle}
                 />
                 <div style={{ fontSize: 11, opacity: 0.45, marginTop: 4 }}>例: 1 = 全件、0.5 = 50%、0.1 = 10%。特別トライアル中は常に100%。</div>
+              </div>
+
+              {/* MCP接続 */}
+              <div>
+                <label style={{ fontSize: 12, opacity: 0.6, display: "block", marginBottom: 8 }}>機能フラグ</label>
+                <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", padding: "10px 14px", borderRadius: 8, border: "1px solid rgba(255,255,255,.15)", background: form.limits.mcp_enabled ? "rgba(73,177,184,.1)" : "rgba(100,116,139,.08)" }}>
+                  <input
+                    type="checkbox"
+                    checked={form.limits.mcp_enabled}
+                    onChange={(e) => setForm((f) => ({ ...f, limits: { ...f.limits, mcp_enabled: e.target.checked } }))}
+                  />
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: form.limits.mcp_enabled ? "#49b1b8" : "#94a3b8" }}>🔌 MCPサーバー接続</div>
+                    <div style={{ fontSize: 11, opacity: 0.5, marginTop: 2 }}>Claude Desktop / Cursor 等からのMCP接続を許可する</div>
+                  </div>
+                </label>
               </div>
             </div>
 

@@ -581,6 +581,7 @@ function defaultPlanLimits() {
     templates: null as number | null,
     media: null as number | null,
     log_sample_rate: 1 as number, // デフォルト100%
+    mcp_enabled: false as boolean, // MCPサーバー接続（デフォルト無効）
   };
 }
 
@@ -600,6 +601,10 @@ function normalizePlanLimits(input: any) {
   const rate = input?.log_sample_rate;
   if (typeof rate === "number" && isFinite(rate) && rate >= 0 && rate <= 1) {
     base.log_sample_rate = rate;
+  }
+  // mcp_enabled は boolean
+  if (typeof input?.mcp_enabled === "boolean") {
+    base.mcp_enabled = input.mcp_enabled;
   }
   return base;
 }
@@ -4905,6 +4910,20 @@ export function registerV1Routes(app: Express) {
     try {
       const uid = await requireAuthUid(req);
       const db = adminDb();
+
+      // プランチェック: uidが所属するワークスペースでmcp_enabledが有効か確認
+      const userSitesSnap = await db.collection("sites").where("memberUids", "array-contains", uid).limit(1).get();
+      if (!userSitesSnap.empty) {
+        const wsId = String((userSitesSnap.docs[0].data() as any).workspaceId || "");
+        if (wsId) {
+          const limits = await getEffectiveLimits(wsId);
+          // limits が null = access_override_active（無制限） → MCP も許可
+          if (limits !== null && !limits.mcp_enabled) {
+            return res.status(403).json({ ok: false, error: "plan_limit_exceeded", resource: "mcp", message: "現在のプランではMCPサーバー接続は利用できません。プランをアップグレードしてください。" });
+          }
+        }
+      }
+
       const { randomBytes } = await import("crypto");
 
       // 旧キーを削除

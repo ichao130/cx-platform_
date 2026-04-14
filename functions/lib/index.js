@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -188,22 +221,24 @@ async function deleteWorkspaceAllData(workspaceId) {
  * ==========================
  * Scheduled: 期限切れFreeアカウント自動削除
  * 毎日JST 03:00 に実行。
- * free_expires_at + 10日 を過ぎたワークスペースを完全削除する。
- * 特別トライアル中（access_override_active）は対象外。
+ * 最終ログインから30日間未ログイン + 10日グレース後にFreeアカウントを完全削除する。
+ * - Firebase Auth の lastSignInTime を基準にする
+ * - 有料プランへ移行済みはスキップ
+ * - 特別トライアル中（access_override_active）はスキップ
  * ==========================
  */
 exports.cleanupExpiredFreeAccounts = (0, scheduler_1.onSchedule)({ region: "asia-northeast1", schedule: "0 18 * * *", timeZone: "UTC", timeoutSeconds: 540 }, // UTC 18:00 = JST 03:00
 async () => {
     const db = (0, admin_1.adminDb)();
+    const { getAuth: getAdminAuth } = await Promise.resolve().then(() => __importStar(require("firebase-admin/auth")));
     const now = Date.now();
-    const GRACE_MS = 10 * 24 * 60 * 60 * 1000; // 10日
+    const INACTIVE_MS = 30 * 24 * 60 * 60 * 1000; // 未ログイン判定: 30日
+    const GRACE_MS = 10 * 24 * 60 * 60 * 1000; // 猶予期間: 10日
     const wsSnap = await db.collection("workspaces").get();
     let deleted = 0;
     for (const doc of wsSnap.docs) {
         const ws = doc.data();
         const billing = (ws.billing || {});
-        if (!billing.free_expires_at)
-            continue;
         // 有料プランへ移行済みはスキップ
         if (billing.plan && billing.plan !== "free")
             continue;
@@ -215,19 +250,36 @@ async () => {
             if (until > now)
                 continue;
         }
-        const expiresAt = new Date(billing.free_expires_at).getTime();
-        if (now < expiresAt + GRACE_MS)
+        // ワークスペースのオーナーUIDを取得
+        const ownerUid = String(ws.ownerUid || "");
+        if (!ownerUid)
+            continue;
+        // Firebase Auth から最終ログイン日時を取得
+        let lastSignInMs;
+        try {
+            const authUser = await getAdminAuth().getUser(ownerUid);
+            lastSignInMs = authUser.metadata.lastSignInTime
+                ? new Date(authUser.metadata.lastSignInTime).getTime()
+                : new Date(authUser.metadata.creationTime).getTime();
+        }
+        catch {
+            // ユーザーが存在しない場合はスキップ
+            continue;
+        }
+        // 最終ログインから30日+10日（猶予）を過ぎていなければスキップ
+        if (now < lastSignInMs + INACTIVE_MS + GRACE_MS)
             continue;
         // 完全削除
         try {
             await deleteWorkspaceAllData(doc.id);
             deleted++;
+            console.log(`[cleanupExpiredFreeAccounts] deleted workspaceId=${doc.id} ownerUid=${ownerUid} lastSignIn=${new Date(lastSignInMs).toISOString()}`);
         }
         catch (e) {
             console.error(`[cleanupExpiredFreeAccounts] failed to delete workspaceId=${doc.id}:`, e);
         }
     }
-    console.log(`[cleanupExpiredFreeAccounts] deleted ${deleted} expired workspaces`);
+    console.log(`[cleanupExpiredFreeAccounts] deleted ${deleted} expired free workspaces`);
 });
 /**
  * ==========================

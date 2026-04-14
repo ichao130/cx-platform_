@@ -354,6 +354,9 @@ export default function ScenariosPage() {
   const [displayUnit, setDisplayUnit] = useState<"pageview" | "session" | "user">("pageview");
   const [displayInterval, setDisplayInterval] = useState<1 | 3 | 5>(1);
 
+  // カゴ落ち
+  const [cartAbandonedEnabled, setCartAbandonedEnabled] = useState(false);
+
   useEffect(() => {
     if (!currentUid) { setSites([]); return; }
     if (workspaceId) runMigration(workspaceId);
@@ -530,8 +533,9 @@ export default function ScenariosPage() {
       display: (displayUnit === "pageview" && displayInterval === 1)
         ? undefined  // デフォルト（毎回）は保存しない
         : { unit: displayUnit, interval: displayInterval },
+      visitor: cartAbandonedEnabled ? { cart_abandoned: true } : undefined,
     }),
-    [pageTypeIn, staySec, scrollDepthPct, triggerType, urlRules, displayUnit, displayInterval]
+    [pageTypeIn, staySec, scrollDepthPct, triggerType, urlRules, displayUnit, displayInterval, cartAbandonedEnabled]
   );
 
 
@@ -803,6 +807,8 @@ export default function ScenariosPage() {
     setDisplayUnit("pageview");
     setDisplayInterval(1);
 
+    setCartAbandonedEnabled(false);
+
     setScheduleEnabled(false);
     setScheduleStart("");
     setScheduleEnd("");
@@ -890,6 +896,9 @@ export default function ScenariosPage() {
       setDisplayUnit("pageview");
       setDisplayInterval(1);
     }
+
+    // カゴ落ち
+    setCartAbandonedEnabled(!!(s.entry_rules as any)?.visitor?.cart_abandoned);
 
     // schedule
     if (s.schedule && (s.schedule.startAt || s.schedule.endAt)) {
@@ -1585,6 +1594,18 @@ export default function ScenariosPage() {
                     {displayUnit === "user" && displayInterval === 5 && "同じユーザーに最大5回まで表示します"}
                   </div>
                 </div>
+
+                <div style={{ height: 14 }} />
+                <div className="h2">訪問者条件</div>
+                <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", padding: "12px 14px", borderRadius: 10, border: cartAbandonedEnabled ? "1.5px solid #f59e0b" : "1.5px solid #e2e8f0", background: cartAbandonedEnabled ? "#fefce8" : "#f8fafc", transition: "all .15s" }}>
+                  <input type="checkbox" checked={cartAbandonedEnabled} onChange={(e) => setCartAbandonedEnabled(e.target.checked)} style={{ marginTop: 2, accentColor: "#f59e0b" }} />
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: cartAbandonedEnabled ? "#d97706" : "#374151" }}>🛒 カゴ落ちユーザーに配信</div>
+                    <div className="small" style={{ marginTop: 3, color: "#6b7280", lineHeight: 1.6 }}>
+                      過去のセッションでカートに追加したが購入しなかったユーザーが、次に訪問したときに配信します。
+                    </div>
+                  </div>
+                </label>
 
                 <div style={{ height: 14 }} />
                 <div className="h2">配信スケジュール</div>
