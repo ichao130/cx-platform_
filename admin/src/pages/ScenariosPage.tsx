@@ -364,6 +364,7 @@ export default function ScenariosPage() {
     return onSnapshot(q, (snap) => {
       const list = snap.docs
         .filter((d) => d.data().status !== "deleted")
+        .filter((d) => !workspaceId || d.data().workspaceId === workspaceId)
         .map((d) => ({ id: d.id, data: d.data() }));
       setSites(list);
     });

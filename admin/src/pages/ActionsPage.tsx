@@ -578,18 +578,19 @@ export default function ActionsPage() {
     writeSelectedWorkspaceId(workspaceId, currentUid);
   }, [workspaceId, currentUid]);
 
-  // Load sites for current user (memberUids-based)
+  // Load sites for current user (memberUids-based, filtered by current workspace)
   useEffect(() => {
     if (!currentUid) { setSites([]); setSiteId(""); return; }
     if (workspaceId) runMigration(workspaceId);
-    if (workspaceId) setSiteId(readSelectedSiteId(workspaceId));
     const q = query(collection(db, "sites"), where("memberUids", "array-contains", currentUid));
     return onSnapshot(q, (snap) => {
       const list = snap.docs
         .filter((d) => d.data().status !== "deleted")
+        .filter((d) => !workspaceId || d.data().workspaceId === workspaceId)
         .map((d) => ({ id: d.id, data: d.data() as any }));
       setSites(list);
-      setSiteId((prev) => prev || list[0]?.id || "");
+      const saved = workspaceId ? readSelectedSiteId(workspaceId) : "";
+      setSiteId(list.find((s) => s.id === saved)?.id || list[0]?.id || "");
     });
   }, [currentUid, workspaceId, runMigration]);
 
