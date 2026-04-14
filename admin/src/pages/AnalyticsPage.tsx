@@ -341,6 +341,11 @@ export default function AnalyticsPage() {
   const [purchaseLoading, setPurchaseLoading] = useState(false);
   const [selectedVid, setSelectedVid] = useState<string | null>(null);
 
+  // ---- 訪問者ジャーニーフィルター ----
+  const [visitorFilter, setVisitorFilter] = useState<"all" | "purchase" | "cv">("all");
+  const [journeyFilterFrom, setJourneyFilterFrom] = useState<string>("");
+  const [journeyFilterTo, setJourneyFilterTo] = useState<string>("");
+
   // auth
   useEffect(() => {
     return onAuthStateChanged(getAuth(), (u) => {
@@ -713,8 +718,24 @@ export default function AnalyticsPage() {
     }
     return Array.from(map.values())
       .sort((a, b) => b.lastSeen.localeCompare(a.lastSeen))
-      .slice(0, 50);
+      .slice(0, 500);
   }, [journeyLogs, purchaseLogs]);
+
+  // ---- computed: フィルター済み訪問者リスト ----
+  const filteredVisitorList = useMemo(() => {
+    let list = visitorList;
+    if (visitorFilter === "purchase") list = list.filter((v) => v.hasPurchase);
+    if (visitorFilter === "cv") list = list.filter((v) => v.hasConversion || v.hasPurchase);
+    if (journeyFilterFrom) {
+      const from = new Date(journeyFilterFrom + "T00:00:00").getTime();
+      list = list.filter((v) => v.lastSeen && new Date(v.lastSeen).getTime() >= from);
+    }
+    if (journeyFilterTo) {
+      const to = new Date(journeyFilterTo + "T23:59:59").getTime();
+      list = list.filter((v) => v.firstSeen && new Date(v.firstSeen).getTime() <= to);
+    }
+    return list.slice(0, 100);
+  }, [visitorList, visitorFilter, journeyFilterFrom, journeyFilterTo]);
 
   // ---- computed: 選択中訪問者のイベント一覧（購入ログ含む） ----
   const selectedJourney = useMemo(() => {
@@ -1369,6 +1390,35 @@ export default function AnalyticsPage() {
               {journeyLoading && <div className="small" style={{ opacity: 0.5 }}>読み込み中...</div>}
             </div>
 
+            {/* フィルターバー */}
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 12, padding: "10px 14px", background: "rgba(15,23,42,.03)", borderRadius: 10, border: "1px solid rgba(15,23,42,.07)" }}>
+              {/* 絞り込みタイプ */}
+              <div style={{ display: "flex", border: "1px solid rgba(15,23,42,.12)", borderRadius: 8, overflow: "hidden" }}>
+                {([["all", "全員"], ["purchase", "💰 購入あり"], ["cv", "✅ CV あり"]] as const).map(([val, label]) => (
+                  <button key={val} type="button" onClick={() => { setVisitorFilter(val); setSelectedVid(null); }} style={{ padding: "6px 12px", border: "none", fontSize: 12, fontWeight: visitorFilter === val ? 700 : 500, background: visitorFilter === val ? "#1f6573" : "transparent", color: visitorFilter === val ? "#fff" : "inherit", cursor: "pointer", whiteSpace: "nowrap" }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {/* 日付 from/to */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span className="small" style={{ opacity: 0.6 }}>期間</span>
+                <input type="date" value={journeyFilterFrom} onChange={(e) => { setJourneyFilterFrom(e.target.value); setSelectedVid(null); }} style={{ fontSize: 12, padding: "5px 8px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 7, background: "#fff", cursor: "pointer" }} />
+                <span className="small" style={{ opacity: 0.5 }}>〜</span>
+                <input type="date" value={journeyFilterTo} onChange={(e) => { setJourneyFilterTo(e.target.value); setSelectedVid(null); }} style={{ fontSize: 12, padding: "5px 8px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 7, background: "#fff", cursor: "pointer" }} />
+                {(journeyFilterFrom || journeyFilterTo) && (
+                  <button type="button" onClick={() => { setJourneyFilterFrom(""); setJourneyFilterTo(""); }} style={{ fontSize: 11, padding: "4px 8px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 6, background: "transparent", cursor: "pointer", opacity: 0.6 }}>
+                    クリア
+                  </button>
+                )}
+              </div>
+              {/* 件数表示 */}
+              <div className="small" style={{ opacity: 0.55, marginLeft: "auto" }}>
+                {filteredVisitorList.length}人表示
+                {visitorFilter !== "all" || journeyFilterFrom || journeyFilterTo ? ` / ${visitorList.length}人中` : ""}
+              </div>
+            </div>
+
             {visitorList.length === 0 && !journeyLoading ? (
               <div className="card" style={{ padding: 20, opacity: 0.7 }}>
                 <div className="small">期間内の訪問データがありません</div>
@@ -1379,10 +1429,18 @@ export default function AnalyticsPage() {
                 {/* 左: 訪問者リスト */}
                 <div className="card" style={{ padding: 0, overflow: "hidden" }}>
                   <div style={{ padding: "12px 16px", borderBottom: "1px solid rgba(15,23,42,.07)", background: "rgba(15,23,42,.02)" }}>
-                    <div className="small" style={{ fontWeight: 700 }}>訪問者 {visitorList.length}人</div>
+                    <div className="small" style={{ fontWeight: 700 }}>
+                      {filteredVisitorList.length === 0 ? "条件に一致する訪問者なし" : `訪問者 ${filteredVisitorList.length}人`}
+                    </div>
                   </div>
                   <div style={{ maxHeight: 560, overflowY: "auto" }}>
-                    {visitorList.map((v) => {
+                    {filteredVisitorList.length === 0 && (
+                      <div style={{ padding: "24px 16px", textAlign: "center", opacity: 0.5 }}>
+                        <div style={{ fontSize: 24, marginBottom: 6 }}>🔍</div>
+                        <div className="small">条件に一致する訪問者がいません</div>
+                      </div>
+                    )}
+                    {filteredVisitorList.map((v) => {
                       const isSelected = selectedVid === v.vid;
                       const durationMin = Math.round(v.totalDuration / 60);
                       const lastTime = v.lastSeen ? new Date(v.lastSeen).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
