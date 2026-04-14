@@ -1468,7 +1468,16 @@ export default function AnalyticsPage() {
                       return (
                         <div
                           key={v.vid}
-                          onClick={() => setSelectedVid(isSelected ? null : v.vid)}
+                          onClick={() => {
+                            const next = isSelected ? null : v.vid;
+                            setSelectedVid(next);
+                            // 訪問者を選択したらフィルターをリセット（購入フィルター中でも全員リストに戻す）
+                            if (next) {
+                              setVisitorFilter("all");
+                              setJourneyFilterFrom("");
+                              setJourneyFilterTo("");
+                            }
+                          }}
                           style={{
                             padding: "12px 16px", cursor: "pointer", borderBottom: "1px solid rgba(15,23,42,.05)",
                             background: isSelected ? `hsla(${hue},60%,96%,1)` : "transparent",
