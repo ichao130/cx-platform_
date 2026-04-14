@@ -525,12 +525,24 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
   const showRail = workspaceRows.length > 1;
 
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    try { return localStorage.getItem("cx_sidebar_open") !== "false"; } catch { return true; }
+  });
+  const toggleSidebar = () => setSidebarOpen((prev) => {
+    const next = !prev;
+    try { localStorage.setItem("cx_sidebar_open", String(next)); } catch {}
+    return next;
+  });
+
+  const sidebarW = sidebarOpen ? 240 : 44;
+
   return (
     <div
       style={{
         minHeight: "100vh",
         display: "grid",
-        gridTemplateColumns: showRail ? "76px 280px minmax(0, 1fr)" : "280px minmax(0, 1fr)",
+        gridTemplateColumns: showRail ? `76px ${sidebarW}px minmax(0, 1fr)` : `${sidebarW}px minmax(0, 1fr)`,
+        transition: "grid-template-columns .22s ease",
         background: `radial-gradient(circle at 18% 12%, ${selectedWorkspaceTintStrong}, transparent 20%), linear-gradient(180deg, ${selectedWorkspaceTintSoft}, transparent 24%), linear-gradient(180deg,var(--bg),var(--bg2))`,
       }}
     >
@@ -602,47 +614,76 @@ function AppShell({ children }: { children: React.ReactNode }) {
           borderRight: "1px solid rgba(15,23,42,.08)",
           background: "rgba(22,44,64,.96)",
           backdropFilter: "blur(12px)",
-          padding: 18,
           position: "sticky",
           top: 0,
           alignSelf: "start",
           height: "100vh",
-          overflow: "auto",
+          overflow: "hidden",
+          width: sidebarW,
+          transition: "width .22s ease",
+          flexShrink: 0,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
-          <div
-            className="mokkeda-brand-slot"
-            style={{
-              width: 40,
-              height: 40,
-              flexShrink: 0,
-              borderRadius: 8,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 11,
-              opacity: selectedWorkspaceLogoUrl ? 1 : 0.75,
-              overflow: "hidden",
-              background: selectedWorkspaceLogoUrl ? "#fff" : "rgba(255,255,255,.1)",
-            }}
-          >
-            {selectedWorkspaceLogoUrl ? (
-              <img
-                src={selectedWorkspaceLogoUrl}
-                alt={selectedWorkspaceName}
-                style={{ width: "100%", height: "100%", objectFit: "contain" }}
-              />
-            ) : (
-              "LOGO"
-            )}
+        {/* 閉じているときのトグルボタン（縦中央） */}
+        {!sidebarOpen && (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", height: "100%", paddingTop: 14 }}>
+            <button
+              onClick={toggleSidebar}
+              title="メニューを開く"
+              style={{
+                width: 32, height: 32, borderRadius: 8, border: "none",
+                background: "rgba(255,255,255,.1)", color: "rgba(255,255,255,.8)",
+                cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center",
+                transition: "background .15s",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,.2)")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "rgba(255,255,255,.1)")}
+            >
+              ›
+            </button>
           </div>
-          <div style={{ minWidth: 0 }}>
-            <Link to="/dashboard" style={{ margin: 0, textDecoration: "none", display: "block", color: "rgba(255,255,255,.95)", fontSize: 20, fontWeight: 800, lineHeight: 1.3 }}>
-              {selectedWorkspaceName}
-            </Link>
-          </div>
-        </div>
+        )}
+
+        {/* 開いているときのナビゲーション */}
+        {sidebarOpen && (
+          <div style={{ padding: 18, width: 240, boxSizing: "border-box" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
+              <div
+                className="mokkeda-brand-slot"
+                style={{
+                  width: 36, height: 36, flexShrink: 0, borderRadius: 8,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 11, opacity: selectedWorkspaceLogoUrl ? 1 : 0.75,
+                  overflow: "hidden", background: selectedWorkspaceLogoUrl ? "#fff" : "rgba(255,255,255,.1)",
+                }}
+              >
+                {selectedWorkspaceLogoUrl ? (
+                  <img src={selectedWorkspaceLogoUrl} alt={selectedWorkspaceName} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                ) : (
+                  "LOGO"
+                )}
+              </div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <Link to="/dashboard" style={{ margin: 0, textDecoration: "none", display: "block", color: "rgba(255,255,255,.95)", fontSize: 17, fontWeight: 800, lineHeight: 1.3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {selectedWorkspaceName}
+                </Link>
+              </div>
+              {/* 閉じるボタン */}
+              <button
+                onClick={toggleSidebar}
+                title="メニューを閉じる"
+                style={{
+                  width: 28, height: 28, borderRadius: 7, border: "none", flexShrink: 0,
+                  background: "rgba(255,255,255,.08)", color: "rgba(255,255,255,.5)",
+                  cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center",
+                  transition: "background .15s, color .15s",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,.18)"; e.currentTarget.style.color = "rgba(255,255,255,.9)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(255,255,255,.08)"; e.currentTarget.style.color = "rgba(255,255,255,.5)"; }}
+              >
+                ‹
+              </button>
+            </div>
 
         <div style={{ marginBottom: 18 }}>
           <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "rgba(255,255,255,.38)", marginBottom: 8, paddingLeft: 12 }}>
@@ -722,6 +763,8 @@ function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <McpTokenButton user={user} />
         </div>
+        </div>
+        )}
       </aside>
 
       <main style={{ minWidth: 0, width: "100%", overflowX: "hidden" }}>
