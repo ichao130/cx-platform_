@@ -814,6 +814,33 @@ export default function AnalyticsPage() {
     return all;
   }, [journeyLogs, purchaseLogs, selectedVid, journeyFilterFrom, journeyFilterTo]);
 
+  // ---- computed: 日付フィルター適用時の訪問者別集計（左パネルカード表示用） ----
+  const filteredJourneyStats = useMemo(() => {
+    if (!journeyFilterFrom && !journeyFilterTo) return null;
+    const fromMs = journeyFilterFrom ? new Date(journeyFilterFrom + "T00:00:00+09:00").getTime() : 0;
+    const toMs2 = journeyFilterTo ? new Date(journeyFilterTo + "T23:59:59+09:00").getTime() : Infinity;
+    const map = new Map<string, { pvCount: number; lastSeen: string; hasPurchase: boolean; purchaseRevenue: number; purchaseCount: number }>();
+    for (const l of journeyLogs) {
+      const t = toMs(l.createdAt); if (t < fromMs || t > toMs2) continue;
+      const vid = l.vid; if (!vid) continue;
+      if (!map.has(vid)) map.set(vid, { pvCount: 0, lastSeen: "", hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0 });
+      const s = map.get(vid)!;
+      if (l.event === "pageview") s.pvCount++;
+      if (!s.lastSeen || l.createdAt > s.lastSeen) s.lastSeen = l.createdAt || "";
+    }
+    for (const p of purchaseLogs) {
+      const t = toMs(p.createdAt); if (t < fromMs || t > toMs2) continue;
+      const vid = p.vid; if (!vid) continue;
+      if (!map.has(vid)) map.set(vid, { pvCount: 0, lastSeen: "", hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0 });
+      const s = map.get(vid)!;
+      s.hasPurchase = true;
+      s.purchaseRevenue += typeof p.revenue === "number" ? p.revenue : 0;
+      s.purchaseCount++;
+      if (!s.lastSeen || p.createdAt > s.lastSeen) s.lastSeen = p.createdAt || "";
+    }
+    return map;
+  }, [journeyLogs, purchaseLogs, journeyFilterFrom, journeyFilterTo]);
+
   // ---- computed: vid → 直前のシナリオID（購入時の施策特定用） ----
   const vidToLastScenario = useMemo(() => {
     const map = new Map<string, string>();
@@ -1552,8 +1579,15 @@ export default function AnalyticsPage() {
                     )}
                     {filteredVisitorList.map((v) => {
                       const isSelected = selectedVid === v.vid;
+                      // 日付フィルター適用時はフィルター済み stats を優先表示
+                      const fs = filteredJourneyStats?.get(v.vid);
+                      const dispPvCount = fs ? fs.pvCount : v.pvCount;
+                      const dispHasPurchase = fs ? fs.hasPurchase : v.hasPurchase;
+                      const dispPurchaseRevenue = fs ? fs.purchaseRevenue : v.purchaseRevenue;
+                      const dispPurchaseCount = fs ? fs.purchaseCount : v.purchaseCount;
+                      const dispLastSeen = fs ? fs.lastSeen : v.lastSeen;
                       const durationMin = Math.round(v.totalDuration / 60);
-                      const lastTime = v.lastSeen ? new Date(v.lastSeen).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+                      const lastTime = dispLastSeen ? new Date(dispLastSeen).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
                       const vidShort = v.vid.slice(0, 8) + "…";
                       // vid から色を生成
                       const hue = v.vid.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360;
@@ -1587,21 +1621,21 @@ export default function AnalyticsPage() {
                                 {v.isNew === false && (
                                   <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 20, background: "#f1f5f9", color: "#475569" }}>リピート</span>
                                 )}
-                                {v.hasPurchase && (
+                                {dispHasPurchase && (
                                   <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 20, background: "#fefce8", color: "#ca8a04" }}>💰 購入</span>
                                 )}
-                                {v.hasConversion && !v.hasPurchase && (
+                                {v.hasConversion && !dispHasPurchase && (
                                   <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 20, background: "#f0fdf4", color: "#16a34a" }}>CV</span>
                                 )}
-                                {v.hasImpression && !v.hasConversion && !v.hasPurchase && (
+                                {v.hasImpression && !v.hasConversion && !dispHasPurchase && (
                                   <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 20, background: "#eff6ff", color: "#2563eb" }}>施策</span>
                                 )}
                               </div>
                               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                                <span className="small" style={{ opacity: 0.55 }}>{v.pvCount} PV</span>
-                                {v.hasPurchase && (
+                                <span className="small" style={{ opacity: 0.55 }}>{dispPvCount} PV</span>
+                                {dispHasPurchase && (
                                   <span className="small" style={{ fontWeight: 700, color: "#ca8a04" }}>
-                                    ¥{v.purchaseRevenue.toLocaleString()} ({v.purchaseCount}件)
+                                    ¥{dispPurchaseRevenue.toLocaleString()} ({dispPurchaseCount}件)
                                   </span>
                                 )}
                                 {v.totalDuration > 0 && (
@@ -1648,14 +1682,11 @@ export default function AnalyticsPage() {
                               </div>
                               <div>
                                 <div style={{ fontSize: 12, fontWeight: 700 }}><code>{selectedVid}</code></div>
-                                {v && (
-                                  <div className="small" style={{ opacity: 0.55 }}>
-                                    {v.pvCount} ページ閲覧 · {v.eventCount} イベント
-                                    {v.totalDuration > 0 && ` · 計${Math.round(v.totalDuration / 60) > 0 ? Math.round(v.totalDuration / 60) + "分" : v.totalDuration + "秒"}滞在`}
-                                    {v.hasConversion && " · CV達成 ✓"}
+                                <div className="small" style={{ opacity: 0.55 }}>
+                                    {/* 右パネルヘッダーは selectedJourney（フィルター済み）ベースで表示 */}
+                                    {selectedJourney.filter((e) => e.event === "pageview").length} ページ閲覧 · {selectedJourney.length} イベント
                                     {journeyPurchases.length > 0 && <span style={{ color: "#ca8a04", fontWeight: 700 }}> · 💰 ¥{journeyRevenue.toLocaleString()} ({journeyPurchases.length}件購入)</span>}
                                   </div>
-                                )}
                               </div>
                             </>
                           );
