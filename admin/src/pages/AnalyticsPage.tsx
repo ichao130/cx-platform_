@@ -317,7 +317,7 @@ export default function AnalyticsPage() {
       const d = new Date(customFrom + "T00:00:00");
       return isNaN(d.getTime()) ? daysAgo(13) : d;
     }
-    return daysAgo(dateRange);
+    return daysAgo((dateRange as number) - 1); // 14日 = 今日含めて14日分
   }, [dateRange, customFrom, todayStr]);
 
   const effectiveTo = useMemo(() => {
