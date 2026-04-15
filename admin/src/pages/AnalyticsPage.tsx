@@ -46,6 +46,16 @@ function utcIsoToJstDay(createdAt: string): string {
   return isoDay(new Date(new Date(createdAt).getTime() + 9 * 60 * 60 * 1000));
 }
 
+// createdAt フィールドをミリ秒に変換（ISO文字列・Firestore Timestamp・数値に対応）
+function toMs(createdAt: any): number {
+  if (!createdAt) return 0;
+  if (typeof createdAt === "number") return createdAt;
+  if (typeof createdAt === "string") return new Date(createdAt).getTime() || 0;
+  if (typeof createdAt.toDate === "function") return createdAt.toDate().getTime(); // Firestore Timestamp
+  if (typeof createdAt.seconds === "number") return createdAt.seconds * 1000; // Timestamp-like
+  return 0;
+}
+
 function safeNum(n: any) {
   const v = Number(n);
   return Number.isFinite(v) ? v : 0;
@@ -770,12 +780,12 @@ export default function AnalyticsPage() {
     if (visitorFilter === "new") list = list.filter((v) => v.isNew === true);
     if (visitorFilter === "repeat") list = list.filter((v) => v.isNew === false);
     if (journeyFilterFrom || journeyFilterTo) {
-      // firstSeen/lastSeen ではなく実際のイベントが範囲内にあるかで判定
-      const fromISO = journeyFilterFrom ? new Date(journeyFilterFrom + "T00:00:00+09:00").toISOString() : "";
-      const toISO = journeyFilterTo ? new Date(journeyFilterTo + "T23:59:59+09:00").toISOString() : "\uffff";
+      // firstSeen/lastSeen ではなく実際のイベントが範囲内にあるかをミリ秒比較で判定
+      const fromMs = journeyFilterFrom ? new Date(journeyFilterFrom + "T00:00:00+09:00").getTime() : 0;
+      const toMs2 = journeyFilterTo ? new Date(journeyFilterTo + "T23:59:59+09:00").getTime() : Infinity;
       const vidsInRange = new Set(
         journeyLogs
-          .filter((l) => (!fromISO || (l.createdAt || "") >= fromISO) && (l.createdAt || "") <= toISO)
+          .filter((l) => { const t = toMs(l.createdAt); return t >= fromMs && t <= toMs2; })
           .map((l) => l.vid)
           .filter(Boolean)
       );
@@ -795,14 +805,11 @@ export default function AnalyticsPage() {
       .map((p) => ({ ...p, event: "purchase", id: p.id || p.order_id || String(p.createdAt) }));
     let all = [...logs, ...purchases]
       .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
-    // 日付フィルターが指定されている場合はイベントも絞り込む（JST明示 +09:00 で変換）
-    if (journeyFilterFrom) {
-      const from = new Date(journeyFilterFrom + "T00:00:00+09:00").toISOString();
-      all = all.filter((e) => (e.createdAt || "") >= from);
-    }
-    if (journeyFilterTo) {
-      const to = new Date(journeyFilterTo + "T23:59:59+09:00").toISOString();
-      all = all.filter((e) => (e.createdAt || "") <= to);
+    // 日付フィルターが指定されている場合はイベントもミリ秒比較で絞り込む（JST明示 +09:00）
+    if (journeyFilterFrom || journeyFilterTo) {
+      const fromMs = journeyFilterFrom ? new Date(journeyFilterFrom + "T00:00:00+09:00").getTime() : 0;
+      const toMs2 = journeyFilterTo ? new Date(journeyFilterTo + "T23:59:59+09:00").getTime() : Infinity;
+      all = all.filter((e) => { const t = toMs(e.createdAt); return t >= fromMs && t <= toMs2; });
     }
     return all;
   }, [journeyLogs, purchaseLogs, selectedVid, journeyFilterFrom, journeyFilterTo]);
