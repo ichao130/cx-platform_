@@ -684,14 +684,11 @@ export default function AnalyticsPage() {
       const uv = new Set(pvLogs.filter((l) => utcIsoToJstDay(l.createdAt || "") === day).map((l) => l.vid).filter(Boolean)).size;
       const imp = statRows.filter((r) => r.day === day && r.event === "impression").reduce((s, r) => s + safeNum(r.count), 0);
       const cv = statRows.filter((r) => r.day === day && r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
-      // 新規/リピート: firstSeen がその日の訪問者を集計
-      const newCount = visitorList.filter((v) => v.isNew === true && utcIsoToJstDay(v.firstSeen) === day).length;
-      const repeatCount = visitorList.filter((v) => v.isNew === false && utcIsoToJstDay(v.firstSeen) === day).length;
-      result.push({ day, label, pv, uv, imp, cv, newCount, repeatCount });
+      result.push({ day, label, pv, uv, imp, cv });
       cur.setDate(cur.getDate() + 1);
     }
     return result;
-  }, [pvLogs, statRows, visitorList, effectiveFrom, effectiveTo]);
+  }, [pvLogs, statRows, effectiveFrom, effectiveTo]);
 
   // ---- computed: 最近のセッション ----
   const sessionData = useMemo(() => {
@@ -754,6 +751,15 @@ export default function AnalyticsPage() {
       .sort((a, b) => b.lastSeen.localeCompare(a.lastSeen))
       .slice(0, 500);
   }, [journeyLogs, purchaseLogs]);
+
+  // ---- computed: 新規/リピート 日別集計（visitorListの後に宣言が必要） ----
+  const newRepeatTrend = useMemo(() => {
+    return dailyTrend.map((d) => ({
+      ...d,
+      newCount: visitorList.filter((v) => v.isNew === true && utcIsoToJstDay(v.firstSeen) === d.day).length,
+      repeatCount: visitorList.filter((v) => v.isNew === false && utcIsoToJstDay(v.firstSeen) === d.day).length,
+    }));
+  }, [dailyTrend, visitorList]);
 
   // ---- computed: フィルター済み訪問者リスト ----
   const filteredVisitorList = useMemo(() => {
@@ -1158,7 +1164,7 @@ export default function AnalyticsPage() {
                   })()}
                 </div>
                 <ResponsiveContainer width="100%" height={180}>
-                  <BarChart data={dailyTrend} margin={{ top: 4, right: 12, left: -16, bottom: 0 }}>
+                  <BarChart data={newRepeatTrend} margin={{ top: 4, right: 12, left: -16, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,.06)" />
                     <XAxis dataKey="label" tick={{ fontSize: 10, fill: "rgba(15,23,42,.45)" }} axisLine={false} tickLine={false} />
                     <YAxis tick={{ fontSize: 10, fill: "rgba(15,23,42,.45)" }} axisLine={false} tickLine={false} allowDecimals={false} />
