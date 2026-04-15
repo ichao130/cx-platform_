@@ -769,16 +769,20 @@ export default function AnalyticsPage() {
     if (visitorFilter === "cv") list = list.filter((v) => v.hasConversion || v.hasPurchase);
     if (visitorFilter === "new") list = list.filter((v) => v.isNew === true);
     if (visitorFilter === "repeat") list = list.filter((v) => v.isNew === false);
-    if (journeyFilterFrom) {
-      const from = new Date(journeyFilterFrom + "T00:00:00+09:00").getTime();
-      list = list.filter((v) => v.lastSeen && new Date(v.lastSeen).getTime() >= from);
-    }
-    if (journeyFilterTo) {
-      const to = new Date(journeyFilterTo + "T23:59:59+09:00").getTime();
-      list = list.filter((v) => v.firstSeen && new Date(v.firstSeen).getTime() <= to);
+    if (journeyFilterFrom || journeyFilterTo) {
+      // firstSeen/lastSeen ではなく実際のイベントが範囲内にあるかで判定
+      const fromISO = journeyFilterFrom ? new Date(journeyFilterFrom + "T00:00:00+09:00").toISOString() : "";
+      const toISO = journeyFilterTo ? new Date(journeyFilterTo + "T23:59:59+09:00").toISOString() : "\uffff";
+      const vidsInRange = new Set(
+        journeyLogs
+          .filter((l) => (!fromISO || (l.createdAt || "") >= fromISO) && (l.createdAt || "") <= toISO)
+          .map((l) => l.vid)
+          .filter(Boolean)
+      );
+      list = list.filter((v) => vidsInRange.has(v.vid));
     }
     return list.slice(0, 100);
-  }, [visitorList, visitorFilter, journeyFilterFrom, journeyFilterTo]);
+  }, [visitorList, visitorFilter, journeyFilterFrom, journeyFilterTo, journeyLogs]);
 
   // ---- computed: 選択中訪問者のイベント一覧（購入ログ含む） ----
   const selectedJourney = useMemo(() => {
