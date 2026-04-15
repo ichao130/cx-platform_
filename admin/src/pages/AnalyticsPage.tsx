@@ -770,11 +770,11 @@ export default function AnalyticsPage() {
     if (visitorFilter === "new") list = list.filter((v) => v.isNew === true);
     if (visitorFilter === "repeat") list = list.filter((v) => v.isNew === false);
     if (journeyFilterFrom) {
-      const from = new Date(journeyFilterFrom + "T00:00:00").getTime();
+      const from = new Date(journeyFilterFrom + "T00:00:00+09:00").getTime();
       list = list.filter((v) => v.lastSeen && new Date(v.lastSeen).getTime() >= from);
     }
     if (journeyFilterTo) {
-      const to = new Date(journeyFilterTo + "T23:59:59").getTime();
+      const to = new Date(journeyFilterTo + "T23:59:59+09:00").getTime();
       list = list.filter((v) => v.firstSeen && new Date(v.firstSeen).getTime() <= to);
     }
     return list.slice(0, 100);
@@ -791,13 +791,13 @@ export default function AnalyticsPage() {
       .map((p) => ({ ...p, event: "purchase", id: p.id || p.order_id || String(p.createdAt) }));
     let all = [...logs, ...purchases]
       .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
-    // 日付フィルターが指定されている場合はイベントも絞り込む
+    // 日付フィルターが指定されている場合はイベントも絞り込む（JST明示 +09:00 で変換）
     if (journeyFilterFrom) {
-      const from = new Date(journeyFilterFrom + "T00:00:00").toISOString();
+      const from = new Date(journeyFilterFrom + "T00:00:00+09:00").toISOString();
       all = all.filter((e) => (e.createdAt || "") >= from);
     }
     if (journeyFilterTo) {
-      const to = new Date(journeyFilterTo + "T23:59:59").toISOString();
+      const to = new Date(journeyFilterTo + "T23:59:59+09:00").toISOString();
       all = all.filter((e) => (e.createdAt || "") <= to);
     }
     return all;
@@ -1491,9 +1491,9 @@ export default function AnalyticsPage() {
               {/* 日付 from/to */}
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span className="small" style={{ opacity: 0.6 }}>期間</span>
-                <input type="date" value={journeyFilterFrom} onChange={(e) => { setJourneyFilterFrom(e.target.value); setSelectedVid(null); }} style={{ fontSize: 12, padding: "5px 8px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 7, background: "#fff", cursor: "pointer" }} />
+                <input type="date" value={journeyFilterFrom} onChange={(e) => { setJourneyFilterFrom(e.target.value); }} style={{ fontSize: 12, padding: "5px 8px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 7, background: "#fff", cursor: "pointer" }} />
                 <span className="small" style={{ opacity: 0.5 }}>〜</span>
-                <input type="date" value={journeyFilterTo} onChange={(e) => { setJourneyFilterTo(e.target.value); setSelectedVid(null); }} style={{ fontSize: 12, padding: "5px 8px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 7, background: "#fff", cursor: "pointer" }} />
+                <input type="date" value={journeyFilterTo} onChange={(e) => { setJourneyFilterTo(e.target.value); }} style={{ fontSize: 12, padding: "5px 8px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 7, background: "#fff", cursor: "pointer" }} />
                 {(journeyFilterFrom || journeyFilterTo) && (
                   <button type="button" onClick={() => { setJourneyFilterFrom(""); setJourneyFilterTo(""); }} style={{ fontSize: 11, padding: "4px 8px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 6, background: "transparent", cursor: "pointer", opacity: 0.6 }}>
                     クリア
