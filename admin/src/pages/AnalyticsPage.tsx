@@ -789,9 +789,19 @@ export default function AnalyticsPage() {
     const purchases = purchaseLogs
       .filter((p) => p.vid && p.vid === selectedVid)
       .map((p) => ({ ...p, event: "purchase", id: p.id || p.order_id || String(p.createdAt) }));
-    return [...logs, ...purchases]
+    let all = [...logs, ...purchases]
       .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
-  }, [journeyLogs, purchaseLogs, selectedVid]);
+    // 日付フィルターが指定されている場合はイベントも絞り込む
+    if (journeyFilterFrom) {
+      const from = new Date(journeyFilterFrom + "T00:00:00").toISOString();
+      all = all.filter((e) => (e.createdAt || "") >= from);
+    }
+    if (journeyFilterTo) {
+      const to = new Date(journeyFilterTo + "T23:59:59").toISOString();
+      all = all.filter((e) => (e.createdAt || "") <= to);
+    }
+    return all;
+  }, [journeyLogs, purchaseLogs, selectedVid, journeyFilterFrom, journeyFilterTo]);
 
   // ---- computed: vid → 直前のシナリオID（購入時の施策特定用） ----
   const vidToLastScenario = useMemo(() => {
