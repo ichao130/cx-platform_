@@ -372,6 +372,7 @@ export default function AnalyticsPage() {
   const [visitorFilter, setVisitorFilter] = useState<"all" | "purchase" | "cv" | "new" | "repeat">("all");
   const [journeyFilterFrom, setJourneyFilterFrom] = useState<string>("");
   const [journeyFilterTo, setJourneyFilterTo] = useState<string>("");
+  const [utmFilter, setUtmFilter] = useState<string>(""); // UTMフィルター（utm_source）
 
   // auth
   useEffect(() => {
@@ -440,6 +441,7 @@ export default function AnalyticsPage() {
     setVisitorFilter("all");
     setJourneyFilterFrom("");
     setJourneyFilterTo("");
+    setUtmFilter("");
     setSelectedVid(null);
   }, [siteId]);
 
@@ -728,12 +730,13 @@ export default function AnalyticsPage() {
       purchaseRevenue: number; purchaseCount: number;
       pages: string[]; eventCount: number; firstRef: string;
       isNew: boolean | null; // true=新規, false=リピート, null=不明（古いログ）
+      utmSource: string; utmMedium: string; utmCampaign: string;
     }>();
     const sorted = [...journeyLogs].sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
     for (const l of sorted) {
       const vid = l.vid || "unknown";
       if (!map.has(vid)) {
-        map.set(vid, { vid, firstSeen: l.createdAt || "", lastSeen: l.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, pages: [], eventCount: 0, firstRef: "", isNew: null });
+        map.set(vid, { vid, firstSeen: l.createdAt || "", lastSeen: l.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, pages: [], eventCount: 0, firstRef: "", isNew: null, utmSource: "", utmMedium: "", utmCampaign: "" });
       }
       const v = map.get(vid)!;
       v.lastSeen = l.createdAt || v.lastSeen;
@@ -744,6 +747,10 @@ export default function AnalyticsPage() {
         if (!v.firstRef && l.ref) v.firstRef = l.ref;
         // 最初の pageview の is_new を採用（null=古いログで情報なし）
         if (v.isNew === null && typeof l.is_new === "boolean") v.isNew = l.is_new;
+        // UTM パラメータは最初の pageview を採用
+        if (!v.utmSource && l.utm_source) v.utmSource = l.utm_source;
+        if (!v.utmMedium && l.utm_medium) v.utmMedium = l.utm_medium;
+        if (!v.utmCampaign && l.utm_campaign) v.utmCampaign = l.utm_campaign;
       }
       if (l.event === "conversion") v.hasConversion = true;
       if (l.event === "impression") v.hasImpression = true;
@@ -772,6 +779,12 @@ export default function AnalyticsPage() {
     }));
   }, [dailyTrend, visitorList]);
 
+  // ---- computed: UTM選択肢（utm_sourceのユニーク値） ----
+  const utmOptions = useMemo(() => {
+    const sources = [...new Set(visitorList.map((v: any) => v.utmSource).filter(Boolean))].sort() as string[];
+    return sources;
+  }, [visitorList]);
+
   // ---- computed: フィルター済み訪問者リスト ----
   const filteredVisitorList = useMemo(() => {
     let list = visitorList;
@@ -779,6 +792,7 @@ export default function AnalyticsPage() {
     if (visitorFilter === "cv") list = list.filter((v) => v.hasConversion || v.hasPurchase);
     if (visitorFilter === "new") list = list.filter((v) => v.isNew === true);
     if (visitorFilter === "repeat") list = list.filter((v) => v.isNew === false);
+    if (utmFilter) list = list.filter((v: any) => v.utmSource === utmFilter);
     if (journeyFilterFrom || journeyFilterTo) {
       // firstSeen/lastSeen ではなく実際のイベントが範囲内にあるかをミリ秒比較で判定
       const fromMs = journeyFilterFrom ? new Date(journeyFilterFrom + "T00:00:00+09:00").getTime() : 0;
@@ -792,7 +806,7 @@ export default function AnalyticsPage() {
       list = list.filter((v) => vidsInRange.has(v.vid));
     }
     return list.slice(0, 100);
-  }, [visitorList, visitorFilter, journeyFilterFrom, journeyFilterTo, journeyLogs]);
+  }, [visitorList, visitorFilter, journeyFilterFrom, journeyFilterTo, utmFilter, journeyLogs]);
 
   // ---- computed: 選択中訪問者のイベント一覧（購入ログ含む） ----
   const selectedJourney = useMemo(() => {
@@ -1517,31 +1531,42 @@ export default function AnalyticsPage() {
             </div>
 
             {/* フィルターバー */}
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 12, padding: "10px 14px", background: "rgba(15,23,42,.03)", borderRadius: 10, border: "1px solid rgba(15,23,42,.07)" }}>
+            <div style={{ display: "flex", gap: 8, flexWrap: "nowrap", alignItems: "center", marginBottom: 12, padding: "10px 14px", background: "rgba(15,23,42,.03)", borderRadius: 10, border: "1px solid rgba(15,23,42,.07)", overflowX: "auto" }}>
               {/* 絞り込みタイプ */}
-              <div style={{ display: "flex", border: "1px solid rgba(15,23,42,.12)", borderRadius: 8, overflow: "hidden" }}>
+              <div style={{ display: "flex", border: "1px solid rgba(15,23,42,.12)", borderRadius: 8, overflow: "hidden", flexShrink: 0 }}>
                 {([["all", "全員"], ["new", "🆕 新規"], ["repeat", "🔁 リピート"], ["purchase", "💰 購入あり"], ["cv", "✅ CV あり"]] as const).map(([val, label]) => (
-                  <button key={val} type="button" onClick={() => { setVisitorFilter(val); setSelectedVid(null); }} style={{ padding: "6px 12px", border: "none", fontSize: 12, fontWeight: visitorFilter === val ? 700 : 500, background: visitorFilter === val ? "#1f6573" : "transparent", color: visitorFilter === val ? "#fff" : "inherit", cursor: "pointer", whiteSpace: "nowrap" }}>
+                  <button key={val} type="button" onClick={() => { setVisitorFilter(val); setSelectedVid(null); }} style={{ padding: "5px 10px", border: "none", fontSize: 12, fontWeight: visitorFilter === val ? 700 : 500, background: visitorFilter === val ? "#1f6573" : "transparent", color: visitorFilter === val ? "#fff" : "inherit", cursor: "pointer", whiteSpace: "nowrap" }}>
                     {label}
                   </button>
                 ))}
               </div>
               {/* 日付 from/to */}
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span className="small" style={{ opacity: 0.6 }}>期間</span>
-                <input type="date" value={journeyFilterFrom} onChange={(e) => { setJourneyFilterFrom(e.target.value); }} style={{ fontSize: 12, padding: "5px 8px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 7, background: "#fff", cursor: "pointer" }} />
+              <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+                <span className="small" style={{ opacity: 0.6, whiteSpace: "nowrap" }}>期間</span>
+                <input type="date" value={journeyFilterFrom} onChange={(e) => { setJourneyFilterFrom(e.target.value); }} style={{ fontSize: 12, padding: "5px 7px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 7, background: "#fff", cursor: "pointer" }} />
                 <span className="small" style={{ opacity: 0.5 }}>〜</span>
-                <input type="date" value={journeyFilterTo} onChange={(e) => { setJourneyFilterTo(e.target.value); }} style={{ fontSize: 12, padding: "5px 8px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 7, background: "#fff", cursor: "pointer" }} />
+                <input type="date" value={journeyFilterTo} onChange={(e) => { setJourneyFilterTo(e.target.value); }} style={{ fontSize: 12, padding: "5px 7px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 7, background: "#fff", cursor: "pointer" }} />
                 {(journeyFilterFrom || journeyFilterTo) && (
-                  <button type="button" onClick={() => { setJourneyFilterFrom(""); setJourneyFilterTo(""); }} style={{ fontSize: 11, padding: "4px 8px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 6, background: "transparent", cursor: "pointer", opacity: 0.6 }}>
-                    クリア
-                  </button>
+                  <button type="button" onClick={() => { setJourneyFilterFrom(""); setJourneyFilterTo(""); }} style={{ fontSize: 11, padding: "4px 7px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 6, background: "transparent", cursor: "pointer", opacity: 0.6, whiteSpace: "nowrap" }}>クリア</button>
                 )}
               </div>
+              {/* UTM流入元フィルター */}
+              {utmOptions.length > 0 && (
+                <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+                  <span className="small" style={{ opacity: 0.6, whiteSpace: "nowrap" }}>流入元</span>
+                  <select value={utmFilter} onChange={(e) => setUtmFilter(e.target.value)} style={{ fontSize: 12, padding: "5px 7px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 7, background: "#fff", cursor: "pointer", maxWidth: 140 }}>
+                    <option value="">すべて</option>
+                    {utmOptions.map((src) => <option key={src} value={src}>{src}</option>)}
+                  </select>
+                  {utmFilter && (
+                    <button type="button" onClick={() => setUtmFilter("")} style={{ fontSize: 11, padding: "4px 7px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 6, background: "transparent", cursor: "pointer", opacity: 0.6 }}>✕</button>
+                  )}
+                </div>
+              )}
               {/* 件数表示 */}
-              <div className="small" style={{ opacity: 0.55, marginLeft: "auto" }}>
+              <div className="small" style={{ opacity: 0.55, marginLeft: "auto", flexShrink: 0, whiteSpace: "nowrap" }}>
                 {filteredVisitorList.length}人表示
-                {visitorFilter !== "all" || journeyFilterFrom || journeyFilterTo ? ` / ${visitorList.length}人中` : ""}
+                {visitorFilter !== "all" || journeyFilterFrom || journeyFilterTo || utmFilter ? ` / ${visitorList.length}人中` : ""}
               </div>
             </div>
 
@@ -1559,13 +1584,13 @@ export default function AnalyticsPage() {
                       <div className="small" style={{ fontWeight: 700 }}>
                         {filteredVisitorList.length === 0 ? "条件に一致する訪問者なし" : `訪問者 ${filteredVisitorList.length}人`}
                       </div>
-                      {(visitorFilter !== "all" || journeyFilterFrom || journeyFilterTo) && (
+                      {(visitorFilter !== "all" || journeyFilterFrom || journeyFilterTo || utmFilter) && (
                         <button
                           type="button"
-                          onClick={() => { setVisitorFilter("all"); setJourneyFilterFrom(""); setJourneyFilterTo(""); setSelectedVid(null); }}
+                          onClick={() => { setVisitorFilter("all"); setJourneyFilterFrom(""); setJourneyFilterTo(""); setUtmFilter(""); setSelectedVid(null); }}
                           style={{ fontSize: 11, padding: "3px 8px", border: "none", borderRadius: 20, background: "#fde68a", color: "#92400e", cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}
                         >
-                          {visitorFilter === "purchase" ? "💰 購入フィルター中 ×" : visitorFilter === "cv" ? "✅ CVフィルター中 ×" : visitorFilter === "new" ? "🆕 新規フィルター中 ×" : visitorFilter === "repeat" ? "🔁 リピートフィルター中 ×" : "📅 日付フィルター中 ×"}
+                          {utmFilter ? `📡 ${utmFilter} ×` : visitorFilter === "purchase" ? "💰 購入フィルター中 ×" : visitorFilter === "cv" ? "✅ CVフィルター中 ×" : visitorFilter === "new" ? "🆕 新規フィルター中 ×" : visitorFilter === "repeat" ? "🔁 リピートフィルター中 ×" : "📅 日付フィルター中 ×"}
                         </button>
                       )}
                     </div>
