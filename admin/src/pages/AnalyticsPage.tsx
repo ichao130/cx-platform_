@@ -12,6 +12,7 @@ import { onAuthStateChanged, getAuth } from "firebase/auth";
 import {
   AreaChart,
   Area,
+  BarChart,
   ComposedChart,
   Bar,
   Line,
