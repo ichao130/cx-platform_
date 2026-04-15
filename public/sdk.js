@@ -1253,6 +1253,10 @@
     }
     var utm = getOrStoreUtm();
 
+    // 新規訪問者判定: cx_vid が存在しない = 初回訪問
+    var isNewVisitor = false;
+    try { isNewVisitor = !localStorage.getItem("cx_vid"); } catch (e) {}
+
     var ctx = {
       site_id: siteId,
       site_key: siteKey,
@@ -1260,7 +1264,7 @@
       path: window.location.pathname,
       ref: document.referrer || "",
       page_type: script.getAttribute("data-page-type") || pageTypeFromPath(window.location.pathname),
-      vid: getOrCreateId("cx_vid"),
+      vid: getOrCreateId("cx_vid"),  // ← この呼び出しで cx_vid が新規作成される
       sid: getOrCreateId("cx_sid_" + siteId),
       variant_id: null
     };
@@ -1311,6 +1315,7 @@
       utm_source: utm.utm_source || null,
       utm_medium: utm.utm_medium || null,
       utm_campaign: utm.utm_campaign || null,
+      is_new: isNewVisitor,
     }, siteId, siteKey);
 
     // 滞在時間・離脱計測

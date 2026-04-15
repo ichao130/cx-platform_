@@ -358,7 +358,7 @@ export default function AnalyticsPage() {
   const [selectedVid, setSelectedVid] = useState<string | null>(null);
 
   // ---- 訪問者ジャーニーフィルター ----
-  const [visitorFilter, setVisitorFilter] = useState<"all" | "purchase" | "cv">("all");
+  const [visitorFilter, setVisitorFilter] = useState<"all" | "purchase" | "cv" | "new" | "repeat">("all");
   const [journeyFilterFrom, setJourneyFilterFrom] = useState<string>("");
   const [journeyFilterTo, setJourneyFilterTo] = useState<string>("");
 
@@ -716,12 +716,13 @@ export default function AnalyticsPage() {
       hasConversion: boolean; hasImpression: boolean; hasPurchase: boolean;
       purchaseRevenue: number; purchaseCount: number;
       pages: string[]; eventCount: number; firstRef: string;
+      isNew: boolean | null; // true=新規, false=リピート, null=不明（古いログ）
     }>();
     const sorted = [...journeyLogs].sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
     for (const l of sorted) {
       const vid = l.vid || "unknown";
       if (!map.has(vid)) {
-        map.set(vid, { vid, firstSeen: l.createdAt || "", lastSeen: l.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, pages: [], eventCount: 0, firstRef: "" });
+        map.set(vid, { vid, firstSeen: l.createdAt || "", lastSeen: l.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, pages: [], eventCount: 0, firstRef: "", isNew: null });
       }
       const v = map.get(vid)!;
       v.lastSeen = l.createdAt || v.lastSeen;
@@ -730,6 +731,8 @@ export default function AnalyticsPage() {
         v.pvCount++;
         if (l.path && !v.pages.includes(l.path)) v.pages.push(l.path);
         if (!v.firstRef && l.ref) v.firstRef = l.ref;
+        // 最初の pageview の is_new を採用（null=古いログで情報なし）
+        if (v.isNew === null && typeof l.is_new === "boolean") v.isNew = l.is_new;
       }
       if (l.event === "conversion") v.hasConversion = true;
       if (l.event === "impression") v.hasImpression = true;
@@ -754,6 +757,8 @@ export default function AnalyticsPage() {
     let list = visitorList;
     if (visitorFilter === "purchase") list = list.filter((v) => v.hasPurchase);
     if (visitorFilter === "cv") list = list.filter((v) => v.hasConversion || v.hasPurchase);
+    if (visitorFilter === "new") list = list.filter((v) => v.isNew === true);
+    if (visitorFilter === "repeat") list = list.filter((v) => v.isNew === false);
     if (journeyFilterFrom) {
       const from = new Date(journeyFilterFrom + "T00:00:00").getTime();
       list = list.filter((v) => v.lastSeen && new Date(v.lastSeen).getTime() >= from);
@@ -1423,7 +1428,7 @@ export default function AnalyticsPage() {
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 12, padding: "10px 14px", background: "rgba(15,23,42,.03)", borderRadius: 10, border: "1px solid rgba(15,23,42,.07)" }}>
               {/* 絞り込みタイプ */}
               <div style={{ display: "flex", border: "1px solid rgba(15,23,42,.12)", borderRadius: 8, overflow: "hidden" }}>
-                {([["all", "全員"], ["purchase", "💰 購入あり"], ["cv", "✅ CV あり"]] as const).map(([val, label]) => (
+                {([["all", "全員"], ["new", "🆕 新規"], ["repeat", "🔁 リピート"], ["purchase", "💰 購入あり"], ["cv", "✅ CV あり"]] as const).map(([val, label]) => (
                   <button key={val} type="button" onClick={() => { setVisitorFilter(val); setSelectedVid(null); }} style={{ padding: "6px 12px", border: "none", fontSize: 12, fontWeight: visitorFilter === val ? 700 : 500, background: visitorFilter === val ? "#1f6573" : "transparent", color: visitorFilter === val ? "#fff" : "inherit", cursor: "pointer", whiteSpace: "nowrap" }}>
                     {label}
                   </button>
@@ -1468,7 +1473,7 @@ export default function AnalyticsPage() {
                           onClick={() => { setVisitorFilter("all"); setJourneyFilterFrom(""); setJourneyFilterTo(""); setSelectedVid(null); }}
                           style={{ fontSize: 11, padding: "3px 8px", border: "none", borderRadius: 20, background: "#fde68a", color: "#92400e", cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}
                         >
-                          {visitorFilter === "purchase" ? "💰 購入フィルター中 ×" : visitorFilter === "cv" ? "✅ CVフィルター中 ×" : "📅 日付フィルター中 ×"}
+                          {visitorFilter === "purchase" ? "💰 購入フィルター中 ×" : visitorFilter === "cv" ? "✅ CVフィルター中 ×" : visitorFilter === "new" ? "🆕 新規フィルター中 ×" : visitorFilter === "repeat" ? "🔁 リピートフィルター中 ×" : "📅 日付フィルター中 ×"}
                         </button>
                       )}
                     </div>
@@ -1511,6 +1516,12 @@ export default function AnalyticsPage() {
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
                                 <code style={{ fontSize: 11, opacity: 0.7 }}>{vidShort}</code>
+                                {v.isNew === true && (
+                                  <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 20, background: "#f0fdf4", color: "#15803d" }}>新規</span>
+                                )}
+                                {v.isNew === false && (
+                                  <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 20, background: "#f1f5f9", color: "#475569" }}>リピート</span>
+                                )}
                                 {v.hasPurchase && (
                                   <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 20, background: "#fefce8", color: "#ca8a04" }}>💰 購入</span>
                                 )}

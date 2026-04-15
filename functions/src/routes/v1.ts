@@ -67,6 +67,8 @@ const LogReqSchema = z.object({
   utm_source: z.string().nullable().optional(),
   utm_medium: z.string().nullable().optional(),
   utm_campaign: z.string().nullable().optional(),
+  // 新規/リピート判定（SDK側でlocalStorageの cx_vid 存在有無で判定）
+  is_new: z.boolean().nullable().optional(),
   // 購入イベント用（Shopify Web Pixelから送信）
   revenue: z.number().nonnegative().nullable().optional(),
   order_id: z.string().nullable().optional(),
@@ -3238,6 +3240,7 @@ export function registerV1Routes(app: Express) {
         utm_source: body.utm_source ?? null,
         utm_medium: body.utm_medium ?? null,
         utm_campaign: body.utm_campaign ?? null,
+        is_new: body.is_new ?? null,
         createdAt: nowIso,
         updatedAt: nowIso,
       };
