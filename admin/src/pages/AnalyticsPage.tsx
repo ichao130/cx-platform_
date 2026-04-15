@@ -684,11 +684,14 @@ export default function AnalyticsPage() {
       const uv = new Set(pvLogs.filter((l) => utcIsoToJstDay(l.createdAt || "") === day).map((l) => l.vid).filter(Boolean)).size;
       const imp = statRows.filter((r) => r.day === day && r.event === "impression").reduce((s, r) => s + safeNum(r.count), 0);
       const cv = statRows.filter((r) => r.day === day && r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
-      result.push({ day, label, pv, uv, imp, cv });
+      // 新規/リピート: firstSeen がその日の訪問者を集計
+      const newCount = visitorList.filter((v) => v.isNew === true && utcIsoToJstDay(v.firstSeen) === day).length;
+      const repeatCount = visitorList.filter((v) => v.isNew === false && utcIsoToJstDay(v.firstSeen) === day).length;
+      result.push({ day, label, pv, uv, imp, cv, newCount, repeatCount });
       cur.setDate(cur.getDate() + 1);
     }
     return result;
-  }, [pvLogs, statRows, effectiveFrom, effectiveTo]);
+  }, [pvLogs, statRows, visitorList, effectiveFrom, effectiveTo]);
 
   // ---- computed: 最近のセッション ----
   const sessionData = useMemo(() => {
@@ -1134,6 +1137,40 @@ export default function AnalyticsPage() {
                     </ComposedChart>
                   </ResponsiveContainer>
                 </div>
+              </div>
+            )}
+
+            {/* ③ 新規 / リピート訪問者 */}
+            {!journeyLoading && (
+              <div className="card" style={{ padding: "20px 20px 8px", background: "#fff", marginBottom: 16 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#374151" }}>👤 新規 / リピート訪問者</div>
+                  {(() => {
+                    const totalNew = visitorList.filter((v) => v.isNew === true).length;
+                    const totalRepeat = visitorList.filter((v) => v.isNew === false).length;
+                    const total = totalNew + totalRepeat;
+                    return total > 0 ? (
+                      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: "#15803d" }}>新規 {totalNew}人 ({Math.round(totalNew / total * 100)}%)</span>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>リピート {totalRepeat}人 ({Math.round(totalRepeat / total * 100)}%)</span>
+                      </div>
+                    ) : <span className="small" style={{ opacity: 0.5 }}>データなし（SDK更新後から計測開始）</span>;
+                  })()}
+                </div>
+                <ResponsiveContainer width="100%" height={180}>
+                  <BarChart data={dailyTrend} margin={{ top: 4, right: 12, left: -16, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,.06)" />
+                    <XAxis dataKey="label" tick={{ fontSize: 10, fill: "rgba(15,23,42,.45)" }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fontSize: 10, fill: "rgba(15,23,42,.45)" }} axisLine={false} tickLine={false} allowDecimals={false} />
+                    <Tooltip
+                      contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid rgba(15,23,42,.1)", boxShadow: "0 4px 12px rgba(0,0,0,.08)" }}
+                      labelStyle={{ fontWeight: 700, marginBottom: 4 }}
+                    />
+                    <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
+                    <Bar dataKey="newCount" name="新規" stackId="a" fill="#22c55e" fillOpacity={0.8} radius={[0, 0, 0, 0]} />
+                    <Bar dataKey="repeatCount" name="リピート" stackId="a" fill="#94a3b8" fillOpacity={0.7} radius={[3, 3, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
             )}
 
