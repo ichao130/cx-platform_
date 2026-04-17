@@ -28,6 +28,10 @@ type Billing = {
   billing_company_name?: string | null;
   billing_contact_name?: string | null;
   billing_contact_phone?: string | null;
+  billing_zip?: string | null;
+  billing_prefecture?: string | null;
+  billing_city?: string | null;
+  billing_address?: string | null;
   free_expires_at?: string | null;
   trial_ends_at?: string | null;
   current_period_ends_at?: string | null;
@@ -55,6 +59,7 @@ type PlanMaster = {
   active: boolean;
   price_monthly: number;
   log_sample_rate?: number; // ログサンプリングレート（0〜1）
+  stripe_price_monthly_id?: string | null;
 };
 
 const CODE_COLOR: Record<string, string> = {
@@ -62,6 +67,9 @@ const CODE_COLOR: Record<string, string> = {
   standard: "#2563eb",
   premium:  "#7c3aed",
   custom:   "#b45309",
+  // Stripe Billing プランコード
+  pro:      "#2563eb",
+  advanced: "#7c3aed",
 };
 
 const STATUS_META: Record<Status, { label: string; color: string; bg: string }> = {
@@ -107,16 +115,41 @@ export default function WorkspaceBillingPage() {
   const [planMasterList, setPlanMasterList] = useState<PlanMaster[]>([]);
   const [planMasterLoading, setPlanMasterLoading] = useState(false);
 
+  // Stripe
+  const [stripeLoading, setStripeLoading] = useState(false);
+
   // 請求先フォーム
   const [billingEmail, setBillingEmail] = useState("");
   const [billingCompany, setBillingCompany] = useState("");
   const [billingContact, setBillingContact] = useState("");
   const [billingPhone, setBillingPhone] = useState("");
+  const [billingZip, setBillingZip] = useState("");
+  const [billingPrefecture, setBillingPrefecture] = useState("");
+  const [billingCity, setBillingCity] = useState("");
+  const [billingAddress, setBillingAddress] = useState("");
 
   const workspaceName = useMemo(() => {
     const found = workspaces.find((w) => w.id === wsId);
     return found?.name || wsId || "（未選択）";
   }, [workspaces, wsId]);
+
+  // Stripe Checkout 完了 / キャンセル メッセージ表示
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const checkout = params.get("checkout");
+    if (checkout === "success") {
+      setSaved("✅ お支払いが完了しました！プランが更新されるまで数秒お待ちください。");
+      // URL からパラメータを除去
+      const url = new URL(window.location.href);
+      url.searchParams.delete("checkout");
+      window.history.replaceState({}, "", url.toString());
+    } else if (checkout === "cancel") {
+      setError("⚠️ お支払いがキャンセルされました。");
+      const url = new URL(window.location.href);
+      url.searchParams.delete("checkout");
+      window.history.replaceState({}, "", url.toString());
+    }
+  }, []);
 
   // 認証ユーザー取得
   useEffect(() => {
@@ -163,6 +196,10 @@ export default function WorkspaceBillingPage() {
       setBillingCompany(b.billing_company_name ?? "");
       setBillingContact(b.billing_contact_name ?? "");
       setBillingPhone(b.billing_contact_phone ?? "");
+      setBillingZip(b.billing_zip ?? "");
+      setBillingPrefecture(b.billing_prefecture ?? "");
+      setBillingCity(b.billing_city ?? "");
+      setBillingAddress(b.billing_address ?? "");
     } catch (e: any) { setError(e.message ?? "取得失敗"); }
     finally { setLoading(false); }
   }, [wsId]);
@@ -178,13 +215,48 @@ export default function WorkspaceBillingPage() {
       const list: PlanMaster[] = snap.docs
         .map((d) => {
           const p = d.data() as any;
-          return { id: d.id, code: p.code || d.id, name: p.name || d.id, description: p.description || "", active: true, price_monthly: Number(p.price_monthly || 0), log_sample_rate: typeof p.limits?.log_sample_rate === "number" ? p.limits.log_sample_rate : 1 };
+          return { id: d.id, code: p.code || d.id, name: p.name || d.id, description: p.description || "", active: true, price_monthly: Number(p.price_monthly || 0), log_sample_rate: typeof p.limits?.log_sample_rate === "number" ? p.limits.log_sample_rate : 1, stripe_price_monthly_id: p.stripe_price_monthly_id || null };
         })
         .sort((a, b) => a.price_monthly - b.price_monthly);
       setPlanMasterList(list);
     } catch { /* 取得失敗時は空 */ }
     finally { setPlanMasterLoading(false); }
   }, [planMasterList.length]);
+
+  // Stripe Checkout でプランアップグレード（plan = プランのdoc ID）
+  const openStripeCheckout = useCallback(async (planDocId: string) => {
+    if (!wsId) return;
+    setStripeLoading(true); setError("");
+    try {
+      const successUrl = `${window.location.origin}/workspace/billing?checkout=success`;
+      const cancelUrl  = `${window.location.origin}/workspace/billing?checkout=cancel`;
+      const res = await apiPostJson("/v1/stripe/checkout", {
+        workspace_id: wsId,
+        plan: planDocId,
+        success_url: successUrl,
+        cancel_url:  cancelUrl,
+      });
+      if (res.url) window.location.href = res.url;
+      else setError(res.message || "Checkout URLの取得に失敗しました");
+    } catch (e: any) { setError(e.message ?? "Stripe Checkout 失敗"); }
+    finally { setStripeLoading(false); }
+  }, [wsId]);
+
+  // Stripe Customer Portal を開く
+  const openStripePortal = useCallback(async () => {
+    if (!wsId) return;
+    setStripeLoading(true); setError("");
+    try {
+      const returnUrl = `${window.location.origin}/workspace/billing`;
+      const res = await apiPostJson("/v1/stripe/portal", {
+        workspace_id: wsId,
+        return_url: returnUrl,
+      });
+      if (res.url) window.location.href = res.url;
+      else setError(res.message || "Portal URLの取得に失敗しました");
+    } catch (e: any) { setError(e.message ?? "Stripe Portal 失敗"); }
+    finally { setStripeLoading(false); }
+  }, [wsId]);
 
   // 請求先住所の保存
   const saveAddress = useCallback(async () => {
@@ -199,6 +271,10 @@ export default function WorkspaceBillingPage() {
         billing_company_name: billingCompany,
         billing_contact_name: billingContact,
         billing_contact_phone: billingPhone,
+        billing_zip: billingZip,
+        billing_prefecture: billingPrefecture,
+        billing_city: billingCity,
+        billing_address: billingAddress,
       });
       setSaved("請求先情報を保存しました");
       await load();
@@ -219,6 +295,10 @@ export default function WorkspaceBillingPage() {
         billing_company_name: billingCompany,
         billing_contact_name: billingContact,
         billing_contact_phone: billingPhone,
+        billing_zip: billingZip,
+        billing_prefecture: billingPrefecture,
+        billing_city: billingCity,
+        billing_address: billingAddress,
       });
       setShowUpgrade(false);
       setSaved("プランを変更しました");
@@ -240,6 +320,10 @@ export default function WorkspaceBillingPage() {
         billing_company_name: billingCompany,
         billing_contact_name: billingContact,
         billing_contact_phone: billingPhone,
+        billing_zip: billingZip,
+        billing_prefecture: billingPrefecture,
+        billing_city: billingCity,
+        billing_address: billingAddress,
       });
       setShowProvider(false);
       setSaved("支払い方法を変更しました");
@@ -286,7 +370,7 @@ export default function WorkspaceBillingPage() {
                   <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>現在のプラン</div>
                   <div style={{ fontSize: 22, fontWeight: 700, color: planColor }}>{planName}</div>
                 </div>
-                <div style={{ display: "flex", gap: 8 }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <span style={{ display: "inline-block", padding: "4px 10px", borderRadius: 20, fontSize: 12, fontWeight: 600, background: statusMeta.bg, color: statusMeta.color }}>
                     {statusMeta.label}
                   </span>
@@ -296,6 +380,15 @@ export default function WorkspaceBillingPage() {
                       style={{ padding: "6px 14px", background: planColor, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 600 }}
                     >
                       プランを変更
+                    </button>
+                  )}
+                  {billing.stripe_subscription_id && (
+                    <button
+                      onClick={openStripePortal}
+                      disabled={stripeLoading}
+                      style={{ padding: "6px 14px", background: "#f1f5f9", color: "#374151", border: "1px solid #e2e8f0", borderRadius: 6, cursor: "pointer", fontSize: 13 }}
+                    >
+                      {stripeLoading ? "…" : "💳 請求・解約管理"}
                     </button>
                   )}
                 </div>
@@ -360,8 +453,8 @@ export default function WorkspaceBillingPage() {
             </div>
           </div>}
 
-          {/* ── 請求先住所フォーム ── */}
-          <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, marginBottom: 16, padding: "20px 24px" }}>
+          {/* ── 請求先住所フォーム（請求書払いの場合のみ表示） ── */}
+          {provider !== "stripe" && <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, marginBottom: 16, padding: "20px 24px" }}>
             <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 16, color: "#1e293b" }}>請求先情報</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
               <div>
@@ -401,6 +494,42 @@ export default function WorkspaceBillingPage() {
                   style={{ width: "100%", padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 14, boxSizing: "border-box" }}
                 />
               </div>
+              <div>
+                <label style={{ fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 }}>郵便番号</label>
+                <input
+                  value={billingZip}
+                  onChange={(e) => setBillingZip(e.target.value)}
+                  placeholder="123-4567"
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 14, boxSizing: "border-box" }}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 }}>都道府県</label>
+                <input
+                  value={billingPrefecture}
+                  onChange={(e) => setBillingPrefecture(e.target.value)}
+                  placeholder="東京都"
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 14, boxSizing: "border-box" }}
+                />
+              </div>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <label style={{ fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 }}>市区町村</label>
+                <input
+                  value={billingCity}
+                  onChange={(e) => setBillingCity(e.target.value)}
+                  placeholder="渋谷区〇〇1-2-3"
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 14, boxSizing: "border-box" }}
+                />
+              </div>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <label style={{ fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 }}>建物名・部屋番号</label>
+                <input
+                  value={billingAddress}
+                  onChange={(e) => setBillingAddress(e.target.value)}
+                  placeholder="〇〇ビル 5F"
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 14, boxSizing: "border-box" }}
+                />
+              </div>
             </div>
             <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
               <button
@@ -411,7 +540,7 @@ export default function WorkspaceBillingPage() {
                 保存する
               </button>
             </div>
-          </div>
+          </div>}
         </>
       )}
 
@@ -448,15 +577,45 @@ export default function WorkspaceBillingPage() {
                 })}
               </div>
             )}
+            {/* Stripe 有料プランへのアップグレード説明 */}
+            {(() => {
+              const selectedPlanData = planMasterList.find((p) => p.code === selectedPlan);
+              // stripe_price_monthly_id が設定されているプランは Stripe 経由
+              const isStripeUpgrade = !!selectedPlanData?.stripe_price_monthly_id && selectedPlan !== billing?.plan;
+              if (!isStripeUpgrade) return null;
+              return (
+                <div style={{ marginBottom: 16, padding: "10px 14px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 6, fontSize: 13, color: "#1e40af" }}>
+                  💳 Stripe の決済画面に移動してクレジットカードでお支払いください。決済完了後、プランが自動的に更新されます。
+                  {selectedPlanData && <span style={{ marginLeft: 8, fontWeight: 600 }}>{selectedPlanData.name}：¥{selectedPlanData.price_monthly.toLocaleString()} / 月（税込）</span>}
+                </div>
+              );
+            })()}
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
               <button onClick={() => setShowUpgrade(false)} style={{ padding: "9px 20px", background: "#f1f5f9", color: "#374151", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 14 }}>キャンセル</button>
-              <button
-                onClick={changePlan}
-                disabled={loading || selectedPlan === billing?.plan || planMasterList.length === 0}
-                style={{ padding: "9px 20px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 14, fontWeight: 600, opacity: selectedPlan === billing?.plan || planMasterList.length === 0 ? .5 : 1 }}
-              >
-                {loading ? "変更中…" : "変更する"}
-              </button>
+              {(() => {
+                const selectedPlanData = planMasterList.find((p) => p.code === selectedPlan);
+                const isStripeUpgrade = !!selectedPlanData?.stripe_price_monthly_id && selectedPlan !== billing?.plan;
+                if (isStripeUpgrade && selectedPlanData) {
+                  return (
+                    <button
+                      onClick={() => openStripeCheckout(selectedPlanData.id)}
+                      disabled={stripeLoading}
+                      style={{ padding: "9px 20px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 14, fontWeight: 600 }}
+                    >
+                      {stripeLoading ? "移動中…" : "💳 Stripe でお支払い"}
+                    </button>
+                  );
+                }
+                return (
+                  <button
+                    onClick={changePlan}
+                    disabled={loading || selectedPlan === billing?.plan || planMasterList.length === 0}
+                    style={{ padding: "9px 20px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 14, fontWeight: 600, opacity: selectedPlan === billing?.plan || planMasterList.length === 0 ? .5 : 1 }}
+                  >
+                    {loading ? "変更中…" : "変更する"}
+                  </button>
+                );
+              })()}
             </div>
           </div>
         </div>
@@ -468,7 +627,7 @@ export default function WorkspaceBillingPage() {
           <div style={{ background: "#fff", borderRadius: 12, padding: 28, width: 440, maxWidth: "90vw" }}>
             <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 20 }}>支払い方法を変更する</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 24 }}>
-              {(["stripe", "misoca", "manual"] as Provider[]).map((pv) => {
+              {(["stripe", "misoca"] as Provider[]).map((pv) => {
                 const m = PROVIDER_META[pv];
                 const isSelected = selectedProvider === pv;
                 return (

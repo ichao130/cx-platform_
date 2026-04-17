@@ -31,6 +31,7 @@ const MISOCA_CLIENT_SECRET = defineSecret("MISOCA_CLIENT_SECRET");
  */
 import { registerV1Routes } from "./routes/v1";
 import { registerMcpRoutes } from "./routes/mcp";
+import { sendMisocaInvoicesJob } from "./services/misoca";
 
 const app = express();
 app.set("etag", false);
@@ -266,6 +267,36 @@ export const cleanupExpiredFreeAccounts = onSchedule(
     }
 
     console.log(`[cleanupExpiredFreeAccounts] deleted ${deleted} expired free workspaces`);
+  }
+);
+
+/**
+ * ==========================
+ * Scheduled: 毎月25日 MISOCA 請求書自動発行
+ * UTC 00:00 = JST 09:00 に実行
+ * ==========================
+ */
+export const sendMonthlyMisocaInvoices = onSchedule(
+  {
+    region: "asia-northeast1",
+    schedule: "0 0 25 * *", // UTC 00:00 = JST 09:00
+    timeZone: "UTC",
+    timeoutSeconds: 300,
+    secrets: [MISOCA_CLIENT_ID, MISOCA_CLIENT_SECRET],
+  },
+  async () => {
+    const clientId = MISOCA_CLIENT_ID.value().trim();
+    const clientSecret = MISOCA_CLIENT_SECRET.value().trim();
+    if (!clientId || !clientSecret) {
+      console.error("[sendMonthlyMisocaInvoices] MISOCA シークレットが未設定です");
+      return;
+    }
+    try {
+      const result = await sendMisocaInvoicesJob(clientId, clientSecret);
+      console.log("[sendMonthlyMisocaInvoices] 完了:", result);
+    } catch (e) {
+      console.error("[sendMonthlyMisocaInvoices] エラー:", e);
+    }
   }
 );
 

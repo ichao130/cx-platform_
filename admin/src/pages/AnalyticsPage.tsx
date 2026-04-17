@@ -457,7 +457,7 @@ export default function AnalyticsPage() {
         where("site_id", "==", siteId),
         where("createdAt", ">", since),
         orderBy("createdAt", "desc"),
-        limit(3000)
+        limit(5000)
       )
     ).then((snap) => {
       const to = effectiveTo.toISOString();
@@ -692,16 +692,21 @@ export default function AnalyticsPage() {
     while (cur <= end) {
       const day = isoDay(cur);
       const label = `${cur.getMonth() + 1}/${cur.getDate()}`;
-      // PVはstats_dailyから（JST集計で正確）、UVはjourneyLogsをUTC→JST変換して集計
+      // PV: stats_daily（JST集計で正確）
       const pv = statRows.filter((r) => r.day === day && r.event === "pageview").reduce((s: number, r: any) => s + safeNum(r.count), 0);
-      const uv = new Set(pvLogs.filter((l) => utcIsoToJstDay(l.createdAt || "") === day).map((l) => l.vid).filter(Boolean)).size;
+      // UV: サーバー側 arrayUnion 集計の "uv" ドキュメントを優先。旧データは journeyLogs でフォールバック
+      const uvDoc = statRows.find((r: any) => r.day === day && r.event === "uv" && r.siteId === siteId);
+      const dayLogs = pvLogs.filter((l) => utcIsoToJstDay(l.createdAt || "") === day);
+      const uv = uvDoc?.vids?.length ?? new Set(dayLogs.map((l: any) => l.vid).filter(Boolean)).size;
+      // セッション数: journeyLogs の sid（sessionStorage ベース、タブ/ブラウザ終了でリセット）
+      const session = new Set(journeyLogs.filter((l) => utcIsoToJstDay(l.createdAt || "") === day && l.sid).map((l) => l.sid)).size;
       const imp = statRows.filter((r) => r.day === day && r.event === "impression").reduce((s, r) => s + safeNum(r.count), 0);
       const cv = statRows.filter((r) => r.day === day && r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
-      result.push({ day, label, pv, uv, imp, cv });
+      result.push({ day, label, pv, uv, session, imp, cv });
       cur.setDate(cur.getDate() + 1);
     }
     return result;
-  }, [pvLogs, statRows, effectiveFrom, effectiveTo]);
+  }, [pvLogs, journeyLogs, statRows, effectiveFrom, effectiveTo]);
 
   // ---- computed: 最近のセッション ----
   const sessionData = useMemo(() => {
@@ -770,14 +775,22 @@ export default function AnalyticsPage() {
       .slice(0, 500);
   }, [journeyLogs, purchaseLogs]);
 
-  // ---- computed: 新規/リピート 日別集計（visitorListの後に宣言が必要） ----
+  // ---- computed: 新規/リピート 日別集計 ----
+  // stats_daily の "new_vids" / "repeat_vids" ドキュメントを優先（limit制限なし）
+  // デプロイ前の旧データのみ visitorList フォールバック
   const newRepeatTrend = useMemo(() => {
-    return dailyTrend.map((d) => ({
-      ...d,
-      newCount: visitorList.filter((v) => v.isNew === true && utcIsoToJstDay(v.firstSeen) === d.day).length,
-      repeatCount: visitorList.filter((v) => v.isNew === false && utcIsoToJstDay(v.firstSeen) === d.day).length,
-    }));
-  }, [dailyTrend, visitorList]);
+    return dailyTrend.map((d) => {
+      const newDoc = statRows.find((r: any) => r.day === d.day && r.event === "new_vids" && r.siteId === siteId);
+      const repeatDoc = statRows.find((r: any) => r.day === d.day && r.event === "repeat_vids" && r.siteId === siteId);
+      return {
+        ...d,
+        newCount: newDoc?.vids?.length
+          ?? visitorList.filter((v) => v.isNew === true && utcIsoToJstDay(v.firstSeen) === d.day).length,
+        repeatCount: repeatDoc?.vids?.length
+          ?? visitorList.filter((v) => v.isNew === false && utcIsoToJstDay(v.firstSeen) === d.day).length,
+      };
+    });
+  }, [dailyTrend, visitorList, statRows, siteId]);
 
   // ---- computed: UTM選択肢（utm_sourceのユニーク値） ----
   const utmOptions = useMemo(() => {
@@ -1161,13 +1174,17 @@ export default function AnalyticsPage() {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
                 {/* ① PV & ユニーク訪問者 */}
                 <div className="card" style={{ padding: "20px 20px 8px", background: "#fff" }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: "#374151", marginBottom: 16 }}>📈 ページビュー / ユニーク訪問者</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#374151", marginBottom: 16 }}>📈 ページビュー / セッション数 / ユニーク訪問者</div>
                   <ResponsiveContainer width="100%" height={200}>
                     <AreaChart data={dailyTrend} margin={{ top: 4, right: 12, left: -16, bottom: 0 }}>
                       <defs>
                         <linearGradient id="gradPv" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="5%" stopColor="#2563eb" stopOpacity={0.18} />
                           <stop offset="95%" stopColor="#2563eb" stopOpacity={0} />
+                        </linearGradient>
+                        <linearGradient id="gradSession" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#7c3aed" stopOpacity={0.12} />
+                          <stop offset="95%" stopColor="#7c3aed" stopOpacity={0} />
                         </linearGradient>
                         <linearGradient id="gradUv" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="5%" stopColor="#0891b2" stopOpacity={0.12} />
@@ -1183,6 +1200,7 @@ export default function AnalyticsPage() {
                       />
                       <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
                       <Area type="monotone" dataKey="pv" name="ページビュー" stroke="#2563eb" strokeWidth={2} fill="url(#gradPv)" dot={{ r: 3, fill: "#2563eb", strokeWidth: 0 }} activeDot={{ r: 5 }} />
+                      <Area type="monotone" dataKey="session" name="セッション数" stroke="#7c3aed" strokeWidth={2} fill="url(#gradSession)" dot={{ r: 3, fill: "#7c3aed", strokeWidth: 0 }} activeDot={{ r: 5 }} />
                       <Area type="monotone" dataKey="uv" name="ユニーク訪問者" stroke="#0891b2" strokeWidth={2} fill="url(#gradUv)" dot={{ r: 3, fill: "#0891b2", strokeWidth: 0 }} activeDot={{ r: 5 }} />
                     </AreaChart>
                   </ResponsiveContainer>

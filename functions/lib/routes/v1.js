@@ -32,6 +32,9 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerV1Routes = registerV1Routes;
 const zod_1 = require("zod");
@@ -44,6 +47,8 @@ const openaiCopy_1 = require("../services/openaiCopy");
 const experiment_1 = require("../services/experiment");
 const openaiJson_1 = require("../services/openaiJson");
 const params_1 = require("firebase-functions/params");
+const stripe_1 = __importDefault(require("stripe"));
+const misoca_1 = require("../services/misoca");
 /* =========================================
    Schemas
 ========================================= */
@@ -92,6 +97,8 @@ const LogReqSchema = zod_1.z.object({
     utm_source: zod_1.z.string().nullable().optional(),
     utm_medium: zod_1.z.string().nullable().optional(),
     utm_campaign: zod_1.z.string().nullable().optional(),
+    // 新規/リピート判定（SDK側でlocalStorageの cx_vid 存在有無で判定）
+    is_new: zod_1.z.boolean().nullable().optional(),
     // 購入イベント用（Shopify Web Pixelから送信）
     revenue: zod_1.z.number().nonnegative().nullable().optional(),
     order_id: zod_1.z.string().nullable().optional(),
@@ -206,6 +213,10 @@ const WorkspaceBillingUpdateReqSchema = zod_1.z.object({
     billing_company_name: zod_1.z.string().max(200).nullable().optional(),
     billing_contact_name: zod_1.z.string().max(200).nullable().optional(),
     billing_contact_phone: zod_1.z.string().max(100).nullable().optional(),
+    billing_zip: zod_1.z.string().max(20).nullable().optional(),
+    billing_prefecture: zod_1.z.string().max(20).nullable().optional(),
+    billing_city: zod_1.z.string().max(100).nullable().optional(),
+    billing_address: zod_1.z.string().max(200).nullable().optional(),
     stripe_customer_id: zod_1.z.string().min(1).optional(),
     stripe_subscription_id: zod_1.z.string().min(1).optional(),
     stripe_price_id: zod_1.z.string().min(1).optional(),
@@ -219,7 +230,7 @@ const PlansListReqSchema = zod_1.z.object({
 const PlansUpsertReqSchema = zod_1.z.object({
     workspace_id: zod_1.z.string().min(1),
     plan_id: zod_1.z.string().min(1),
-    code: zod_1.z.enum(["standard", "premium", "custom"]),
+    code: zod_1.z.string().min(1).max(40).regex(/^[a-z0-9_-]+$/, "lowercase alphanumeric, hyphens, underscores only"),
     name: zod_1.z.string().min(1).max(80),
     description: zod_1.z.string().max(2000).optional().default(""),
     active: zod_1.z.boolean().optional().default(true),
@@ -644,6 +655,10 @@ function buildBillingResponse(billing, planDoc, overrideDoc, accessOverride) {
         billing_company_name: billing?.billing_company_name || null,
         billing_contact_name: billing?.billing_contact_name || null,
         billing_contact_phone: billing?.billing_contact_phone || null,
+        billing_zip: billing?.billing_zip || null,
+        billing_prefecture: billing?.billing_prefecture || null,
+        billing_city: billing?.billing_city || null,
+        billing_address: billing?.billing_address || null,
         free_expires_at: billing?.free_expires_at || null,
         trial_ends_at: billing?.trial_ends_at || null,
         current_period_ends_at: billing?.current_period_ends_at || null,
@@ -747,6 +762,10 @@ async function requireWorkspaceAccessBySiteId(req, siteId, accessKey, allowedRol
 const ADMIN_ORIGINS = (0, params_1.defineString)("ADMIN_ORIGINS");
 const OPENAI_API_KEY = (0, params_1.defineSecret)("OPENAI_API_KEY");
 const POSTMARK_SERVER_TOKEN = (0, params_1.defineSecret)("POSTMARK_SERVER_TOKEN");
+const STRIPE_SECRET_KEY = (0, params_1.defineSecret)("STRIPE_SECRET_KEY");
+const STRIPE_WEBHOOK_SECRET = (0, params_1.defineSecret)("STRIPE_WEBHOOK_SECRET");
+const MISOCA_CLIENT_ID = (0, params_1.defineSecret)("MISOCA_CLIENT_ID");
+const MISOCA_CLIENT_SECRET = (0, params_1.defineSecret)("MISOCA_CLIENT_SECRET");
 const INVITE_FROM_EMAIL = (0, params_1.defineString)("INVITE_FROM_EMAIL");
 const INVITE_BASE_URL = (0, params_1.defineString)("INVITE_BASE_URL");
 const INVITE_TEMPLATE_ALIAS = (0, params_1.defineString)("INVITE_TEMPLATE_ALIAS");
@@ -2341,21 +2360,32 @@ function registerV1Routes(app) {
                 return res.status(404).json({ ok: false, error: "workspace_not_found" });
             const w = (wSnap.data() || {});
             const billing = (w.billing || {});
-            const planSnap = billing.plan
-                ? await db.collection("plans").where("code", "==", String(billing.plan)).limit(1).get()
-                : null;
-            const planDoc = planSnap && !planSnap.empty ? { id: planSnap.docs[0].id, ...(planSnap.docs[0].data() || {}) } : null;
             const overrideId = String(billing.custom_limit_override_id || body.workspace_id);
-            const [overrideSnap, accessOverrideSnap] = await Promise.all([
+            const [overrideSnap, wsBillingSnap] = await Promise.all([
                 db.collection("workspace_limit_overrides").doc(overrideId).get(),
                 db.collection("workspace_billing").doc(body.workspace_id).get(),
             ]);
             const overrideDoc = overrideSnap.exists ? (overrideSnap.data() || {}) : null;
-            const accessOverride = accessOverrideSnap.exists ? (accessOverrideSnap.data() || {}) : null;
-            const responseBilling = buildBillingResponse({
+            const wsBilling = wsBillingSnap.exists ? (wsBillingSnap.data() || {}) : null;
+            // workspace_billing を優先（Stripe webhook はこちらを更新する）
+            const mergedBilling = {
                 ...billing,
+                ...(wsBilling ? {
+                    plan: wsBilling.plan || billing.plan,
+                    status: wsBilling.status || billing.status,
+                    stripe_customer_id: wsBilling.stripe_customer_id || billing.stripe_customer_id,
+                    stripe_subscription_id: wsBilling.stripe_subscription_id || billing.stripe_subscription_id,
+                    current_period_ends_at: wsBilling.current_period_ends_at || billing.current_period_ends_at,
+                    provider: wsBilling.provider || billing.provider,
+                } : {}),
                 updatedAt: billing.updatedAt || w.updatedAt || null,
-            }, planDoc, overrideDoc, accessOverride);
+            };
+            const effectivePlan = mergedBilling.plan;
+            const planSnap = effectivePlan
+                ? await db.collection("plans").where("code", "==", String(effectivePlan)).limit(1).get()
+                : null;
+            const planDoc = planSnap && !planSnap.empty ? { id: planSnap.docs[0].id, ...(planSnap.docs[0].data() || {}) } : null;
+            const responseBilling = buildBillingResponse(mergedBilling, planDoc, overrideDoc, wsBilling);
             return res.json({
                 ok: true,
                 workspace_id: body.workspace_id,
@@ -2414,6 +2444,14 @@ function registerV1Routes(app) {
                 patch.billing_contact_name = body.billing_contact_name;
             if (body.billing_contact_phone !== undefined)
                 patch.billing_contact_phone = body.billing_contact_phone;
+            if (body.billing_zip !== undefined)
+                patch.billing_zip = body.billing_zip;
+            if (body.billing_prefecture !== undefined)
+                patch.billing_prefecture = body.billing_prefecture;
+            if (body.billing_city !== undefined)
+                patch.billing_city = body.billing_city;
+            if (body.billing_address !== undefined)
+                patch.billing_address = body.billing_address;
             if (body.free_expires_at !== undefined)
                 patch.free_expires_at = body.free_expires_at;
             if (body.stripe_customer_id)
@@ -2490,6 +2528,304 @@ function registerV1Routes(app) {
         }
         catch (e) {
             return res.status(403).send(e?.message || "forbidden");
+        }
+    });
+    /* =====================================================
+       Stripe Billing Routes
+       /v1/stripe/checkout  – Checkout Session 作成
+       /v1/stripe/portal    – Customer Portal 作成
+       /v1/stripe/webhook   – Stripe Webhook 受信
+    ===================================================== */
+    // Helper: plan code → plan name (表示用)
+    function planCodeToName(code) {
+        if (code === "pro")
+            return "プロプラン";
+        if (code === "advanced")
+            return "アドバンスプラン";
+        return code;
+    }
+    // Helper: workspace_billing の stripe_customer_id を取得 or 新規作成
+    async function getOrCreateStripeCustomer(stripe, workspaceId, billingData) {
+        if (billingData?.stripe_customer_id)
+            return billingData.stripe_customer_id;
+        const customer = await stripe.customers.create({
+            email: billingData?.billing_email || undefined,
+            name: billingData?.billing_company_name || undefined,
+            metadata: { workspace_id: workspaceId },
+        });
+        await (0, admin_1.adminDb)().collection("workspace_billing").doc(workspaceId).set({ stripe_customer_id: customer.id, updatedAt: firestore_1.FieldValue.serverTimestamp() }, { merge: true });
+        return customer.id;
+    }
+    // Helper: Stripe subscription status → billing status
+    function stripeStatusToBillingStatus(status) {
+        switch (status) {
+            case "active": return "active";
+            case "trialing": return "trialing";
+            case "past_due": return "past_due";
+            case "canceled": return "canceled";
+            case "incomplete":
+            case "incomplete_expired":
+            case "unpaid":
+            case "paused":
+            default: return "inactive";
+        }
+    }
+    /* ----------------------------
+       POST /v1/stripe/checkout
+       プランアップグレード用 Checkout Session 作成
+    ----------------------------- */
+    const StripeCheckoutReqSchema = zod_1.z.object({
+        workspace_id: zod_1.z.string().min(1),
+        plan: zod_1.z.string().min(1).max(80), // プランの doc ID（"pro", "advance" など）
+        success_url: zod_1.z.string().url(),
+        cancel_url: zod_1.z.string().url(),
+    });
+    app.post("/v1/stripe/checkout", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const body = StripeCheckoutReqSchema.parse(req.body);
+            await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner"]);
+            const stripeKey = STRIPE_SECRET_KEY.value().trim();
+            if (!stripeKey)
+                return res.status(500).json({ error: "stripe_not_configured" });
+            const db = (0, admin_1.adminDb)();
+            // plans コレクションから stripe_price_monthly_id を取得（doc ID で直接引く）
+            const planDocSnap = await db.collection("plans").doc(body.plan).get();
+            if (!planDocSnap.exists) {
+                return res.status(400).json({ error: "plan_not_found", message: `plan doc "${body.plan}" が plans コレクションに見つかりません。バックヤードで登録してください。` });
+            }
+            const planData = planDocSnap.data();
+            const priceId = planData.stripe_price_monthly_id;
+            if (!priceId) {
+                return res.status(400).json({ error: "price_not_configured", message: `plan "${body.plan}" の stripe_price_monthly_id が未設定です。バックヤードのプラン管理で Price ID を設定してください。` });
+            }
+            // workspace_billing から顧客情報を取得
+            const billingSnap = await db.collection("workspace_billing").doc(body.workspace_id).get();
+            const billingData = billingSnap.data() || {};
+            const stripe = new stripe_1.default(stripeKey, { apiVersion: "2026-02-25.clover" });
+            const customerId = await getOrCreateStripeCustomer(stripe, body.workspace_id, billingData);
+            // Checkout Session 作成
+            const session = await stripe.checkout.sessions.create({
+                mode: "subscription",
+                customer: customerId,
+                line_items: [{ price: priceId, quantity: 1 }],
+                success_url: body.success_url,
+                cancel_url: body.cancel_url,
+                subscription_data: {
+                    metadata: { workspace_id: body.workspace_id, plan: body.plan },
+                },
+                metadata: { workspace_id: body.workspace_id, plan: body.plan },
+                locale: "ja",
+            });
+            return res.json({ ok: true, url: session.url });
+        }
+        catch (e) {
+            console.error("[/v1/stripe/checkout] error:", e);
+            return res.status(400).json({ ok: false, error: "checkout_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/stripe/checkout", (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+            res.status(204).send("");
+        }
+        catch (e) {
+            return res.status(403).send(e?.message || "forbidden");
+        }
+    });
+    /* ----------------------------
+       POST /v1/stripe/portal
+       Customer Portal (プラン変更・解約・請求書)
+    ----------------------------- */
+    const StripePortalReqSchema = zod_1.z.object({
+        workspace_id: zod_1.z.string().min(1),
+        return_url: zod_1.z.string().url(),
+    });
+    app.post("/v1/stripe/portal", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const body = StripePortalReqSchema.parse(req.body);
+            await requireWorkspaceAccessByWorkspaceId(req, body.workspace_id, "billing", ["owner"]);
+            const stripeKey = STRIPE_SECRET_KEY.value().trim();
+            if (!stripeKey)
+                return res.status(500).json({ error: "stripe_not_configured" });
+            const billingSnap = await (0, admin_1.adminDb)().collection("workspace_billing").doc(body.workspace_id).get();
+            const customerId = (billingSnap.data() || {}).stripe_customer_id;
+            if (!customerId) {
+                return res.status(400).json({ error: "no_stripe_customer", message: "Stripe 顧客IDが未設定です。先にプランをご購入ください。" });
+            }
+            const stripe = new stripe_1.default(stripeKey, { apiVersion: "2026-02-25.clover" });
+            const portalSession = await stripe.billingPortal.sessions.create({
+                customer: customerId,
+                return_url: body.return_url,
+            });
+            return res.json({ ok: true, url: portalSession.url });
+        }
+        catch (e) {
+            console.error("[/v1/stripe/portal] error:", e);
+            return res.status(400).json({ ok: false, error: "portal_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/stripe/portal", (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+            res.status(204).send("");
+        }
+        catch (e) {
+            return res.status(403).send(e?.message || "forbidden");
+        }
+    });
+    /* ----------------------------
+       POST /v1/stripe/webhook
+       Stripe Webhook イベント受信
+       ※ 認証なし、署名検証のみ
+    ----------------------------- */
+    app.post("/v1/stripe/webhook", async (req, res) => {
+        const sig = req.headers["stripe-signature"];
+        const webhookSecret = STRIPE_WEBHOOK_SECRET.value().trim();
+        const stripeKey = STRIPE_SECRET_KEY.value().trim();
+        if (!stripeKey || !webhookSecret) {
+            console.error("[/v1/stripe/webhook] stripe keys not configured");
+            return res.status(500).json({ error: "stripe_not_configured" });
+        }
+        let event;
+        try {
+            const stripe = new stripe_1.default(stripeKey, { apiVersion: "2026-02-25.clover" });
+            const rawBody = req.rawBody;
+            if (!rawBody) {
+                return res.status(400).json({ error: "raw_body_missing" });
+            }
+            event = stripe.webhooks.constructEvent(rawBody, sig || "", webhookSecret);
+        }
+        catch (e) {
+            console.error("[/v1/stripe/webhook] signature verification failed:", e?.message);
+            return res.status(400).json({ error: "invalid_signature", message: e?.message });
+        }
+        console.log("[/v1/stripe/webhook] event:", event.type);
+        try {
+            const db = (0, admin_1.adminDb)();
+            const stripe = new stripe_1.default(stripeKey, { apiVersion: "2026-02-25.clover" });
+            switch (event.type) {
+                // ────────── Checkout 完了 ──────────
+                case "checkout.session.completed": {
+                    const session = event.data.object;
+                    const workspaceId = session.metadata?.workspace_id;
+                    const plan = session.metadata?.plan;
+                    if (!workspaceId || !plan)
+                        break;
+                    const subscriptionId = typeof session.subscription === "string"
+                        ? session.subscription
+                        : session.subscription?.id;
+                    await db.collection("workspace_billing").doc(workspaceId).set({
+                        plan,
+                        status: "active",
+                        provider: "stripe",
+                        stripe_customer_id: session.customer,
+                        stripe_subscription_id: subscriptionId || null,
+                        updatedAt: firestore_1.FieldValue.serverTimestamp(),
+                    }, { merge: true });
+                    console.log(`[stripe/webhook] checkout.session.completed: workspace=${workspaceId} plan=${plan}`);
+                    break;
+                }
+                // ────────── サブスクリプション更新 ──────────
+                case "customer.subscription.updated":
+                case "customer.subscription.created": {
+                    const sub = event.data.object;
+                    const workspaceId = sub.metadata?.workspace_id;
+                    if (!workspaceId) {
+                        // metadata にない場合は stripe_customer_id で逆引き
+                        const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer.id;
+                        const snap = await db.collection("workspace_billing")
+                            .where("stripe_customer_id", "==", customerId).limit(1).get();
+                        if (!snap.empty) {
+                            const wsId = snap.docs[0].id;
+                            const priceId = sub.items.data[0]?.price.id || null;
+                            // plans コレクションから plan code を逆引き
+                            const planSnap = await db.collection("plans")
+                                .where("stripe_price_monthly_id", "==", priceId).limit(1).get();
+                            const planCode = planSnap.empty ? null : planSnap.docs[0].data().code;
+                            await db.collection("workspace_billing").doc(wsId).set({
+                                ...(planCode ? { plan: planCode } : {}),
+                                status: stripeStatusToBillingStatus(sub.status),
+                                stripe_subscription_id: sub.id,
+                                stripe_price_id: priceId,
+                                current_period_ends_at: new Date((sub.items.data[0]?.current_period_end ?? 0) * 1000).toISOString(),
+                                updatedAt: firestore_1.FieldValue.serverTimestamp(),
+                            }, { merge: true });
+                        }
+                        break;
+                    }
+                    const priceId = sub.items.data[0]?.price.id || null;
+                    const planSnap = await db.collection("plans")
+                        .where("stripe_price_monthly_id", "==", priceId).limit(1).get();
+                    const planCode = planSnap.empty ? null : planSnap.docs[0].data().code;
+                    await db.collection("workspace_billing").doc(workspaceId).set({
+                        ...(planCode ? { plan: planCode } : {}),
+                        status: stripeStatusToBillingStatus(sub.status),
+                        provider: "stripe",
+                        stripe_subscription_id: sub.id,
+                        stripe_price_id: priceId,
+                        current_period_ends_at: new Date((sub.items.data[0]?.current_period_end ?? 0) * 1000).toISOString(),
+                        updatedAt: firestore_1.FieldValue.serverTimestamp(),
+                    }, { merge: true });
+                    console.log(`[stripe/webhook] subscription updated: workspace=${workspaceId} status=${sub.status} plan=${planCode}`);
+                    break;
+                }
+                // ────────── サブスクリプション解約 ──────────
+                case "customer.subscription.deleted": {
+                    const sub = event.data.object;
+                    const workspaceId = sub.metadata?.workspace_id;
+                    const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer.id;
+                    const getWsId = async () => {
+                        if (workspaceId)
+                            return workspaceId;
+                        const snap = await db.collection("workspace_billing")
+                            .where("stripe_customer_id", "==", customerId).limit(1).get();
+                        return snap.empty ? null : snap.docs[0].id;
+                    };
+                    const wsId = await getWsId();
+                    if (!wsId)
+                        break;
+                    await db.collection("workspace_billing").doc(wsId).set({
+                        plan: "free",
+                        status: "canceled",
+                        stripe_subscription_id: null,
+                        stripe_price_id: null,
+                        current_period_ends_at: new Date((sub.items.data[0]?.current_period_end ?? 0) * 1000).toISOString(),
+                        updatedAt: firestore_1.FieldValue.serverTimestamp(),
+                    }, { merge: true });
+                    console.log(`[stripe/webhook] subscription deleted: workspace=${wsId}`);
+                    break;
+                }
+                // ────────── 支払い失敗 ──────────
+                case "invoice.payment_failed": {
+                    const invoice = event.data.object;
+                    const customerId = typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id;
+                    if (!customerId)
+                        break;
+                    const snap = await db.collection("workspace_billing")
+                        .where("stripe_customer_id", "==", customerId).limit(1).get();
+                    if (snap.empty)
+                        break;
+                    await db.collection("workspace_billing").doc(snap.docs[0].id).set({
+                        status: "past_due",
+                        updatedAt: firestore_1.FieldValue.serverTimestamp(),
+                    }, { merge: true });
+                    console.log(`[stripe/webhook] payment failed: customer=${customerId}`);
+                    break;
+                }
+                default:
+                    console.log(`[stripe/webhook] unhandled event type: ${event.type}`);
+            }
+            return res.json({ received: true });
+        }
+        catch (e) {
+            console.error("[/v1/stripe/webhook] processing error:", e);
+            return res.status(500).json({ error: "webhook_processing_failed", message: e?.message });
         }
     });
     /* -----------------------------
@@ -2836,6 +3172,7 @@ function registerV1Routes(app) {
                 utm_source: body.utm_source ?? null,
                 utm_medium: body.utm_medium ?? null,
                 utm_campaign: body.utm_campaign ?? null,
+                is_new: body.is_new ?? null,
                 createdAt: nowIso,
                 updatedAt: nowIso,
             };
@@ -2846,7 +3183,6 @@ function registerV1Routes(app) {
                 logPayload.currency = body.currency ?? "JPY";
                 logPayload.items = body.items ?? null;
             }
-            await db.collection("logs").add(logPayload);
             // ---- stats_daily (集計) ----
             // 重要: docId に variantId を含めないと A/B が上書きされる
             const statsDocId = `${siteId}__${day}__${scenarioId}__${actionId}__${variantId}__${event}`;
@@ -2866,7 +3202,40 @@ function registerV1Routes(app) {
             if (event === "purchase" && typeof body.revenue === "number" && body.revenue >= 0) {
                 statsPayload.revenue_total = firestore_1.FieldValue.increment(body.revenue);
             }
-            await statsRef.set(statsPayload, { merge: true });
+            // batch write: logs と stats_daily を atomic に書く
+            // → どちらか片方だけ書けてもう片方が失敗する状態（UV > PV）を防ぐ
+            const batch = db.batch();
+            const newLogRef = db.collection("logs").doc(); // auto-ID
+            batch.set(newLogRef, logPayload);
+            batch.set(statsRef, statsPayload, { merge: true });
+            // UV / 新規・リピーター追跡: pageview イベントのみ vid を arrayUnion で保存（自動デデュプ）
+            // journeyLogs の limit 制限に依存せずサーバー側で正確に集計する
+            if (event === "pageview" && body.vid) {
+                // UV（全訪問者）
+                const uvDocId = `${siteId}__${day}__all__all__na__uv`;
+                const uvRef = db.collection("stats_daily").doc(uvDocId);
+                batch.set(uvRef, {
+                    siteId, day,
+                    scenarioId: null, actionId: null, templateId: null, variantId: "na",
+                    event: "uv",
+                    vids: firestore_1.FieldValue.arrayUnion(body.vid),
+                    updatedAt: firestore_1.FieldValue.serverTimestamp(),
+                }, { merge: true });
+                // 新規 / リピーター（is_new フラグが送られてきた場合のみ）
+                if (typeof body.is_new === "boolean") {
+                    const nrEvent = body.is_new ? "new_vids" : "repeat_vids";
+                    const nrDocId = `${siteId}__${day}__all__all__na__${nrEvent}`;
+                    const nrRef = db.collection("stats_daily").doc(nrDocId);
+                    batch.set(nrRef, {
+                        siteId, day,
+                        scenarioId: null, actionId: null, templateId: null, variantId: "na",
+                        event: nrEvent,
+                        vids: firestore_1.FieldValue.arrayUnion(body.vid),
+                        updatedAt: firestore_1.FieldValue.serverTimestamp(),
+                    }, { merge: true });
+                }
+            }
+            await batch.commit();
             return res.json({ ok: true });
         }
         catch (e) {
@@ -3588,7 +3957,8 @@ function registerV1Routes(app) {
             const workspaces = wsSnap.docs.map((d) => {
                 const data = d.data();
                 const billing = data.billing || {};
-                const override = billingMap[d.id] || {};
+                // workspace_billing を優先（Stripe webhook はこちらを更新する）
+                const wsBilling = billingMap[d.id] || {};
                 const members = data.members || {};
                 const emails = data.memberEmails || {};
                 const ownerUid = Object.entries(members).find(([, v]) => v?.role === "owner")?.[0] || "";
@@ -3596,17 +3966,17 @@ function registerV1Routes(app) {
                     id: d.id,
                     name: data.name || "",
                     ownerEmail: ownerUid ? (emails[ownerUid] || "") : "",
-                    plan: billing.plan || "free",
-                    status: billing.status || "inactive",
-                    trialEndsAt: billing.trial_ends_at || null,
-                    currentPeriodEndsAt: billing.current_period_ends_at || null,
-                    provider: billing.provider || "manual",
-                    stripeCustomerId: billing.stripe_customer_id || null,
-                    stripeSubscriptionId: billing.stripe_subscription_id || null,
-                    billingNote: billing.manual_billing_note || "",
-                    accessOverrideActive: override.access_override_active || false,
-                    accessOverrideUntil: override.access_override_until || null,
-                    accessOverrideNote: override.access_override_note || "",
+                    plan: wsBilling.plan || billing.plan || "free",
+                    status: wsBilling.status || billing.status || "inactive",
+                    trialEndsAt: wsBilling.trial_ends_at || billing.trial_ends_at || null,
+                    currentPeriodEndsAt: wsBilling.current_period_ends_at || billing.current_period_ends_at || null,
+                    provider: wsBilling.provider || billing.provider || "manual",
+                    stripeCustomerId: wsBilling.stripe_customer_id || billing.stripe_customer_id || null,
+                    stripeSubscriptionId: wsBilling.stripe_subscription_id || billing.stripe_subscription_id || null,
+                    billingNote: wsBilling.manual_billing_note || billing.manual_billing_note || "",
+                    accessOverrideActive: wsBilling.access_override_active || false,
+                    accessOverrideUntil: wsBilling.access_override_until || null,
+                    accessOverrideNote: wsBilling.access_override_note || "",
                     memberCount: Object.keys(members).length,
                     createdAt: data.createdAt || null,
                 };
@@ -3873,6 +4243,8 @@ function registerV1Routes(app) {
         active: zod_1.z.boolean().optional().default(true),
         price_monthly: zod_1.z.number().min(0).optional().default(0),
         limits: PlanLimitsSchema,
+        stripe_price_monthly_id: zod_1.z.string().max(200).nullable().optional(),
+        stripe_price_yearly_id: zod_1.z.string().max(200).nullable().optional(),
     });
     app.post("/v1/ops/plans/upsert", async (req, res) => {
         try {
@@ -3890,6 +4262,8 @@ function registerV1Routes(app) {
                 active: body.active,
                 price_monthly: body.price_monthly,
                 limits: normalizePlanLimits(body.limits),
+                stripe_price_monthly_id: body.stripe_price_monthly_id ?? null,
+                stripe_price_yearly_id: body.stripe_price_yearly_id ?? null,
                 updated_at: now,
                 ...(existing.exists ? {} : { created_at: now }),
             }, { merge: true });
@@ -4403,4 +4777,146 @@ function registerV1Routes(app) {
         }
     });
     app.options("/v1/mcp-key/generate", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /* =====================================================
+       MISOCA Billing Routes（Platform Admin 専用）
+       /v1/ops/misoca/authorize  – OAuth2 認可URL取得
+       /v1/ops/misoca/callback   – OAuth2 コールバック（GET）
+       /v1/ops/misoca/status     – 接続状態確認
+       /v1/ops/misoca/disconnect – 接続解除
+       /v1/ops/misoca/trigger    – 手動で請求書発行
+    ===================================================== */
+    const MISOCA_BACKYARD_RETURN_URL = "https://app.mokkeda.com/ops/";
+    /** POST /v1/ops/misoca/authorize — OAuth2 認可URL を返す */
+    app.post("/v1/ops/misoca/authorize", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            await requirePlatformAdmin(req);
+            const clientId = MISOCA_CLIENT_ID.value().trim();
+            if (!clientId)
+                return res.status(500).json({ error: "MISOCA_CLIENT_ID が未設定です" });
+            const redirectUri = encodeURIComponent(`https://app.mokkeda.com/api/v1/ops/misoca/callback`);
+            const state = Buffer.from(JSON.stringify({ ts: Date.now() })).toString("base64url");
+            // state を一時保存（10分有効）
+            await (0, admin_1.adminDb)().collection("system_config").doc("misoca_oauth_state").set({
+                state,
+                expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+            });
+            const authUrl = `https://app.misoca.jp/oauth2/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&state=${state}`;
+            return res.json({ ok: true, url: authUrl });
+        }
+        catch (e) {
+            return res.status(e?.message === "platform_admin_only" ? 403 : 500).json({ ok: false, error: e?.message });
+        }
+    });
+    app.options("/v1/ops/misoca/authorize", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /** GET /v1/ops/misoca/callback — MISOCA OAuth2 コールバック */
+    app.get("/v1/ops/misoca/callback", async (req, res) => {
+        const code = String(req.query.code || "");
+        const state = String(req.query.state || "");
+        const errorParam = String(req.query.error || "");
+        const redirectBase = MISOCA_BACKYARD_RETURN_URL;
+        if (errorParam) {
+            return res.redirect(`${redirectBase}?misoca=error&reason=${encodeURIComponent(errorParam)}`);
+        }
+        if (!code) {
+            return res.redirect(`${redirectBase}?misoca=error&reason=no_code`);
+        }
+        try {
+            // state 検証
+            const db = (0, admin_1.adminDb)();
+            const stateSnap = await db.collection("system_config").doc("misoca_oauth_state").get();
+            const storedState = stateSnap.exists ? stateSnap.data()?.state : null;
+            const stateExpiresAt = stateSnap.exists ? new Date(stateSnap.data()?.expiresAt || 0) : new Date(0);
+            if (!storedState || storedState !== state || stateExpiresAt < new Date()) {
+                return res.redirect(`${redirectBase}?misoca=error&reason=invalid_state`);
+            }
+            // state を削除
+            await db.collection("system_config").doc("misoca_oauth_state").delete();
+            // code → token 交換
+            const clientId = MISOCA_CLIENT_ID.value().trim();
+            const clientSecret = MISOCA_CLIENT_SECRET.value().trim();
+            const redirectUri = `https://app.mokkeda.com/api/v1/ops/misoca/callback`;
+            const params = new URLSearchParams({
+                grant_type: "authorization_code",
+                client_id: clientId,
+                client_secret: clientSecret,
+                redirect_uri: redirectUri,
+                code,
+            });
+            const tokenResp = await fetch("https://app.misoca.jp/oauth2/token", {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: params.toString(),
+            });
+            if (!tokenResp.ok) {
+                const errText = await tokenResp.text();
+                console.error("[MISOCA callback] token exchange failed:", errText);
+                return res.redirect(`${redirectBase}?misoca=error&reason=token_exchange_failed`);
+            }
+            const json = await tokenResp.json();
+            const expiresAt = new Date(Date.now() + (json.expires_in || 7200) * 1000).toISOString();
+            await db.collection("system_config").doc("misoca").set({
+                access_token: json.access_token,
+                refresh_token: json.refresh_token,
+                expires_at: expiresAt,
+                connected: true,
+                connected_at: new Date().toISOString(),
+                updatedAt: firestore_1.FieldValue.serverTimestamp(),
+            });
+            console.log("[MISOCA] OAuth2 連携完了");
+            return res.redirect(`${redirectBase}?misoca=connected`);
+        }
+        catch (e) {
+            console.error("[MISOCA callback] error:", e);
+            return res.redirect(`${redirectBase}?misoca=error&reason=${encodeURIComponent(e?.message || "unknown")}`);
+        }
+    });
+    /** POST /v1/ops/misoca/status — 接続状態確認 */
+    app.post("/v1/ops/misoca/status", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            await requirePlatformAdmin(req);
+            const status = await (0, misoca_1.getMisocaStatus)();
+            // 最新の発行ログ5件も返す
+            const logsSnap = await (0, admin_1.adminDb)().collection("invoice_logs")
+                .orderBy("sentAt", "desc").limit(10).get();
+            const recentLogs = logsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+            return res.json({ ok: true, ...status, recentLogs });
+        }
+        catch (e) {
+            return res.status(e?.message === "platform_admin_only" ? 403 : 500).json({ ok: false, error: e?.message });
+        }
+    });
+    app.options("/v1/ops/misoca/status", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /** POST /v1/ops/misoca/disconnect — 連携解除 */
+    app.post("/v1/ops/misoca/disconnect", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            await requirePlatformAdmin(req);
+            await (0, admin_1.adminDb)().collection("system_config").doc("misoca").delete();
+            return res.json({ ok: true });
+        }
+        catch (e) {
+            return res.status(e?.message === "platform_admin_only" ? 403 : 500).json({ ok: false, error: e?.message });
+        }
+    });
+    app.options("/v1/ops/misoca/disconnect", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /** POST /v1/ops/misoca/trigger — 手動で請求書発行（テスト・再送用） */
+    app.post("/v1/ops/misoca/trigger", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            await requirePlatformAdmin(req);
+            const clientId = MISOCA_CLIENT_ID.value().trim();
+            const clientSecret = MISOCA_CLIENT_SECRET.value().trim();
+            if (!clientId || !clientSecret)
+                return res.status(500).json({ error: "MISOCA シークレットが未設定です" });
+            const result = await (0, misoca_1.sendMisocaInvoicesJob)(clientId, clientSecret);
+            return res.json({ ok: true, ...result });
+        }
+        catch (e) {
+            console.error("[/v1/ops/misoca/trigger] error:", e);
+            return res.status(e?.message === "platform_admin_only" ? 403 : 500).json({ ok: false, error: e?.message });
+        }
+    });
+    app.options("/v1/ops/misoca/trigger", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
 }

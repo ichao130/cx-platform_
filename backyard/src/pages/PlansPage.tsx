@@ -24,6 +24,8 @@ type Plan = {
   active: boolean;
   price_monthly: number;
   limits: PlanLimits;
+  stripe_price_monthly_id: string | null;
+  stripe_price_yearly_id: string | null;
 };
 
 const CODE_COLOR: Record<PlanCode, string> = {
@@ -59,11 +61,14 @@ type FormState = {
   active: boolean;
   price_monthly: number;
   limits: PlanLimits;
+  stripe_price_monthly_id: string;
+  stripe_price_yearly_id: string;
 };
 
 const emptyForm = (): FormState => ({
   plan_id: "", code: "free", name: "", description: "",
   active: true, price_monthly: 0, limits: emptyLimits(),
+  stripe_price_monthly_id: "", stripe_price_yearly_id: "",
 });
 
 function limitDisplay(v: number | null) {
@@ -106,6 +111,8 @@ export default function PlansPage() {
       active: p.active,
       price_monthly: p.price_monthly || 0,
       limits: { ...emptyLimits(), ...p.limits },
+      stripe_price_monthly_id: p.stripe_price_monthly_id || "",
+      stripe_price_yearly_id: p.stripe_price_yearly_id || "",
     });
     setMsg("");
     setShowModal(true);
@@ -124,6 +131,8 @@ export default function PlansPage() {
         active: form.active,
         price_monthly: form.price_monthly,
         limits: form.limits,
+        stripe_price_monthly_id: form.stripe_price_monthly_id.trim() || null,
+        stripe_price_yearly_id: form.stripe_price_yearly_id.trim() || null,
       });
       setMsg("保存しました ✓");
       await loadPlans();
@@ -194,6 +203,21 @@ export default function PlansPage() {
                       <span style={{ fontSize: 12, color: "#94a3b8" }}>
                         MCP接続: <strong style={{ color: p.limits.mcp_enabled ? "#4ade80" : "#64748b" }}>{p.limits.mcp_enabled ? "✅ ON" : "— OFF"}</strong>
                       </span>
+                    </div>
+                    {/* Stripe Price ID */}
+                    <div style={{ marginTop: 8, display: "flex", gap: 16, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                        💳 月額 Price ID:{" "}
+                        {p.stripe_price_monthly_id
+                          ? <code style={{ fontSize: 11, color: "#60a5fa", background: "rgba(96,165,250,.1)", borderRadius: 4, padding: "1px 6px" }}>{p.stripe_price_monthly_id}</code>
+                          : <strong style={{ color: "#f59e0b" }}>⚠ 未設定</strong>
+                        }
+                      </span>
+                      {p.stripe_price_yearly_id && (
+                        <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                          年額 Price ID: <code style={{ fontSize: 11, color: "#60a5fa", background: "rgba(96,165,250,.1)", borderRadius: 4, padding: "1px 6px" }}>{p.stripe_price_yearly_id}</code>
+                        </span>
+                      )}
                     </div>
                   </div>
                   <button onClick={() => openEdit(p)} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid rgba(255,255,255,.15)", background: "rgba(255,255,255,.06)", color: "#e2e8f0", cursor: "pointer", fontSize: 12, flexShrink: 0 }}>
@@ -317,6 +341,31 @@ export default function PlansPage() {
                     <div style={{ fontSize: 11, opacity: 0.5, marginTop: 2 }}>Claude Desktop / Cursor 等からのMCP接続を許可する</div>
                   </div>
                 </label>
+              </div>
+
+              {/* Stripe Price IDs */}
+              <div style={{ borderTop: "1px solid rgba(255,255,255,.08)", paddingTop: 14 }}>
+                <label style={{ fontSize: 12, opacity: 0.6, display: "block", marginBottom: 8 }}>💳 Stripe 設定</label>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div>
+                    <label style={{ fontSize: 11, opacity: 0.5, display: "block", marginBottom: 4 }}>Price ID（月額） — price_...</label>
+                    <input
+                      value={form.stripe_price_monthly_id}
+                      onChange={(e) => setForm({ ...form, stripe_price_monthly_id: e.target.value.trim() })}
+                      placeholder="price_1TMjEl..."
+                      style={{ ...inputStyle, fontFamily: "monospace", fontSize: 12 }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, opacity: 0.5, display: "block", marginBottom: 4 }}>Price ID（年額・任意）</label>
+                    <input
+                      value={form.stripe_price_yearly_id}
+                      onChange={(e) => setForm({ ...form, stripe_price_yearly_id: e.target.value.trim() })}
+                      placeholder="price_..."
+                      style={{ ...inputStyle, fontFamily: "monospace", fontSize: 12 }}
+                    />
+                  </div>
+                </div>
               </div>
             </div>
 

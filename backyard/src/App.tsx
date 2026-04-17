@@ -8,6 +8,7 @@ import AnnouncementsPage from "./pages/AnnouncementsPage";
 import PlansPage from "./pages/PlansPage";
 import AdminsPage from "./pages/AdminsPage";
 import UsersPage from "./pages/UsersPage";
+import MisocaPage from "./pages/MisocaPage";
 
 const s: Record<string, React.CSSProperties> = {
   layout: { minHeight: "100vh", display: "flex", flexDirection: "column" },
@@ -18,7 +19,7 @@ const s: Record<string, React.CSSProperties> = {
   card: { background: "#1e293b", border: "1px solid rgba(255,255,255,.1)", borderRadius: 16, padding: 40, textAlign: "center", maxWidth: 380, width: "90vw" },
 };
 
-type Page = "workspaces" | "trials" | "announcements" | "plans" | "admins" | "users";
+type Page = "workspaces" | "trials" | "announcements" | "plans" | "admins" | "users" | "misoca";
 
 async function loadOpsAdmins(): Promise<string[]> {
   try {
@@ -108,6 +109,7 @@ export default function App() {
         <NavBtn id="workspaces" label="ワークスペース管理" />
         <NavBtn id="trials" label="特別トライアル" />
         <NavBtn id="plans" label="プラン管理" />
+        <NavBtn id="misoca" label="MISOCA請求書" />
         <NavBtn id="announcements" label="お知らせ管理" />
         <NavBtn id="users" label="ユーザー管理" />
         {isSuperAdmin && <NavBtn id="admins" label="管理者" />}
@@ -123,6 +125,7 @@ export default function App() {
         {page === "plans" && <PlansPage />}
         {page === "announcements" && <AnnouncementsPage />}
         {page === "users" && <UsersPage />}
+        {page === "misoca" && isSuperAdmin && <MisocaPage />}
         {page === "admins" && isSuperAdmin && <AdminsPage />}
       </main>
     </div>

@@ -28,8 +28,7 @@ type AccessKey =
   | "media"
   | "ai"
   | "members"
-  | "billing"
-  | "plans";
+  | "billing";
 
 type AppRoutesProps = {
   canAccess?: (key: AccessKey) => boolean;

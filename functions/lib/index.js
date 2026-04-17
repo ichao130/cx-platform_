@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deleteMedia = exports.cleanupExpiredFreeAccounts = exports.api = void 0;
+exports.deleteMedia = exports.sendMonthlyMisocaInvoices = exports.cleanupExpiredFreeAccounts = exports.api = void 0;
 // functions/src/index.ts
 const v2_1 = require("firebase-functions/v2");
 const https_1 = require("firebase-functions/v2/https");
@@ -63,6 +63,7 @@ const MISOCA_CLIENT_SECRET = (0, params_1.defineSecret)("MISOCA_CLIENT_SECRET");
  */
 const v1_1 = require("./routes/v1");
 const mcp_1 = require("./routes/mcp");
+const misoca_1 = require("./services/misoca");
 const app = (0, express_1.default)();
 app.set("etag", false);
 app.use((0, cors_1.default)({ origin: true }));
@@ -280,6 +281,33 @@ async () => {
         }
     }
     console.log(`[cleanupExpiredFreeAccounts] deleted ${deleted} expired free workspaces`);
+});
+/**
+ * ==========================
+ * Scheduled: 毎月25日 MISOCA 請求書自動発行
+ * UTC 00:00 = JST 09:00 に実行
+ * ==========================
+ */
+exports.sendMonthlyMisocaInvoices = (0, scheduler_1.onSchedule)({
+    region: "asia-northeast1",
+    schedule: "0 0 25 * *", // UTC 00:00 = JST 09:00
+    timeZone: "UTC",
+    timeoutSeconds: 300,
+    secrets: [MISOCA_CLIENT_ID, MISOCA_CLIENT_SECRET],
+}, async () => {
+    const clientId = MISOCA_CLIENT_ID.value().trim();
+    const clientSecret = MISOCA_CLIENT_SECRET.value().trim();
+    if (!clientId || !clientSecret) {
+        console.error("[sendMonthlyMisocaInvoices] MISOCA シークレットが未設定です");
+        return;
+    }
+    try {
+        const result = await (0, misoca_1.sendMisocaInvoicesJob)(clientId, clientSecret);
+        console.log("[sendMonthlyMisocaInvoices] 完了:", result);
+    }
+    catch (e) {
+        console.error("[sendMonthlyMisocaInvoices] エラー:", e);
+    }
 });
 /**
  * ==========================

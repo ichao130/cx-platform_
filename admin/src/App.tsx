@@ -714,6 +714,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
         </div>
 
 
+
         <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid rgba(15,23,42,.08)" }}>
           <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "rgba(255,255,255,.38)", marginBottom: 8, paddingLeft: 12 }}>
             Signed in

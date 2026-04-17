@@ -80,6 +80,23 @@
     }
   }
 
+  // セッションID専用: sessionStorage を使うのでブラウザを閉じると消える（タブ間非共有）
+  function getOrCreateSessionId(key) {
+    try {
+      var v = sessionStorage.getItem(key);
+      if (v) {
+        setCookieId(key, v);
+        return v;
+      }
+      v = "sid_" + Math.random().toString(36).slice(2) + "_" + Date.now();
+      sessionStorage.setItem(key, v);
+      setCookieId(key, v);
+      return v;
+    } catch (e) {
+      return "sid_" + Math.random().toString(36).slice(2) + "_" + Date.now();
+    }
+  }
+
   function logEndpointFromServe(apiBase) {
     if (!apiBase) return "";
     // .../v1/serve  ->  .../v1/log
@@ -1265,7 +1282,7 @@
       ref: document.referrer || "",
       page_type: script.getAttribute("data-page-type") || pageTypeFromPath(window.location.pathname),
       vid: getOrCreateId("cx_vid"),  // ← この呼び出しで cx_vid が新規作成される
-      sid: getOrCreateId("cx_sid_" + siteId),
+      sid: getOrCreateSessionId("cx_sid_" + siteId),  // sessionStorage: タブ/ブラウザ終了でリセット
       variant_id: null
     };
 
