@@ -51,15 +51,29 @@ function pct(num: number, denom: number, digits = 1) {
 function workspaceKeyForUid(uid: string) {
   return `cx_admin_workspace_id:${uid}`;
 }
+function siteKeyForWorkspace(workspaceId: string) {
+  return `cx_admin_site_id:${workspaceId}`;
+}
 function readSelectedWorkspaceId(uid?: string) {
   if (!uid) return "";
   try { return localStorage.getItem(workspaceKeyForUid(uid)) || ""; } catch { return ""; }
+}
+function readSelectedSiteId(workspaceId?: string) {
+  if (!workspaceId) return "";
+  try { return localStorage.getItem(siteKeyForWorkspace(workspaceId)) || ""; } catch { return ""; }
 }
 function writeSelectedWorkspaceId(workspaceId: string, uid?: string) {
   if (!uid) return;
   try {
     localStorage.setItem(workspaceKeyForUid(uid), workspaceId);
     window.dispatchEvent(new CustomEvent("cx_admin_workspace_changed", { detail: { workspaceId } }));
+  } catch {}
+}
+function writeSelectedSiteId(workspaceId: string, siteId: string) {
+  if (!workspaceId) return;
+  try {
+    localStorage.setItem(siteKeyForWorkspace(workspaceId), siteId);
+    window.dispatchEvent(new CustomEvent("cx_admin_site_changed", { detail: { workspaceId, siteId } }));
   } catch {}
 }
 function workspaceNameFromRows(workspaces: Array<{ id: string; data: any }>, workspaceId: string) {
@@ -192,7 +206,13 @@ export default function DashboardPage() {
         return ws && visibleWorkspaceIds.has(ws) && (!workspaceId || ws === String(workspaceId));
       });
       setSites(list);
-      if (!siteId || !list.some((s) => s.id === siteId)) setSiteId(list[0]?.id || "");
+      const remembered = readSelectedSiteId(workspaceId);
+      const nextSiteId =
+        list.find((s) => s.id === siteId)?.id ||
+        list.find((s) => s.id === remembered)?.id ||
+        list[0]?.id ||
+        "";
+      if (nextSiteId !== siteId) setSiteId(nextSiteId);
     }, () => {});
   }, [currentUid, siteId, visibleWorkspaceIds, workspaceId]);
 
@@ -200,6 +220,11 @@ export default function DashboardPage() {
     if (!sites.length) { setSiteId(""); return; }
     if (!siteId || !sites.some((s) => s.id === siteId)) setSiteId(sites[0].id);
   }, [siteId, sites]);
+
+  useEffect(() => {
+    if (!workspaceId || !siteId) return;
+    writeSelectedSiteId(workspaceId, siteId);
+  }, [workspaceId, siteId]);
 
   // Scenarios
   useEffect(() => {
@@ -351,6 +376,31 @@ export default function DashboardPage() {
   const selectedSiteName = useMemo(() => siteLabel(selectedSite), [selectedSite]);
   const selectedWorkspaceName = useMemo(() => workspaceNameFromRows(visibleWorkspaces, workspaceId), [visibleWorkspaces, workspaceId]);
   const scenarioName = useMemo(() => scenarioLabel(scenarios.find((s) => s.id === abScenarioId)) || abScenarioId || "", [scenarios, abScenarioId]);
+  const primarySignals = useMemo(() => {
+    return [
+      {
+        title: "まず見る",
+        label: "CVR",
+        value: summary.imp > 0 ? `${summary.cvr}%` : "—",
+        description: summary.cvr >= 3 ? "かなり良い反応です" : summary.cvr >= 1 ? "安定して反応があります" : "改善余地が大きめです",
+        accent: summary.cvr >= 3 ? "#16a34a" : summary.cvr >= 1 ? "#2563eb" : "#b45309",
+      },
+      {
+        title: "量の確認",
+        label: "表示回数",
+        value: fmtInt(summary.imp),
+        description: `過去${days}日でどれだけ配信できたか`,
+        accent: "#1f7a8c",
+      },
+      {
+        title: purchaseLogs.length > 0 ? "売上寄与" : "要確認",
+        label: purchaseLogs.length > 0 ? "経由売上" : "離脱率",
+        value: purchaseLogs.length > 0 ? `¥${totalRevenue.toLocaleString("ja-JP")}` : (summary.imp > 0 ? `${summary.closeRate}%` : "—"),
+        description: purchaseLogs.length > 0 ? "施策経由の売上インパクト" : "高いときは訴求や導線を見直し",
+        accent: purchaseLogs.length > 0 ? "#16a34a" : (summary.closeRate > 70 ? "#dc2626" : "#475569"),
+      },
+    ];
+  }, [days, purchaseLogs.length, summary.closeRate, summary.cvr, summary.imp, totalRevenue]);
 
   const generateAiInsight = useCallback(async (payload: any) => {
     try {
@@ -464,6 +514,27 @@ export default function DashboardPage() {
             <span>⚠️</span> {err}
           </div>
         )}
+      </div>
+
+      <div className="card" style={{ marginBottom: 14, padding: 18 }}>
+        <div className="page-header" style={{ marginBottom: 14, paddingBottom: 12 }}>
+          <div className="page-header__meta">
+            <div className="h2" style={{ marginBottom: 4 }}>今日見るべき3指標</div>
+            <div className="small">最初に見る数値だけを前に出しています。詳細比較はこの下で確認できます。</div>
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+          {primarySignals.map((signal) => (
+            <div key={signal.label} style={{ border: "1px solid rgba(15,23,42,.08)", borderRadius: 14, padding: 16, background: "linear-gradient(180deg,#ffffff,#f8fbff)" }}>
+              <div className="small" style={{ opacity: 0.7, marginBottom: 8 }}>{signal.title}</div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
+                <div style={{ fontSize: 24, fontWeight: 800, color: signal.accent, lineHeight: 1 }}>{signal.value}</div>
+                <div className="small" style={{ fontWeight: 700 }}>{signal.label}</div>
+              </div>
+              <div className="small">{signal.description}</div>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* KPIカード */}

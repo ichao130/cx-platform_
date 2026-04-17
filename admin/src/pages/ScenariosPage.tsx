@@ -4,6 +4,8 @@ import { collection, deleteDoc, deleteField, doc, onSnapshot, orderBy, query, se
 import { useNavigate } from "react-router-dom";
 import { db, apiPostJson, assertPlanLimit } from "../firebase";
 import { usePlanLimit } from "../hooks/usePlanLimit";
+import RightDrawer from "../components/RightDrawer";
+import StickySaveBar from "../components/StickySaveBar";
 
 function genId(prefix: string) {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
@@ -337,6 +339,9 @@ export default function ScenariosPage() {
   const [variantIdToEdit, setVariantIdToEdit] = useState<string>("A");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [saveMessage, setSaveMessage] = useState("");
 
   // schedule
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
@@ -814,9 +819,12 @@ export default function ScenariosPage() {
     setScheduleStart("");
     setScheduleEnd("");
     setSavedPayloadStr(null);
+    setSaveError("");
+    setSaveMessage("");
   }
 
   function openCreateModal() {
+    loadingBaseRef.current = true;
     resetForm();
     setIsModalOpen(true);
   }
@@ -832,10 +840,20 @@ export default function ScenariosPage() {
     setTimeout(() => setToast(null), 3000);
   }
 
+  function closeEditor() {
+    if (isDirty && !window.confirm("保存されていない変更があります。閉じますか？")) return;
+    setIsModalOpen(false);
+    setSaveError("");
+    setSaveMessage("");
+  }
+
   async function createOrUpdate() {
     if (!siteId) { showToast("サイトを選択してください", "error"); return; }
     if (!workspaceId) { showToast("ワークスペースが未設定です", "error"); return; }
     try {
+      setSaving(true);
+      setSaveError("");
+      setSaveMessage("");
       // 新規作成時のみプランリミットチェック
       const isNew = !rows.some((r) => r.id === id.trim());
       if (isNew) await assertPlanLimit(workspaceId, "scenarios");
@@ -853,16 +871,22 @@ export default function ScenariosPage() {
         await updateDoc(docRef, toDelete);
       }
 
+      setSavedPayloadStr(JSON.stringify(stripUndefinedDeep(payload)));
+      setSaveMessage("シナリオを保存しました。");
       showToast("シナリオを保存しました ✓");
-      resetForm();
-      setIsModalOpen(false);
     } catch (e: any) {
-      showToast(`保存に失敗しました: ${e?.message || String(e)}`, "error");
+      const message = `保存に失敗しました: ${e?.message || String(e)}`;
+      setSaveError(message);
+      showToast(message, "error");
+    } finally {
+      setSaving(false);
     }
   }
 
   function loadScenario(docId: string, s: Scenario) {
     loadingBaseRef.current = true;
+    setSaveError("");
+    setSaveMessage("");
     setId(docId);
     setSiteId(s.siteId || "");
     setWorkspaceId(s.workspaceId || "");
@@ -1177,45 +1201,19 @@ export default function ScenariosPage() {
         </div>
       </div>
 
-      {isModalOpen ? (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(15,23,42,0.24)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 24,
-            zIndex: 50,
-          }}
-          onClick={() => {
-            if (isDirty && !window.confirm("保存されていない変更があります。閉じますか？")) return;
-            setIsModalOpen(false);
-          }}
-        >
-          <div
-            className="card"
-            style={{ width: "min(980px, 100%)", maxHeight: "88vh", overflow: "auto" }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="page-header" style={{ marginBottom: 10 }}>
-              <div className="page-header__meta">
-                <h2 className="h1" style={{ fontSize: 22 }}>
-                  {rows.some((r) => r.id === id) ? "シナリオを編集" : "シナリオを作成"}
-                </h2>
-                <div className="small">
-                  新規登録・編集はモーダルで行います。条件、A/B、アクションはここで確認してください。
-                </div>
-              </div>
-              <div className="page-header__actions" style={{ gap: 8 }}>
-                {isDirty && <span style={{ fontSize: 12, fontWeight: 600, color: "#d97706", padding: "4px 8px", background: "#fffbeb", border: "1px solid #fbbf24", borderRadius: 6 }}>未保存</span>}
-                <button className="btn" onClick={() => {
-                  if (isDirty && !window.confirm("保存されていない変更があります。閉じますか？")) return;
-                  setIsModalOpen(false);
-                }}>✕ 閉じる</button>
-              </div>
-            </div>
+      <RightDrawer
+        open={isModalOpen}
+        width={1040}
+        title={rows.some((r) => r.id === id) ? "シナリオを編集" : "シナリオを作成"}
+        description="一覧を見ながら、配信条件とアクション構成を右側で詰められる形にしています。"
+        onClose={closeEditor}
+        actions={
+          <React.Fragment>
+            <span className="badge">STEP {currentStep} / 3</span>
+            {isDirty ? <span className="badge" style={{ color: "#b45309", borderColor: "#fcd34d", background: "#fef3c7" }}>未保存</span> : null}
+          </React.Fragment>
+        }
+      >
 
             {/* ステップインジケーター */}
             <div style={{ display: "flex", marginBottom: 24, borderRadius: 8, overflow: "hidden", border: "1.5px solid #e2e8f0" }}>
@@ -1916,7 +1914,7 @@ export default function ScenariosPage() {
                     <button className="btn" onClick={() => navigate(`/scenarios/${id}/review`)}>AIレビューを見る</button>
                     <button className="btn" onClick={() => navigate(`/scenarios/${id}/ai`)}>AIインサイト</button>
                     <button className="btn" onClick={resetForm}>新規作成に戻す</button>
-                    <button className="btn btn--primary" onClick={createOrUpdate}>保存</button>
+                    <button className="btn" onClick={createOrUpdate}>この内容を保存</button>
                   </>
                 )}
                 {currentStep === 1 && (
@@ -1930,10 +1928,20 @@ export default function ScenariosPage() {
                 )}
               </div>
             </div>
+      </RightDrawer>
 
-          </div>
-        </div>
-      ) : null}
+      <StickySaveBar
+        visible={isModalOpen}
+        dirty={isDirty}
+        saving={saving}
+        error={saveError}
+        message={saveMessage}
+        onSave={createOrUpdate}
+        onSecondary={closeEditor}
+        secondaryLabel="閉じる"
+        saveLabel={rows.some((r) => r.id === id) ? "変更を保存" : "作成する"}
+        saveDisabled={!siteId || !workspaceId}
+      />
 
       {/* トースト通知 */}
       {toast && (

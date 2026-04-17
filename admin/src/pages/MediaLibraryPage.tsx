@@ -29,6 +29,7 @@ function readSelectedSiteId(workspaceId: string) {
 function writeSelectedSiteId(workspaceId: string, siteId: string) {
   try {
     localStorage.setItem(siteKeyForWs(workspaceId), siteId);
+    window.dispatchEvent(new CustomEvent("cx_admin_site_changed", { detail: { workspaceId, siteId } }));
   } catch {
     // ignore
   }

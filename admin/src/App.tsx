@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useEffect, useMemo, useState } from 
 import { Link, NavLink, Navigate } from "react-router-dom";
 import AppRoutes from "./routes";
 import AnnouncementToast from "./components/AnnouncementToast";
+import AdminContextHeader from "./components/AdminContextHeader";
 
 import { auth, googleProvider, db } from "./firebase";
 import {
@@ -146,6 +147,23 @@ function readSelectedWorkspaceId(): string | null {
 
 function workspaceKeyForUid(uid: string) {
   return `cx_workspace_id:${uid}`;
+}
+
+function siteKeyForWorkspace(workspaceId: string) {
+  return `cx_admin_site_id:${workspaceId}`;
+}
+
+function readSelectedSiteId(workspaceId?: string | null): string | null {
+  if (!workspaceId) return null;
+  try {
+    return (
+      window.localStorage.getItem(siteKeyForWorkspace(workspaceId)) ||
+      window.localStorage.getItem("cx_admin_site_id") ||
+      null
+    );
+  } catch {
+    return null;
+  }
 }
 
 function readSelectedWorkspaceIdForUid(uid: string): string | null {
@@ -411,6 +429,8 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const { user, workspaceId, workspaceRole, canAccess, currentUid, logout } = useAuth();
   const isPlatformAdmin = isPlatformAdminEmail(user?.email);
   const [workspaceRows, setWorkspaceRows] = useState<Array<{ id: string; data: any }>>([]);
+  const [siteRows, setSiteRows] = useState<Array<{ id: string; data: any }>>([]);
+  const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!currentUid) {
@@ -428,10 +448,71 @@ function AppShell({ children }: { children: React.ReactNode }) {
     });
   }, [currentUid]);
 
+  useEffect(() => {
+    if (!currentUid) {
+      setSiteRows([]);
+      return;
+    }
+
+    const q = query(
+      collection(db, "sites"),
+      where("memberUids", "array-contains", currentUid)
+    );
+
+    return onSnapshot(q, (snap) => {
+      setSiteRows(
+        snap.docs
+          .filter((d) => d.data().status !== "deleted")
+          .map((d) => ({ id: d.id, data: d.data() as any }))
+      );
+    });
+  }, [currentUid]);
+
+  useEffect(() => {
+    const applySelectedSite = (nextWorkspaceId?: string | null, nextSiteId?: string | null) => {
+      const targetWorkspaceId = nextWorkspaceId ?? workspaceId;
+      const remembered = nextSiteId ?? readSelectedSiteId(targetWorkspaceId);
+      setSelectedSiteId(remembered || null);
+    };
+
+    applySelectedSite();
+
+    const onWorkspaceChanged = (e?: Event) => {
+      const nextWorkspaceId = (e as CustomEvent | undefined)?.detail?.workspaceId || workspaceId;
+      applySelectedSite(nextWorkspaceId);
+    };
+
+    const onSiteChanged = (e?: Event) => {
+      const nextSiteId = (e as CustomEvent | undefined)?.detail?.siteId;
+      applySelectedSite(workspaceId, typeof nextSiteId === "string" ? nextSiteId : undefined);
+    };
+
+    const onStorage = () => applySelectedSite();
+
+    window.addEventListener("cx_admin_workspace_changed", onWorkspaceChanged as EventListener);
+    window.addEventListener("cx_admin_site_changed", onSiteChanged as EventListener);
+    window.addEventListener("storage", onStorage);
+
+    return () => {
+      window.removeEventListener("cx_admin_workspace_changed", onWorkspaceChanged as EventListener);
+      window.removeEventListener("cx_admin_site_changed", onSiteChanged as EventListener);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, [workspaceId]);
+
 
   const selectedWorkspaceRow = useMemo(() => {
     return workspaceRows.find((r) => r.id === workspaceId) || null;
   }, [workspaceRows, workspaceId]);
+
+  const workspaceSiteRows = useMemo(() => {
+    return siteRows.filter((row) => String(row.data?.workspaceId || "") === String(workspaceId || ""));
+  }, [siteRows, workspaceId]);
+
+  const selectedSiteRow = useMemo(() => {
+    const exact = workspaceSiteRows.find((row) => row.id === selectedSiteId);
+    return exact || workspaceSiteRows[0] || null;
+  }, [workspaceSiteRows, selectedSiteId]);
 
   const selectedWorkspaceName = useMemo(() => {
     return String(selectedWorkspaceRow?.data?.name || workspaceId || "（未選択）");
@@ -466,6 +547,15 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const selectedWorkspaceTintStrong = useMemo(() => {
     return hexToRgba(selectedWorkspaceAccent, 0.18);
   }, [selectedWorkspaceAccent]);
+
+  const selectedSiteName = useMemo(() => {
+    return String(
+      selectedSiteRow?.data?.name ||
+      selectedSiteRow?.data?.siteName ||
+      selectedSiteRow?.id ||
+      ""
+    );
+  }, [selectedSiteRow]);
 
   function changeWorkspace(nextWorkspaceId: string) {
     if (!nextWorkspaceId) return;
@@ -691,11 +781,12 @@ function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <div style={{ display: "grid", gap: 4 }}>
             {canShow(canAccess, "dashboard") && <SidebarLink to="/dashboard">ダッシュボード</SidebarLink>}
-            {canShow(canAccess, "analytics") && <SidebarLink to="/analytics">流入計測</SidebarLink>}
+            {canShow(canAccess, "sites") && <SidebarLink to="/sites">サイト</SidebarLink>}
             {canShow(canAccess, "scenarios") && <SidebarLink to="/scenarios">シナリオ</SidebarLink>}
             {canShow(canAccess, "actions") && <SidebarLink to="/actions">アクション</SidebarLink>}
             {canShow(canAccess, "templates") && <SidebarLink to="/templates">テンプレート</SidebarLink>}
             {canShow(canAccess, "media") && <SidebarLink to="/media">メディア</SidebarLink>}
+            {canShow(canAccess, "analytics") && <SidebarLink to="/analytics">流入計測</SidebarLink>}
             {canShow(canAccess, "ai") && <SidebarLink to="/ai">AIインサイト</SidebarLink>}
             {canShow(canAccess, "ai") && <SidebarLink to="/ai/optimize">配信最適化</SidebarLink>}
           </div>
@@ -707,7 +798,6 @@ function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <div style={{ display: "grid", gap: 4 }}>
             {(isPlatformAdmin || canShow(canAccess, "workspaces")) && <SidebarLink to="/workspaces">ワークスペース</SidebarLink>}
-            {canShow(canAccess, "sites") && <SidebarLink to="/sites">サイト</SidebarLink>}
             {canShow(canAccess, "members") && <SidebarLink to="/workspace/members">メンバー</SidebarLink>}
             {canShow(canAccess, "billing") && <SidebarLink to="/workspace/billing">契約 / Billing</SidebarLink>}
           </div>
@@ -769,6 +859,15 @@ function AppShell({ children }: { children: React.ReactNode }) {
       </aside>
 
       <main style={{ minWidth: 0, width: "100%", overflowX: "hidden" }}>
+        <AdminContextHeader
+          workspaceName={selectedWorkspaceName}
+          workspaceId={workspaceId}
+          workspaceDescription={selectedWorkspaceDescription}
+          siteName={selectedSiteName}
+          siteId={selectedSiteRow?.id || null}
+          role={workspaceRole}
+          canAccess={canAccess}
+        />
         {children}
       </main>
     </div>

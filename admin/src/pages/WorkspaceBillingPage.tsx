@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import { collection, getDocs, onSnapshot, query, where } from "firebase/firestore";
 import { apiPostJson, auth, db } from "../firebase";
+import RightDrawer from "../components/RightDrawer";
 
 type WorkspaceRow = { id: string; name: string };
 
@@ -544,10 +545,14 @@ export default function WorkspaceBillingPage() {
         </>
       )}
 
-      {/* ── プラン変更モーダル ── */}
-      {showUpgrade && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <div style={{ background: "#fff", borderRadius: 12, padding: 28, width: 500, maxWidth: "90vw", maxHeight: "80vh", overflowY: "auto" }}>
+      {/* ── プラン変更ドロワー ── */}
+      <RightDrawer
+        open={showUpgrade}
+        width={560}
+        title="プランを変更する"
+        description="現在の契約状況を見ながら、候補プランと決済導線を右側で確認できます。"
+        onClose={() => setShowUpgrade(false)}
+      >
             <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 20 }}>プランを変更する</div>
             {planMasterLoading ? (
               <div style={{ textAlign: "center", padding: "24px 0", color: "#64748b" }}>読み込み中…</div>
@@ -617,14 +622,16 @@ export default function WorkspaceBillingPage() {
                 );
               })()}
             </div>
-          </div>
-        </div>
-      )}
+      </RightDrawer>
 
-      {/* ── 支払い方法変更モーダル ── */}
-      {showProvider && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <div style={{ background: "#fff", borderRadius: 12, padding: 28, width: 440, maxWidth: "90vw" }}>
+      {/* ── 支払い方法変更ドロワー ── */}
+      <RightDrawer
+        open={showProvider}
+        width={500}
+        title="支払い方法を変更する"
+        description="現在の方法を見比べながら、その場で切り替えられるようにしています。"
+        onClose={() => setShowProvider(false)}
+      >
             <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 20 }}>支払い方法を変更する</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 24 }}>
               {(["stripe", "misoca"] as Provider[]).map((pv) => {
@@ -653,9 +660,7 @@ export default function WorkspaceBillingPage() {
                 {loading ? "変更中…" : "変更する"}
               </button>
             </div>
-          </div>
-        </div>
-      )}
+      </RightDrawer>
     </div>
   );
 }

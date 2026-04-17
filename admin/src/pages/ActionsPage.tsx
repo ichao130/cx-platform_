@@ -20,6 +20,8 @@ import { db, apiPostJson, assertPlanLimit } from "../firebase";
 import { usePlanLimit } from "../hooks/usePlanLimit";
 import { genId } from "../components/id";
 import { uploadImageToWorkspace } from "../lib/storage";
+import RightDrawer from "../components/RightDrawer";
+import StickySaveBar from "../components/StickySaveBar";
 
 /* =========================
  * Types
@@ -99,6 +101,7 @@ function readSelectedSiteId(workspaceId: string) {
 function writeSelectedSiteId(workspaceId: string, siteId: string) {
   try {
     localStorage.setItem(siteKeyForWs(workspaceId), siteId);
+    window.dispatchEvent(new CustomEvent("cx_admin_site_changed", { detail: { workspaceId, siteId } }));
   } catch {
     // ignore
   }
@@ -528,7 +531,11 @@ export default function ActionsPage() {
     return s?.data?.name || s?.data?.siteName || siteId || "（未選択）";
   }, [sites, siteId]);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  useBeforeUnload(isModalOpen);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [saveMessage, setSaveMessage] = useState("");
+  const [savedPayloadStr, setSavedPayloadStr] = useState<string | null>(null);
+  const loadingBaseRef = useRef(false);
 
   // toast / delete confirm
   const [toast, setToast] = useState<{ msg: string; type: "success" | "error" } | null>(null);
@@ -626,14 +633,18 @@ export default function ActionsPage() {
     setMediaIds([]);
     setUploading(false);
     setUploadErr("");
+    setSaveError("");
+    setSaveMessage("");
   }
 
   function openCreateModal() {
+    loadingBaseRef.current = true;
     resetEditor();
     setIsModalOpen(true);
   }
 
   function openEditModal(row: { id: string; data: ActionDoc }) {
+    loadingBaseRef.current = true;
     setId(row.id);
     const f = normalizeActionFromDb(row.data);
     setWorkspaceId(f.workspaceId);
@@ -654,6 +665,8 @@ export default function ActionsPage() {
     setImageMediaId(f.imageMediaId);
     setMediaIds(f.mediaIds);
     setUploadErr("");
+    setSaveError("");
+    setSaveMessage("");
     setIsModalOpen(true);
   }
 
@@ -824,13 +837,35 @@ export default function ActionsPage() {
     ctaUrlText,
     imageUrl,
     launcherImageUrl,
+    launcherPosition,
     imageMediaId,
     mediaIds,
   ]);
 
+  const isDirty = useMemo(() => {
+    if (savedPayloadStr === null) return false;
+    return JSON.stringify(stripUndefined(payload)) !== savedPayloadStr;
+  }, [payload, savedPayloadStr]);
+
+  useBeforeUnload(isModalOpen && isDirty);
+
+  useEffect(() => {
+    if (!loadingBaseRef.current) return;
+    loadingBaseRef.current = false;
+    setSavedPayloadStr(JSON.stringify(stripUndefined(payload)));
+  }, [payload]);
+
   function showToast(msg: string, type: "success" | "error" = "success") {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3000);
+  }
+
+  function closeEditor() {
+    if (isDirty && !window.confirm("保存されていない変更があります。閉じますか？")) return;
+    setIsModalOpen(false);
+    setUploadErr("");
+    setSaveError("");
+    setSaveMessage("");
   }
 
   async function saveToFirestore() {
@@ -839,15 +874,22 @@ export default function ActionsPage() {
     const actionId = id.trim();
     if (!actionId) { showToast("アクションIDが未設定です", "error"); return; }
     try {
+      setSaving(true);
+      setSaveError("");
+      setSaveMessage("");
       const isNew = !rows.some((r) => r.id === actionId);
       if (isNew) await assertPlanLimit(workspaceId, "actions");
 
       await setDoc(doc(db, "actions", actionId), payload, { merge: true });
+      setSavedPayloadStr(JSON.stringify(stripUndefined(payload)));
+      setSaveMessage("アクションを保存しました。");
       showToast("アクションを保存しました ✓");
-      resetEditor();
-      setIsModalOpen(false);
     } catch (e: any) {
-      showToast(`保存に失敗しました: ${e?.message || String(e)}`, "error");
+      const message = `保存に失敗しました: ${e?.message || String(e)}`;
+      setSaveError(message);
+      showToast(message, "error");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -1106,42 +1148,15 @@ export default function ActionsPage() {
         </div>
       </div>
 
-      {isModalOpen ? (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(15,23,42,0.24)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 24,
-            zIndex: 50,
-          }}
-          onClick={() => {
-            if (!window.confirm('保存されていない変更があります。閉じますか？')) return;
-            setIsModalOpen(false);
-            setUploadErr('');
-          }}
-        >
-          <div
-            className="card liquid-page"
-            style={{ width: 'min(1100px, 100%)', maxHeight: '88vh', overflow: 'auto', minWidth: 0 }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="page-header" style={{ marginBottom: 10 }}>
-              <div className="page-header__meta">
-                <h2 className="h1" style={{ fontSize: 22 }}>{rows.some((r) => r.id === id) ? 'アクションを編集' : 'アクションを作成'}</h2>
-                <div className="small">新規登録・編集はモーダルで行います。メディア設定は必要な時だけ確認してください。</div>
-              </div>
-              <div className="page-header__actions">
-                <button className="btn" onClick={() => { setIsModalOpen(false); setUploadErr(''); }}>
-                  ✕ 閉じる
-                </button>
-              </div>
-            </div>
-
-            <div className="row liquid-page" style={{ alignItems: "flex-start", flexWrap: "wrap" }}>
+      <RightDrawer
+        open={isModalOpen}
+        width={1120}
+        title={rows.some((r) => r.id === id) ? "アクションを編集" : "アクションを作成"}
+        description="画面中央のモーダルではなく、一覧を見ながら右側でそのまま編集できます。"
+        onClose={closeEditor}
+        actions={isDirty ? <span className="badge" style={{ color: "#b45309", borderColor: "#fcd34d", background: "#fef3c7" }}>未保存</span> : null}
+      >
+        <div className="row liquid-page" style={{ alignItems: "flex-start", flexWrap: "wrap" }}>
               <div style={{ flex: 1, minWidth: 280 }}>
                 <div className="h2">アクション名</div>
                 <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
@@ -1323,10 +1338,6 @@ export default function ActionsPage() {
                   </div>
                 </div>
 
-                <div style={{ height: 14 }} />
-                <button className="btn btn--primary" onClick={saveToFirestore}>
-                  保存
-                </button>
               </div>
 
               <div style={{ flex: 1, minWidth: 280 }}>
@@ -1598,12 +1609,22 @@ export default function ActionsPage() {
                     />
                   </div>
                 )}
-
               </div>
-            </div>
-          </div>
         </div>
-      ) : null}
+      </RightDrawer>
+
+      <StickySaveBar
+        visible={isModalOpen}
+        dirty={isDirty}
+        saving={saving}
+        error={saveError}
+        message={saveMessage}
+        onSave={saveToFirestore}
+        onSecondary={closeEditor}
+        secondaryLabel="閉じる"
+        saveLabel={rows.some((r) => r.id === id) ? "変更を保存" : "作成する"}
+        saveDisabled={!workspaceId || !siteId || !id.trim()}
+      />
 
       <MediaPickerModal
         open={pickerOpen}
