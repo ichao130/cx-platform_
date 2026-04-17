@@ -19,6 +19,15 @@ import { callOpenAIJson } from "../services/openaiJson";
 import { defineString, defineSecret } from "firebase-functions/params";
 import Stripe from "stripe";
 import { getMisocaAccessToken, getMisocaStatus, sendMisocaInvoicesJob } from "../services/misoca";
+import {
+  BACKUP_INCLUDED_COLLECTIONS,
+  BACKUP_OMITTED_COLLECTIONS,
+  createBackupDownloadUrl,
+  enqueueBackupRun,
+  getBackupSettings,
+  listBackupRuns,
+  upsertBackupSettings,
+} from "../services/backup";
 /* =========================================
    Schemas
 ========================================= */
@@ -253,6 +262,25 @@ const SiteDomainsUpdateReqSchema = z.object({
 
 const SiteDeleteReqSchema = z.object({
   site_id: z.string().min(1),
+});
+
+const BackupSettingsUpsertReqSchema = z.object({
+  enabled: z.boolean(),
+  hour_jst: z.number().int().min(0).max(23),
+  retention_days: z.number().int().min(1).max(365),
+});
+
+const BackupRunReqSchema = z.object({
+  scope: z.enum(["all", "workspace"]).optional().default("all"),
+  workspace_id: z.string().min(1).optional(),
+});
+
+const BackupListReqSchema = z.object({
+  limit: z.number().int().min(1).max(100).optional().default(30),
+});
+
+const BackupDownloadReqSchema = z.object({
+  run_id: z.string().min(1),
 });
 
 const ScenarioTargetingRuleSchema = z.object({
@@ -4916,6 +4944,128 @@ export function registerV1Routes(app: Express) {
     }
   });
   app.options("/v1/ops/users/delete", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /* --- /v1/ops/backups/settings/get --- バックアップ設定取得 --- */
+  app.post("/v1/ops/backups/settings/get", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      await requirePlatformAdmin(req);
+      const settings = await getBackupSettings();
+      return res.json({
+        ok: true,
+        settings: {
+          enabled: settings.enabled,
+          hour_jst: settings.hourJst,
+          retention_days: settings.retentionDays,
+          updated_at: settings.updatedAt,
+          updated_by: settings.updatedBy,
+        },
+        scope: {
+          included_collections: BACKUP_INCLUDED_COLLECTIONS,
+          omitted_collections: BACKUP_OMITTED_COLLECTIONS,
+        },
+      });
+    } catch (e: any) {
+      console.error("[/v1/ops/backups/settings/get] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/backups/settings/get", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /* --- /v1/ops/backups/settings/upsert --- バックアップ設定更新 --- */
+  app.post("/v1/ops/backups/settings/upsert", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      const updatedBy = await requirePlatformAdmin(req);
+      const body = BackupSettingsUpsertReqSchema.parse(req.body || {});
+      const settings = await upsertBackupSettings(
+        {
+          enabled: body.enabled,
+          hourJst: body.hour_jst,
+          retentionDays: body.retention_days,
+        },
+        updatedBy
+      );
+      return res.json({
+        ok: true,
+        settings: {
+          enabled: settings.enabled,
+          hour_jst: settings.hourJst,
+          retention_days: settings.retentionDays,
+          updated_at: settings.updatedAt,
+          updated_by: settings.updatedBy,
+        },
+      });
+    } catch (e: any) {
+      console.error("[/v1/ops/backups/settings/upsert] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/backups/settings/upsert", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /* --- /v1/ops/backups/list --- バックアップ実行履歴一覧 --- */
+  app.post("/v1/ops/backups/list", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      await requirePlatformAdmin(req);
+      const body = BackupListReqSchema.parse(req.body || {});
+      const runs = await listBackupRuns(body.limit);
+      return res.json({ ok: true, runs });
+    } catch (e: any) {
+      console.error("[/v1/ops/backups/list] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/backups/list", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /* --- /v1/ops/backups/run --- 手動バックアップをキューに積む --- */
+  app.post("/v1/ops/backups/run", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      const createdBy = await requirePlatformAdmin(req);
+      const body = BackupRunReqSchema.parse(req.body || {});
+      if (body.scope === "workspace") {
+        if (!body.workspace_id) {
+          return res.status(400).json({ error: "workspace_id required" });
+        }
+        const ws = await pickWorkspaceById(body.workspace_id);
+        if (!ws) {
+          return res.status(404).json({ error: "workspace_not_found" });
+        }
+      }
+
+      const { runId } = await enqueueBackupRun({
+        mode: "manual",
+        scope: body.scope,
+        workspaceId: body.scope === "workspace" ? String(body.workspace_id || "") : null,
+        createdBy,
+      });
+      return res.json({ ok: true, run_id: runId });
+    } catch (e: any) {
+      console.error("[/v1/ops/backups/run] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/backups/run", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /* --- /v1/ops/backups/download-url --- バックアップの一時URL取得 --- */
+  app.post("/v1/ops/backups/download-url", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      await requirePlatformAdmin(req);
+      const body = BackupDownloadReqSchema.parse(req.body || {});
+      const result = await createBackupDownloadUrl(body.run_id);
+      return res.json({ ok: true, ...result });
+    } catch (e: any) {
+      console.error("[/v1/ops/backups/download-url] error:", e);
+      const status =
+        e?.message === "backup_run_not_found" ? 404
+        : e?.message === "backup_artifact_not_ready" || e?.message === "backup_artifact_expired" ? 409
+        : opsErrStatus(e);
+      return res.status(status).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/backups/download-url", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
 
   /* ============================================================
      ウェルカムメール送信（認証済みユーザーが初回登録完了時に呼ぶ）

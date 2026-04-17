@@ -2,6 +2,7 @@
 import { setGlobalOptions } from "firebase-functions/v2";
 import { onCall, HttpsError, onRequest } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
+import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { defineSecret } from "firebase-functions/params";
 
 import express from "express";
@@ -32,6 +33,7 @@ const MISOCA_CLIENT_SECRET = defineSecret("MISOCA_CLIENT_SECRET");
 import { registerV1Routes } from "./routes/v1";
 import { registerMcpRoutes } from "./routes/mcp";
 import { sendMisocaInvoicesJob } from "./services/misoca";
+import { executeQueuedBackupRun, maybeEnqueueScheduledBackup } from "./services/backup";
 
 const app = express();
 app.set("etag", false);
@@ -296,6 +298,52 @@ export const sendMonthlyMisocaInvoices = onSchedule(
       console.log("[sendMonthlyMisocaInvoices] 完了:", result);
     } catch (e) {
       console.error("[sendMonthlyMisocaInvoices] エラー:", e);
+    }
+  }
+);
+
+/**
+ * ==========================
+ * Scheduled: 毎日バックアップのキュー投入
+ * 毎時0分に起動し、JST時刻が設定値と一致する場合だけ queued を作成する
+ * ==========================
+ */
+export const enqueueDailyBackups = onSchedule(
+  {
+    region: "asia-northeast1",
+    schedule: "0 * * * *",
+    timeZone: "UTC",
+    timeoutSeconds: 180,
+  },
+  async () => {
+    try {
+      const result = await maybeEnqueueScheduledBackup();
+      console.log("[enqueueDailyBackups] result:", result);
+    } catch (e) {
+      console.error("[enqueueDailyBackups] error:", e);
+    }
+  }
+);
+
+/**
+ * ==========================
+ * Firestore Trigger: backup_runs の queued を処理
+ * ==========================
+ */
+export const processBackupRun = onDocumentCreated(
+  {
+    region: "asia-northeast1",
+    document: "backup_runs/{runId}",
+    memory: "1GiB",
+    timeoutSeconds: 540,
+  },
+  async (event) => {
+    const runId = String(event.params.runId || "");
+    if (!runId) return;
+    try {
+      await executeQueuedBackupRun(runId);
+    } catch (e) {
+      console.error(`[processBackupRun] runId=${runId} error:`, e);
     }
   }
 );
