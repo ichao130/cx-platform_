@@ -5,10 +5,8 @@ type RoleKey = "owner" | "admin" | "member" | "viewer" | null;
 
 type AdminContextHeaderProps = {
   workspaceName: string;
-  workspaceId: string | null;
   workspaceDescription?: string;
   siteName?: string;
-  siteId?: string | null;
   role: RoleKey;
   canAccess: (key: "analytics" | "ai" | "members" | "billing") => boolean;
 };
@@ -23,20 +21,12 @@ function roleMeta(role: RoleKey) {
 
 export default function AdminContextHeader({
   workspaceName,
-  workspaceId,
   workspaceDescription,
   siteName,
-  siteId,
   role,
   canAccess,
 }: AdminContextHeaderProps) {
   const roleBadge = roleMeta(role);
-  const capabilities = [
-    canAccess("analytics") ? "Analytics" : null,
-    canAccess("ai") ? "AI" : null,
-    canAccess("members") ? "Members" : null,
-    canAccess("billing") ? "Billing" : null,
-  ].filter(Boolean) as string[];
 
   return (
     <div
@@ -65,7 +55,6 @@ export default function AdminContextHeader({
         }}
       >
         <div style={{ minWidth: 0, flex: 1 }}>
-          <div className="small" style={{ marginBottom: 8, opacity: 0.78 }}>Current Context</div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
             <div style={{ fontSize: 18, fontWeight: 800, color: "var(--text)" }}>{workspaceName || "ワークスペース未選択"}</div>
             {siteName ? (
@@ -90,19 +79,12 @@ export default function AdminContextHeader({
               {roleBadge.label}
             </span>
           </div>
-          <div className="small" style={{ display: "flex", gap: 10, flexWrap: "wrap", lineHeight: 1.6 }}>
-            {workspaceId ? <span>workspace: <code>{workspaceId}</code></span> : null}
-            {siteId ? <span>site: <code>{siteId}</code></span> : null}
-            {workspaceDescription ? <span>{workspaceDescription}</span> : null}
-          </div>
+          {workspaceDescription ? (
+            <div className="small" style={{ lineHeight: 1.6 }}>{workspaceDescription}</div>
+          ) : null}
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end", minWidth: 220 }}>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
-            {capabilities.map((capability) => (
-              <span key={capability} className="badge">{capability}</span>
-            ))}
-          </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
             <Link className="btn btn--sm" to="/sites">サイト管理</Link>
             {canAccess("members") ? <Link className="btn btn--sm" to="/workspace/members">メンバー</Link> : null}

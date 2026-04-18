@@ -6,6 +6,8 @@ import { usePlanLimit } from '../hooks/usePlanLimit';
 import { genId } from '../components/id';
 import { useBeforeUnload } from '../hooks/useBeforeUnload';
 import { CodeEditor } from '../components/CodeEditor';
+import RightDrawer from '../components/RightDrawer';
+import StickySaveBar from '../components/StickySaveBar';
 
 function workspaceKeyForUid(uid?: string | null) {
   return uid ? `cx_admin_workspace_id:${uid}` : 'cx_admin_workspace_id';
@@ -220,7 +222,10 @@ export default function TemplatesPage() {
 
   const selectedWorkspaceName = useMemo(() => workspaceLabel(workspaces, workspaceId), [workspaces, workspaceId]);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  useBeforeUnload(isModalOpen);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [saveMessage, setSaveMessage] = useState('');
+  const [savedPayloadStr, setSavedPayloadStr] = useState<string | null>(null);
 
   const [sample, setSample] = useState<SampleData>({
     title: 'テスト表示',
@@ -317,6 +322,12 @@ export default function TemplatesPage() {
     [workspaceId, siteId, type, name, html, css]
   );
 
+  const isDirty = useMemo(() => {
+    if (savedPayloadStr === null) return false;
+    return JSON.stringify(payload) !== savedPayloadStr;
+  }, [payload, savedPayloadStr]);
+  useBeforeUnload(isModalOpen && isDirty);
+
   const previewSrcDoc = useMemo(() => {
     return buildPreviewSrcDoc({ html, css, data: sample });
   }, [html, css, sample]);
@@ -327,10 +338,14 @@ export default function TemplatesPage() {
     setType('modal');
     setHtml(DEFAULTS.modal.html);
     setCss(DEFAULTS.modal.css);
+    setSaveError('');
+    setSaveMessage('');
+    setSavedPayloadStr(null);
   }
 
   function openCreateModal() {
     resetEditor();
+    setSavedPayloadStr(JSON.stringify({ workspaceId, siteId: siteId || undefined, type: 'modal', name: 'Default', html: DEFAULTS.modal.html, css: DEFAULTS.modal.css }));
     setIsModalOpen(true);
   }
 
@@ -343,16 +358,36 @@ export default function TemplatesPage() {
     // ?? を使い、空文字列も意図的な値として保持する（|| だと空文字→デフォルトに戻ってしまう）
     setHtml(row.data.html ?? DEFAULTS[row.data.type].html);
     setCss(row.data.css ?? DEFAULTS[row.data.type].css);
+    setSaveError('');
+    setSaveMessage('');
+    setSavedPayloadStr(JSON.stringify(row.data));
     setIsModalOpen(true);
+  }
+
+  function closeEditor() {
+    if (isDirty && !window.confirm('保存されていない変更があります。閉じますか？')) return;
+    setIsModalOpen(false);
+    setSaveError('');
+    setSaveMessage('');
   }
 
   async function createOrUpdate() {
     if (!workspaceId) throw new Error('workspaceId required');
-    const isNew = !rows.some((r) => r.id === id.trim());
-    if (isNew) await assertPlanLimit(workspaceId, "templates");
-    await setDoc(doc(db, 'templates', id.trim()), payload, { merge: true });
-    resetEditor();
-    setIsModalOpen(false);
+    try {
+      setSaving(true);
+      setSaveError('');
+      setSaveMessage('');
+      const isNew = !rows.some((r) => r.id === id.trim());
+      if (isNew) await assertPlanLimit(workspaceId, "templates");
+      await setDoc(doc(db, 'templates', id.trim()), payload, { merge: true });
+      setSavedPayloadStr(JSON.stringify(payload));
+      setSaveMessage('テンプレートを保存しました。');
+    } catch (e: any) {
+      setSaveError(e?.message || String(e));
+      throw e;
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -470,42 +505,15 @@ export default function TemplatesPage() {
         </div>
       </div>
 
-      {isModalOpen ? (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(15,23,42,0.24)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 24,
-            zIndex: 50,
-          }}
-          onClick={() => {
-            if (!window.confirm('保存されていない変更があります。閉じますか？')) return;
-            setIsModalOpen(false);
-          }}
-        >
-          <div
-            className="card liquid-page"
-            style={{ width: 'min(1100px, 100%)', maxHeight: '88vh', overflow: 'auto', minWidth: 0 }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="page-header" style={{ marginBottom: 10 }}>
-              <div className="page-header__meta">
-                <h2 className="h1" style={{ fontSize: 22 }}>{rows.some((r) => r.id === id) ? 'テンプレートを編集' : 'テンプレートを作成'}</h2>
-                <div className="small">新規登録・編集はモーダルで行います。HTML・CSS・プレビューはここで確認してください。</div>
-              </div>
-              <div className="page-header__actions">
-                <button className="btn" onClick={() => {
-                  if (!window.confirm('保存されていない変更があります。閉じますか？')) return;
-                  setIsModalOpen(false);
-                }}>✕ 閉じる</button>
-              </div>
-            </div>
-
-            <div className="row liquid-page" style={{ alignItems: 'flex-start', flexWrap: 'wrap' }}>
+      <RightDrawer
+        open={isModalOpen}
+        width={1120}
+        title={rows.some((r) => r.id === id) ? 'テンプレートを編集' : 'テンプレートを作成'}
+        description="一覧を見ながら、HTML・CSS・プレビューを右側でまとめて調整できます。"
+        onClose={closeEditor}
+        actions={isDirty ? <span className="badge" style={{ color: '#b45309', borderColor: '#fcd34d', background: '#fef3c7' }}>未保存</span> : null}
+      >
+        <div className="row liquid-page" style={{ alignItems: 'flex-start', flexWrap: 'wrap' }}>
               <div style={{ flex: 1, minWidth: 280 }}>
                 <div className="h2">テンプレート名</div>
                 <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
@@ -583,9 +591,6 @@ export default function TemplatesPage() {
                 <div style={{ height: 10 }} />
                 <div className="h2">CSSスタイル</div>
                 <CodeEditor value={css} onChange={setCss} minHeight={180} placeholder="/* CSSをここに書いてください */" />
-
-                <div style={{ height: 14 }} />
-                <button className="btn btn--primary" onClick={createOrUpdate}>保存</button>
               </div>
 
               <div style={{ flex: 1, minWidth: 280 }}>
@@ -634,10 +639,21 @@ export default function TemplatesPage() {
                 </div>
 
               </div>
-            </div>
-          </div>
         </div>
-      ) : null}
+      </RightDrawer>
+
+      <StickySaveBar
+        visible={isModalOpen}
+        dirty={isDirty}
+        saving={saving}
+        error={saveError}
+        message={saveMessage}
+        onSave={() => { void createOrUpdate().catch(() => {}); }}
+        onSecondary={closeEditor}
+        secondaryLabel="閉じる"
+        saveLabel={rows.some((r) => r.id === id) ? '変更を保存' : '作成する'}
+        saveDisabled={!workspaceId || !id.trim()}
+      />
     </div>
   );
 }

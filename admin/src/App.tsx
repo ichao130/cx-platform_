@@ -861,10 +861,8 @@ function AppShell({ children }: { children: React.ReactNode }) {
       <main style={{ minWidth: 0, width: "100%", overflowX: "hidden" }}>
         <AdminContextHeader
           workspaceName={selectedWorkspaceName}
-          workspaceId={workspaceId}
           workspaceDescription={selectedWorkspaceDescription}
           siteName={selectedSiteName}
-          siteId={selectedSiteRow?.id || null}
           role={workspaceRole}
           canAccess={canAccess}
         />

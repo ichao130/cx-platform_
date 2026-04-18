@@ -12,6 +12,7 @@ import {
 import { db, apiPostJson, assertPlanLimit } from "../firebase";
 import { usePlanLimit } from "../hooks/usePlanLimit";
 import { uploadMediaToWorkspace } from "../lib/media";
+import RightDrawer from "../components/RightDrawer";
 
 /* =========================
  * Site helpers
@@ -919,36 +920,15 @@ export default function MediaPage() {
         </div>
       </div>
 
-      {selected ? (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(15,23,42,0.24)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 24,
-            zIndex: 50,
-          }}
-          onClick={() => setSelected(null)}
-        >
-          <div
-            className="card liquid-page"
-            style={{ width: 'min(860px, 100%)', maxHeight: '88vh', overflow: 'auto', minWidth: 0 }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="page-header" style={{ marginBottom: 10 }}>
-              <div className="page-header__meta">
-                <h2 className="h1" style={{ fontSize: 22 }}>メディア詳細</h2>
-                <div className="small">使用箇所や保存先を確認できます。削除前に参照先を確認してください。</div>
-              </div>
-              <div className="page-header__actions">
-                <button className="btn" onClick={() => setSelected(null)}>閉じる</button>
-              </div>
-            </div>
-
-            <div className="row liquid-page" style={{ alignItems: 'flex-start', flexWrap: 'wrap' }}>
+      <RightDrawer
+        open={!!selected}
+        width={900}
+        title="メディア詳細"
+        description="使用箇所や保存先を確認できます。削除前に参照先を確認してください。"
+        onClose={() => setSelected(null)}
+      >
+        {selected ? (
+          <div className="row liquid-page" style={{ alignItems: 'flex-start', flexWrap: 'wrap' }}>
               <div style={{ flex: 1, minWidth: 280 }}>
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                   {isImage(selected.data) ? (
@@ -1032,9 +1012,8 @@ export default function MediaPage() {
                 </button>
               </div>
             </div>
-          </div>
-        </div>
-      ) : null}
+        ) : null}
+      </RightDrawer>
 
       {mediaError && (
         <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: "#dc2626", color: "#fff", padding: "12px 24px", borderRadius: 12, fontWeight: 600, fontSize: 13, zIndex: 9999, maxWidth: "80vw", textAlign: "center", whiteSpace: "pre-line", boxShadow: "0 8px 24px rgba(0,0,0,.18)" }}>

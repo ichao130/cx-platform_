@@ -175,6 +175,26 @@ function StatCard({ label, value, sub, accent }: { label: string; value: string 
   );
 }
 
+function SectionLead({
+  title,
+  description,
+  meta,
+}: {
+  title: string;
+  description?: string;
+  meta?: React.ReactNode;
+}) {
+  return (
+    <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+      <div>
+        <div className="h2" style={{ marginBottom: 4 }}>{title}</div>
+        {description ? <div className="small" style={{ opacity: 0.68 }}>{description}</div> : null}
+      </div>
+      {meta ? <div className="small" style={{ opacity: 0.55 }}>{meta}</div> : null}
+    </div>
+  );
+}
+
 // ---- Event badge color ----
 const EVENT_COLOR: Record<string, { bg: string; text: string; label: string }> = {
   pageview:   { bg: "#f1f5f9", text: "#64748b", label: "PV" },
@@ -884,6 +904,41 @@ export default function AnalyticsPage() {
     return String(s?.data?.name || s?.data?.siteName || siteId || "");
   }, [sites, siteId]);
 
+  const focusCards = useMemo(() => {
+    const cards = [
+      {
+        key: "pv",
+        label: "ページビュー",
+        value: fmtInt(dailyTrend.reduce((sum, d) => sum + safeNum(d.pv), 0)),
+        sub: `${dateRangeLabel} の閲覧量`,
+        accent: "#2563eb",
+      },
+      {
+        key: "imp",
+        label: "施策表示",
+        value: fmtInt(dailyTrend.reduce((sum, d) => sum + safeNum(d.imp), 0)),
+        sub: "シナリオ表示回数",
+        accent: "#7c3aed",
+      },
+      purchaseLogs.length > 0
+        ? {
+            key: "revenue",
+            label: "売上合計",
+            value: `¥${Math.round(totalRevenue).toLocaleString()}`,
+            sub: `${purchaseCount}件の購入`,
+            accent: "#16a34a",
+          }
+        : {
+            key: "cv",
+            label: "コンバージョン",
+            value: fmtInt(dailyTrend.reduce((sum, d) => sum + safeNum(d.cv), 0)),
+            sub: "期間内のCV数",
+            accent: "#f59e0b",
+          },
+    ];
+    return cards;
+  }, [dailyTrend, dateRangeLabel, purchaseCount, purchaseLogs.length, totalRevenue]);
+
   // サイトのドメイン（URLリンク生成用）
   const siteDomain = useMemo(() => {
     const s = sites.find((s) => s.id === siteId);
@@ -993,7 +1048,7 @@ export default function AnalyticsPage() {
 
       {/* 管理者除外ブックマークレット */}
       {siteDomain && (
-        <div style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span className="small" style={{ opacity: 0.5 }}>🚫 自分の訪問を除外:</span>
           {siteDomain ? (
             <>
@@ -1035,11 +1090,32 @@ export default function AnalyticsPage() {
 
       {siteId && (
         <>
+          <div className="card" style={{ marginBottom: 24, padding: 18, background: "linear-gradient(180deg,#ffffff,#f8fbff)" }}>
+            <SectionLead
+              title="まず見る3指標"
+              description="最初に変化を追いやすい数値だけを前に出しています。詳しい分析はこの下で見られます。"
+              meta={<span>{selectedSiteName || "サイト未選択"} / {dateRangeLabel}</span>}
+            />
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+              {focusCards.map((card) => (
+                <div key={card.key} style={{ border: "1px solid rgba(15,23,42,.08)", borderRadius: 14, padding: 16, background: "#fff" }}>
+                  <div className="small" style={{ opacity: 0.68 }}>{card.label}</div>
+                  <div style={{ fontSize: 28, fontWeight: 800, lineHeight: 1.1, marginTop: 8, letterSpacing: "-.03em", color: card.accent }}>{card.value}</div>
+                  <div className="small" style={{ opacity: 0.58, marginTop: 6 }}>{card.sub}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
           {/* ===== Section 1: リアルタイム ===== */}
           <div style={{ marginBottom: 32 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
               <LiveDot />
-              <div className="h2" style={{ margin: 0 }}>リアルタイム <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（過去30分）</span></div>
+              <SectionLead
+                title="リアルタイム"
+                description="直近30分の動きです。今まさに反応があるかだけを確認できます。"
+                meta="過去30分"
+              />
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }}>
               <StatCard label="アクティブ訪問者" value={fmtInt(activeVisitors)} sub="ユニーク訪問者数" accent="#22c55e" />
@@ -1084,7 +1160,7 @@ export default function AnalyticsPage() {
                   </div>
                   {/* デバッグ: 購入ログのvid確認 */}
                   <details style={{ marginBottom: 10 }}>
-                    <summary style={{ fontSize: 11, color: "#94a3b8", cursor: "pointer" }}>🔍 デバッグ情報（帰属が出ない場合はここを確認）</summary>
+                    <summary style={{ fontSize: 11, color: "#94a3b8", cursor: "pointer" }}>開発確認用（帰属確認が必要なときだけ開く）</summary>
                     <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12, marginTop: 6, fontSize: 11, fontFamily: "monospace" }}>
                       <div style={{ fontWeight: 700, marginBottom: 6 }}>📦 直近の購入ログ（vid が空なら cookie未取得）</div>
                       {purchaseLogs.slice(0, 5).map((l, i) => (
@@ -1551,6 +1627,7 @@ export default function AnalyticsPage() {
 
             {/* フィルターバー */}
             <div style={{ display: "flex", gap: 8, flexWrap: "nowrap", alignItems: "center", marginBottom: 12, padding: "10px 14px", background: "rgba(15,23,42,.03)", borderRadius: 10, border: "1px solid rgba(15,23,42,.07)", overflowX: "auto" }}>
+              <span className="small" style={{ opacity: 0.55, whiteSpace: "nowrap", fontWeight: 700, marginRight: 4 }}>このブロックだけに適用</span>
               {/* 絞り込みタイプ */}
               <div style={{ display: "flex", border: "1px solid rgba(15,23,42,.12)", borderRadius: 8, overflow: "hidden", flexShrink: 0 }}>
                 {([["all", "全員"], ["new", "🆕 新規"], ["repeat", "🔁 リピート"], ["purchase", "💰 購入あり"], ["cv", "✅ CV あり"]] as const).map(([val, label]) => (
