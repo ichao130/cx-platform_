@@ -781,7 +781,6 @@ function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <div style={{ display: "grid", gap: 4 }}>
             {canShow(canAccess, "dashboard") && <SidebarLink to="/dashboard">ダッシュボード</SidebarLink>}
-            {canShow(canAccess, "sites") && <SidebarLink to="/sites">サイト</SidebarLink>}
             {canShow(canAccess, "scenarios") && <SidebarLink to="/scenarios">シナリオ</SidebarLink>}
             {canShow(canAccess, "actions") && <SidebarLink to="/actions">アクション</SidebarLink>}
             {canShow(canAccess, "templates") && <SidebarLink to="/templates">テンプレート</SidebarLink>}
@@ -798,6 +797,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <div style={{ display: "grid", gap: 4 }}>
             {(isPlatformAdmin || canShow(canAccess, "workspaces")) && <SidebarLink to="/workspaces">ワークスペース</SidebarLink>}
+            {canShow(canAccess, "sites") && <SidebarLink to="/sites">サイト</SidebarLink>}
             {canShow(canAccess, "members") && <SidebarLink to="/workspace/members">メンバー</SidebarLink>}
             {canShow(canAccess, "billing") && <SidebarLink to="/workspace/billing">契約 / Billing</SidebarLink>}
           </div>
