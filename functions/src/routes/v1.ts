@@ -3477,6 +3477,10 @@ export function registerV1Routes(app: Express) {
 
       const db = adminDb();
 
+      // 0. プラットフォームデフォルトテンプレートを一度だけ取得
+      const platformTplSnap = await db.collection("system_config").doc("platform_templates").get();
+      const platformTpls = platformTplSnap.exists ? (platformTplSnap.data() || {}) as Record<string, { html: string; css: string }> : {};
+
       // 1. active scenarios for this site
       const scenarioSnap = await db
         .collection("scenarios")
@@ -3514,6 +3518,15 @@ export function registerV1Routes(app: Express) {
             }
           }
 
+          // ワークスペース固有テンプレートがない場合、プラットフォームデフォルトにフォールバック
+          if (!template) {
+            const actionType = String(a.type || "modal");
+            const ptpl = platformTpls[actionType];
+            if (ptpl && (ptpl.html || ptpl.css)) {
+              template = { template_id: `platform_${actionType}`, html: ptpl.html || "", css: ptpl.css || "" };
+            }
+          }
+
           // launcher用: modalTemplateId があればモーダルテンプレートも埋め込む
           let modalTemplate = null;
           if (a.type === "launcher" && a.modalTemplateId) {
@@ -3521,6 +3534,13 @@ export function registerV1Routes(app: Express) {
             if (mtSnap.exists) {
               const mt = mtSnap.data() as any;
               modalTemplate = { template_id: a.modalTemplateId, html: mt.html || "", css: mt.css || "" };
+            }
+          }
+          // launcher用: modalTemplateIdもない場合、プラットフォームのmodalデフォルトにフォールバック
+          if (a.type === "launcher" && !modalTemplate) {
+            const ptpl = platformTpls["modal"];
+            if (ptpl && (ptpl.html || ptpl.css)) {
+              modalTemplate = { template_id: "platform_modal", html: ptpl.html || "", css: ptpl.css || "" };
             }
           }
 
@@ -5066,6 +5086,54 @@ export function registerV1Routes(app: Express) {
     }
   });
   app.options("/v1/ops/backups/download-url", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /* ============================================================
+     /v1/ops/platform-templates — プラットフォームデフォルトテンプレート管理
+     ============================================================ */
+
+  /** POST /v1/ops/platform-templates/get — 現在のデフォルトテンプレートを取得 */
+  app.post("/v1/ops/platform-templates/get", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      if (req.method === "OPTIONS") return res.status(204).send("");
+      await requireAuthUid(req);
+      const db = adminDb();
+      const snap = await db.collection("system_config").doc("platform_templates").get();
+      const data = snap.exists ? snap.data() || {} : {};
+      return res.json({ ok: true, platform_templates: data });
+    } catch (e: any) {
+      console.error("[/v1/ops/platform-templates/get] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/platform-templates/get", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /** POST /v1/ops/platform-templates/upsert — デフォルトテンプレートを保存 */
+  app.post("/v1/ops/platform-templates/upsert", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      if (req.method === "OPTIONS") return res.status(204).send("");
+      await requireAuthUid(req);
+      const body = req.body as any;
+      // body: { type: "modal"|"banner"|"toast"|"launcher", html: string, css: string }
+      const type = String(body.type || "");
+      if (!["modal", "banner", "toast", "launcher"].includes(type)) {
+        return res.status(400).json({ error: "invalid_type" });
+      }
+      const html = String(body.html || "");
+      const css = String(body.css || "");
+      const db = adminDb();
+      await db.collection("system_config").doc("platform_templates").set(
+        { [type]: { html, css }, updatedAt: FieldValue.serverTimestamp() },
+        { merge: true }
+      );
+      return res.json({ ok: true });
+    } catch (e: any) {
+      console.error("[/v1/ops/platform-templates/upsert] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/platform-templates/upsert", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
 
   /* ============================================================
      ウェルカムメール送信（認証済みユーザーが初回登録完了時に呼ぶ）

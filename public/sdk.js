@@ -189,7 +189,8 @@
       image_url: creative.image_url || creative.imageUrl || "",
       cta_text: creative.cta_text || creative.buttonText || creative.button_text || "OK",
       cta_url: creative.cta_url || creative.url || creative.href || "",
-      cta_url_text: creative.cta_url_text || creative.link_text || creative.linkText || "詳細を見る"
+      cta_url_text: creative.cta_url_text || creative.link_text || creative.linkText || "詳細を見る",
+      coupon_code: creative.coupon_code || ""
     };
   }
 
@@ -308,6 +309,50 @@
   }
 
   /* ------------------ RENDERERS ------------------ */
+
+  // data-cx-copy="<text>" ボタンをクリックするとクリップボードにコピーし、
+  // ボタンラベルを一時的に「コピーしました！」に変更する
+  function wireCopyButtons(rootEl) {
+    var btns = rootEl.querySelectorAll("[data-cx-copy]");
+    for (var i = 0; i < btns.length; i++) {
+      (function(btn) {
+        btn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          var text = btn.getAttribute("data-cx-copy") || "";
+          if (!text) return;
+          try {
+            navigator.clipboard.writeText(text).then(function () {
+              var orig = btn.textContent;
+              btn.textContent = "コピーしました！";
+              btn.setAttribute("data-cx-copied", "1");
+              setTimeout(function () {
+                btn.textContent = orig;
+                btn.removeAttribute("data-cx-copied");
+              }, 2000);
+            });
+          } catch (e2) {
+            // fallback
+            try {
+              var ta = document.createElement("textarea");
+              ta.value = text;
+              ta.style.cssText = "position:fixed;opacity:0;top:0;left:0;";
+              document.body.appendChild(ta);
+              ta.select();
+              document.execCommand("copy");
+              ta.remove();
+              var orig2 = btn.textContent;
+              btn.textContent = "コピーしました！";
+              btn.setAttribute("data-cx-copied", "1");
+              setTimeout(function () {
+                btn.textContent = orig2;
+                btn.removeAttribute("data-cx-copied");
+              }, 2000);
+            } catch (e3) {}
+          }
+        });
+      })(btns[i]);
+    }
+  }
 
   function mountAndWireClose(rootEl, onClose, removeHost) {
     function close() {
@@ -436,6 +481,9 @@
           });
         }
       }
+
+      // data-cx-copy ボタン（クーポンコードなど）
+      wireCopyButtons(root);
 
       mountAndWireClose(root, function () {
         postLog(apiBase, {

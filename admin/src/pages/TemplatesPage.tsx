@@ -55,6 +55,7 @@ type SampleData = {
   cta_text: string;
   cta_url: string;
   cta_url_text: string;
+  coupon_code: string;
 };
 
 function renderMiniTemplate(tpl: string, data: Record<string, any>): string {
@@ -129,6 +130,7 @@ const DEFAULTS: Record<TemplateDoc['type'], { html: string; css: string }> = {
     <div class="cx-modal__body">
       {{#if title}}<div class="cx-title">{{title}}</div>{{/if}}
       {{#if body}}<div class="cx-body">{{body}}</div>{{/if}}
+      {{#if coupon_code}}<div class="cx-coupon"><span class="cx-coupon__code">{{coupon_code}}</span><button class="cx-coupon__copy" data-cx-copy="{{coupon_code}}" type="button">コピー</button></div>{{/if}}
       {{#if cta_url}}<a class="cx-btn cx-btn--primary" href="{{cta_url}}" target="_blank" rel="noopener">{{cta_url_text}}</a>{{/if}}
       <button class="cx-btn cx-btn--sub" data-cx-close>{{cta_text}}</button>
     </div>
@@ -144,6 +146,11 @@ const DEFAULTS: Record<TemplateDoc['type'], { html: string; css: string }> = {
 .cx-modal__body{padding:24px 20px 20px;}
 .cx-title{font-weight:800;font-size:20px;line-height:1.3;margin-bottom:8px;padding-right:20px;}
 .cx-body{font-size:14px;line-height:1.75;color:#555;white-space:pre-wrap;margin-bottom:20px;}
+.cx-coupon{display:flex;align-items:center;gap:8px;background:#f8f4ff;border:2px dashed #a78bfa;border-radius:12px;padding:12px 14px;margin-bottom:16px;}
+.cx-coupon__code{flex:1;font-family:monospace;font-size:16px;font-weight:800;letter-spacing:.08em;color:#6d28d9;}
+.cx-coupon__copy{flex-shrink:0;border:none;border-radius:8px;padding:6px 14px;background:#6d28d9;color:#fff;font-size:13px;font-weight:700;cursor:pointer;transition:opacity .15s;}
+.cx-coupon__copy:hover{opacity:.82;}
+.cx-coupon__copy[data-cx-copied]{background:#10b981;}
 .cx-btn{display:block;width:100%;border:none;border-radius:14px;padding:14px;font-weight:700;font-size:15px;cursor:pointer;text-decoration:none;text-align:center;box-sizing:border-box;transition:opacity .15s;}
 .cx-btn+.cx-btn{margin-top:8px;}
 .cx-btn--primary{background:#111;color:#fff;}
@@ -234,6 +241,7 @@ export default function TemplatesPage() {
     cta_text: 'OK',
     cta_url: '',
     cta_url_text: '詳細を見る',
+    coupon_code: '',
   });
 
   // 認証ユーザー取得
@@ -636,6 +644,9 @@ export default function TemplatesPage() {
                   <div style={{ height: 10 }} />
                   <div className="h2">補助リンク文言</div>
                   <input className="input" value={sample.cta_url_text} onChange={(e) => setSample((s) => ({ ...s, cta_url_text: e.target.value }))} />
+                  <div style={{ height: 10 }} />
+                  <div className="h2">クーポンコード（任意）</div>
+                  <input className="input" placeholder="SUMMER2025" value={sample.coupon_code} onChange={(e) => setSample((s) => ({ ...s, coupon_code: e.target.value }))} />
                 </div>
 
               </div>

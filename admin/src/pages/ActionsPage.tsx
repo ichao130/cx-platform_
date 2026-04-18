@@ -74,6 +74,7 @@ type ActionDoc = {
     cta_url_text?: string;
     image_url?: string;
     launcher_image_url?: string; // ランチャーボタン専用画像
+    coupon_code?: string; // クーポンコード（モーダル用）
 
     // primary media id (optional)
     image_media_id?: string;
@@ -187,6 +188,7 @@ function normalizeActionFromDb(a: ActionDoc) {
     imageUrl: a.creative?.image_url ?? "",
     launcherImageUrl: a.creative?.launcher_image_url ?? "",
     imageMediaId: a.creative?.image_media_id ?? "",
+    couponCode: a.creative?.coupon_code ?? "",
     mediaIds: Array.isArray(a.mediaIds) ? a.mediaIds : [],
   };
 }
@@ -501,6 +503,7 @@ export default function ActionsPage() {
   const [imageUrl, setImageUrl] = useState("");
   const [launcherImageUrl, setLauncherImageUrl] = useState("");
   const [imageMediaId, setImageMediaId] = useState<string>("");
+  const [couponCode, setCouponCode] = useState("");
   const [scenarios, setScenarios] = useState<Array<{ id: string; data: ScenarioDoc }>>([]);
 
   const actionUsageMap = useMemo(() => {
@@ -663,6 +666,7 @@ export default function ActionsPage() {
     setImageUrl(f.imageUrl);
     setLauncherImageUrl(f.launcherImageUrl);
     setImageMediaId(f.imageMediaId);
+    setCouponCode(f.couponCode);
     setMediaIds(f.mediaIds);
     setUploadErr("");
     setSaveError("");
@@ -817,6 +821,7 @@ export default function ActionsPage() {
         image_url: imageUrl,
         launcher_image_url: type === "launcher" ? (launcherImageUrl || undefined) : undefined,
         image_media_id: imageMediaId || undefined,
+        coupon_code: couponCode || undefined,
         ...(type === "launcher" ? { launcher_position: launcherPosition } : {}),
       },
       mediaIds,
@@ -839,6 +844,7 @@ export default function ActionsPage() {
     launcherImageUrl,
     launcherPosition,
     imageMediaId,
+    couponCode,
     mediaIds,
   ]);
 
@@ -1337,6 +1343,19 @@ export default function ActionsPage() {
                     <input className="input" value={ctaUrlText} onChange={(e) => setCtaUrlText(e.target.value)} />
                   </div>
                 </div>
+
+                {type === "modal" && (
+                  <>
+                    <div style={{ height: 10 }} />
+                    <div className="row">
+                      <div style={{ flex: 1 }}>
+                        <div className="h2">クーポンコード（任意）</div>
+                        <input className="input" placeholder="SUMMER2025" value={couponCode} onChange={(e) => setCouponCode(e.target.value)} />
+                        <div className="small" style={{ marginTop: 4 }}>入力するとモーダルにコピーボタン付きで表示されます</div>
+                      </div>
+                    </div>
+                  </>
+                )}
 
               </div>
 
