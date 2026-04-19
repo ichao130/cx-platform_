@@ -781,16 +781,26 @@ export default function AnalyticsPage() {
       pages: string[]; eventCount: number; firstRef: string;
       isNew: boolean | null; // true=新規, false=リピート, null=不明（古いログ）
       utmSource: string; utmMedium: string; utmCampaign: string;
+      sessionCount: number; // ユニークセッション数（sid単位）
+      spanDays: number;     // firstSeen〜lastSeen の日数
+      daysSinceLastVisit: number; // 最終訪問からの経過日数
     }>();
+    // sid ごとにセッションを追跡
+    const vidSids = new Map<string, Set<string>>();
+
     const sorted = [...journeyLogs].sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+    const nowMs = Date.now();
     for (const l of sorted) {
       const vid = l.vid || "unknown";
       if (!map.has(vid)) {
-        map.set(vid, { vid, firstSeen: l.createdAt || "", lastSeen: l.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, pages: [], eventCount: 0, firstRef: "", isNew: null, utmSource: "", utmMedium: "", utmCampaign: "" });
+        map.set(vid, { vid, firstSeen: l.createdAt || "", lastSeen: l.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, pages: [], eventCount: 0, firstRef: "", isNew: null, utmSource: "", utmMedium: "", utmCampaign: "", sessionCount: 0, spanDays: 0, daysSinceLastVisit: 0 });
+        vidSids.set(vid, new Set());
       }
       const v = map.get(vid)!;
       v.lastSeen = l.createdAt || v.lastSeen;
       v.eventCount++;
+      // sid 追跡
+      if (l.sid) vidSids.get(vid)!.add(l.sid);
       if (l.event === "pageview") {
         v.pvCount++;
         if (l.path && !v.pages.includes(l.path)) v.pages.push(l.path);
@@ -814,6 +824,15 @@ export default function AnalyticsPage() {
       v.hasPurchase = true;
       v.purchaseRevenue += typeof p.revenue === "number" ? p.revenue : 0;
       v.purchaseCount++;
+    }
+    // セッション数・スパン・最終訪問経過日数を後処理で計算
+    for (const [vid, v] of map) {
+      const sids = vidSids.get(vid);
+      v.sessionCount = sids && sids.size > 0 ? sids.size : 1;
+      const firstMs = v.firstSeen ? new Date(v.firstSeen).getTime() : nowMs;
+      const lastMs  = v.lastSeen  ? new Date(v.lastSeen).getTime()  : nowMs;
+      v.spanDays = Math.round((lastMs - firstMs) / 86400000);
+      v.daysSinceLastVisit = Math.floor((nowMs - lastMs) / 86400000);
     }
     return Array.from(map.values())
       .sort((a, b) => b.lastSeen.localeCompare(a.lastSeen))
@@ -1810,6 +1829,20 @@ export default function AnalyticsPage() {
                                   </span>
                                 )}
                               </div>
+                              {/* 訪問回数・リターン情報 */}
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+                                <span className="small" style={{ opacity: 0.7, fontWeight: 700, color: v.sessionCount >= 3 ? "#2563eb" : "inherit" }}>
+                                  {v.sessionCount}回訪問
+                                </span>
+                                <span className="small" style={{ opacity: 0.5 }}>
+                                  {v.daysSinceLastVisit === 0 ? "本日最終訪問" : `${v.daysSinceLastVisit}日前`}
+                                </span>
+                                {v.spanDays > 0 && (
+                                  <span className="small" style={{ opacity: 0.45 }}>
+                                    初回から{v.spanDays}日
+                                  </span>
+                                )}
+                              </div>
                               <div className="small" style={{ opacity: 0.45, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                 流入元: {sourceSummary}
                               </div>
@@ -1858,6 +1891,15 @@ export default function AnalyticsPage() {
                                 </div>
                               </div>
                               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                <div style={{ padding: "6px 10px", borderRadius: 999, background: "#eff6ff", border: "1px solid #bfdbfe" }}>
+                                  <span className="small" style={{ fontWeight: 700, color: "#1d4ed8" }}>{v?.sessionCount ?? 1}回</span>
+                                  <span className="small" style={{ opacity: 0.65, marginLeft: 4 }}>訪問</span>
+                                </div>
+                                {(v?.spanDays ?? 0) > 0 && (
+                                  <div style={{ padding: "6px 10px", borderRadius: 999, background: "#fff", border: "1px solid rgba(15,23,42,.08)" }}>
+                                    <span className="small" style={{ fontWeight: 700 }}>初回から{v!.spanDays}日</span>
+                                  </div>
+                                )}
                                 <div style={{ padding: "6px 10px", borderRadius: 999, background: "#fff", border: "1px solid rgba(15,23,42,.08)" }}>
                                   <span className="small" style={{ fontWeight: 700 }}>{pageviewCount}</span>
                                   <span className="small" style={{ opacity: 0.55, marginLeft: 4 }}>ページ閲覧</span>
@@ -1900,6 +1942,20 @@ export default function AnalyticsPage() {
                                 const isConversion = ev.event === "conversion";
                                 const isPurchase = ev.event === "purchase";
                                 const isPageleave = ev.event === "pageleave";
+                                // セッション区切り: sid が前のイベントと変わった瞬間に仕切りを表示
+                                const prevEv = i > 0 ? selectedJourney[i - 1] : null;
+                                const isNewSession = i > 0 && ev.sid && prevEv?.sid && ev.sid !== prevEv.sid;
+                                const sessionLabel = isNewSession ? (() => {
+                                  const prevMs = prevEv?.createdAt ? new Date(prevEv.createdAt).getTime() : 0;
+                                  const curMs  = ev.createdAt ? new Date(ev.createdAt).getTime() : 0;
+                                  const diffMin = prevMs && curMs ? Math.round((curMs - prevMs) / 60000) : 0;
+                                  const diffStr = diffMin >= 1440
+                                    ? `${Math.floor(diffMin / 1440)}日後`
+                                    : diffMin >= 60
+                                      ? `${Math.floor(diffMin / 60)}時間後`
+                                      : diffMin > 0 ? `${diffMin}分後` : "";
+                                  return diffStr ? `新しいセッション（${diffStr}）` : "新しいセッション";
+                                })() : null;
                                 const time = ev.createdAt
                                   ? new Date(ev.createdAt).toLocaleTimeString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })
                                   : "—";
@@ -1918,7 +1974,18 @@ export default function AnalyticsPage() {
                                 const attributedScenarioId = isPurchase ? (ev.scenario_id || vidToLastScenario.get(ev.vid || "") || null) : null;
                                 const attributedScenario = attributedScenarioId ? scenarios.find((s) => s.id === attributedScenarioId) : null;
                                 return (
-                                  <div key={ev.id || i} style={{ display: "flex", gap: 16, paddingBottom: 16, position: "relative" }}>
+                                  <React.Fragment key={ev.id || i}>
+                                  {/* セッション区切り */}
+                                  {isNewSession && (
+                                    <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 0 12px", paddingLeft: 32 }}>
+                                      <div style={{ flex: 1, height: 1, background: "rgba(59,130,246,.25)" }} />
+                                      <span style={{ fontSize: 10, fontWeight: 700, color: "#3b82f6", whiteSpace: "nowrap", padding: "2px 8px", borderRadius: 99, background: "#eff6ff", border: "1px solid #bfdbfe" }}>
+                                        🔄 {sessionLabel}
+                                      </span>
+                                      <div style={{ flex: 1, height: 1, background: "rgba(59,130,246,.25)" }} />
+                                    </div>
+                                  )}
+                                  <div style={{ display: "flex", gap: 16, paddingBottom: 16, position: "relative" }}>
                                     {/* ドット */}
                                     <div style={{ flexShrink: 0, width: 32, display: "flex", justifyContent: "center", paddingTop: 2 }}>
                                       <div style={{
@@ -2018,6 +2085,7 @@ export default function AnalyticsPage() {
                                       )}
                                     </div>
                                   </div>
+                                  </React.Fragment>
                                 );
                               })}
                             </div>
