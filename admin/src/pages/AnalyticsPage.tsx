@@ -224,6 +224,30 @@ function EventBadge({ event }: { event: string }) {
 type TrendLine = { key: string; label: string; color: string };
 type TrendPoint = { day: string; label: string; [key: string]: number | string };
 
+function DailyTrendTooltip({ active, payload, label }: { active?: boolean; payload?: any[]; label?: string }) {
+  if (!active || !payload || payload.length === 0) return null;
+
+  const order = ["pv", "session", "uv"];
+  const sortedPayload = [...payload].sort((a, b) => order.indexOf(String(a.dataKey)) - order.indexOf(String(b.dataKey)));
+
+  return (
+    <div style={{ background: "#fff", borderRadius: 8, border: "1px solid rgba(15,23,42,.1)", boxShadow: "0 4px 12px rgba(0,0,0,.08)", padding: "10px 12px", minWidth: 160 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>{label}</div>
+      <div style={{ display: "grid", gap: 4 }}>
+        {sortedPayload.map((entry) => (
+          <div key={String(entry.dataKey)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, fontSize: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 99, background: entry.color || "#94a3b8", flexShrink: 0 }} />
+              <span style={{ color: "#475569", whiteSpace: "nowrap" }}>{entry.name}</span>
+            </div>
+            <span style={{ fontWeight: 700, color: "#0f172a" }}>{fmtInt(entry.value)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function TrendChart({ data, lines }: { data: TrendPoint[]; lines: TrendLine[] }) {
   const W = 560, H = 160;
   const pad = { t: 14, r: 12, b: 28, l: 38 };
@@ -1271,10 +1295,7 @@ export default function AnalyticsPage() {
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,.06)" />
                       <XAxis dataKey="label" tick={{ fontSize: 10, fill: "rgba(15,23,42,.45)" }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fontSize: 10, fill: "rgba(15,23,42,.45)" }} axisLine={false} tickLine={false} />
-                      <Tooltip
-                        contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid rgba(15,23,42,.1)", boxShadow: "0 4px 12px rgba(0,0,0,.08)" }}
-                        labelStyle={{ fontWeight: 700, marginBottom: 4 }}
-                      />
+                      <Tooltip content={<DailyTrendTooltip />} />
                       <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
                       <Area type="monotone" dataKey="pv" name="ページビュー" stroke="#2563eb" strokeWidth={2} fill="url(#gradPv)" dot={{ r: 3, fill: "#2563eb", strokeWidth: 0 }} activeDot={{ r: 5 }} />
                       <Area type="monotone" dataKey="session" name="セッション数" stroke="#7c3aed" strokeWidth={2} fill="url(#gradSession)" dot={{ r: 3, fill: "#7c3aed", strokeWidth: 0 }} activeDot={{ r: 5 }} />
@@ -1671,14 +1692,19 @@ export default function AnalyticsPage() {
                 <div className="small">期間内の訪問データがありません</div>
               </div>
             ) : (
-              <div style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: 16, alignItems: "start" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "340px 1fr", gap: 16, alignItems: "start" }}>
 
                 {/* 左: 訪問者リスト */}
                 <div className="card" style={{ padding: 0, overflow: "hidden" }}>
                   <div style={{ padding: "12px 16px", borderBottom: "1px solid rgba(15,23,42,.07)", background: "rgba(15,23,42,.02)" }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                      <div className="small" style={{ fontWeight: 700 }}>
-                        {filteredVisitorList.length === 0 ? "条件に一致する訪問者なし" : `訪問者 ${filteredVisitorList.length}人`}
+                      <div>
+                        <div className="small" style={{ fontWeight: 700 }}>
+                          {filteredVisitorList.length === 0 ? "条件に一致する訪問者なし" : `訪問者 ${filteredVisitorList.length}人`}
+                        </div>
+                        <div className="small" style={{ opacity: 0.5, marginTop: 2 }}>
+                          新しい動きから順に表示
+                        </div>
                       </div>
                       {(visitorFilter !== "all" || journeyFilterFrom || journeyFilterTo || utmFilter) && (
                         <button
@@ -1710,6 +1736,30 @@ export default function AnalyticsPage() {
                       const durationMin = Math.round(v.totalDuration / 60);
                       const lastTime = dispLastSeen ? new Date(dispLastSeen).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
                       const vidShort = v.vid.slice(0, 8) + "…";
+                      const visitorTypeLabel = v.isNew === true ? "新規" : v.isNew === false ? "リピート" : null;
+                      const visitorTypeStyle = v.isNew === true
+                        ? { background: "#f0fdf4", color: "#15803d" }
+                        : { background: "#f1f5f9", color: "#475569" };
+                      const statusLabel = dispHasPurchase
+                        ? `購入 ${dispPurchaseCount}件`
+                        : v.hasConversion
+                          ? "CVあり"
+                          : v.hasImpression
+                            ? "施策表示"
+                            : "ページ閲覧のみ";
+                      const statusStyle = dispHasPurchase
+                        ? { background: "#fefce8", color: "#ca8a04" }
+                        : v.hasConversion
+                          ? { background: "#f0fdf4", color: "#16a34a" }
+                          : v.hasImpression
+                            ? { background: "#eff6ff", color: "#2563eb" }
+                            : { background: "rgba(15,23,42,.06)", color: "#475569" };
+                      const purchaseSummary = dispHasPurchase
+                        ? `¥${dispPurchaseRevenue.toLocaleString()}`
+                        : v.hasConversion
+                          ? "CVあり"
+                          : "購入なし";
+                      const sourceSummary = v.firstRef ? formatRef(v.firstRef) : "直接流入";
                       // vid から色を生成
                       const hue = v.vid.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360;
                       return (
@@ -1717,13 +1767,14 @@ export default function AnalyticsPage() {
                           key={v.vid}
                           onClick={() => setSelectedVid(isSelected ? null : v.vid)}
                           style={{
-                            padding: "12px 16px", cursor: "pointer", borderBottom: "1px solid rgba(15,23,42,.05)",
+                            padding: "14px 16px", cursor: "pointer", borderBottom: "1px solid rgba(15,23,42,.05)",
                             background: isSelected ? `hsla(${hue},60%,96%,1)` : "transparent",
                             borderLeft: isSelected ? `3px solid hsl(${hue},60%,50%)` : "3px solid transparent",
-                            transition: "background .15s",
+                            boxShadow: isSelected ? `inset 0 0 0 1px hsla(${hue},60%,70%,.4)` : "none",
+                            transition: "background .15s, box-shadow .15s",
                           }}
                         >
-                          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
                             {/* アバター */}
                             <div style={{
                               width: 32, height: 32, borderRadius: 99, flexShrink: 0,
@@ -1734,43 +1785,37 @@ export default function AnalyticsPage() {
                               {v.vid.slice(0, 1).toUpperCase()}
                             </div>
                             <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
-                                <code style={{ fontSize: 11, opacity: 0.7 }}>{vidShort}</code>
-                                {v.isNew === true && (
-                                  <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 20, background: "#f0fdf4", color: "#15803d" }}>新規</span>
-                                )}
-                                {v.isNew === false && (
-                                  <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 20, background: "#f1f5f9", color: "#475569" }}>リピート</span>
-                                )}
-                                {dispHasPurchase && (
-                                  <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 20, background: "#fefce8", color: "#ca8a04" }}>💰 購入</span>
-                                )}
-                                {v.hasConversion && !dispHasPurchase && (
-                                  <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 20, background: "#f0fdf4", color: "#16a34a" }}>CV</span>
-                                )}
-                                {v.hasImpression && !v.hasConversion && !dispHasPurchase && (
-                                  <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 20, background: "#eff6ff", color: "#2563eb" }}>施策</span>
-                                )}
+                              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
+                                <div style={{ minWidth: 0 }}>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                                    <code style={{ fontSize: 11, opacity: 0.78 }}>{vidShort}</code>
+                                    {visitorTypeLabel && (
+                                      <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 20, ...visitorTypeStyle }}>{visitorTypeLabel}</span>
+                                    )}
+                                    <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 20, ...statusStyle }}>{statusLabel}</span>
+                                  </div>
+                                </div>
+                                <span className="small" style={{ opacity: 0.45, whiteSpace: "nowrap", flexShrink: 0 }}>
+                                  {lastTime}
+                                </span>
                               </div>
-                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                                <span className="small" style={{ opacity: 0.55 }}>{dispPvCount} PV</span>
-                                {dispHasPurchase && (
-                                  <span className="small" style={{ fontWeight: 700, color: "#ca8a04" }}>
-                                    ¥{dispPurchaseRevenue.toLocaleString()} ({dispPurchaseCount}件)
-                                  </span>
-                                )}
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+                                <span className="small" style={{ opacity: 0.72, fontWeight: 700 }}>{dispPvCount} PV</span>
+                                <span className="small" style={{ opacity: dispHasPurchase ? 0.92 : 0.55, color: dispHasPurchase ? "#a16207" : "inherit", fontWeight: dispHasPurchase ? 700 : 500 }}>
+                                  {purchaseSummary}
+                                </span>
                                 {v.totalDuration > 0 && (
-                                  <span className="small" style={{ opacity: 0.55 }}>
+                                  <span className="small" style={{ opacity: 0.5 }}>
                                     {durationMin > 0 ? `${durationMin}分` : `${v.totalDuration}秒`}滞在
                                   </span>
                                 )}
-                                <span className="small" style={{ opacity: 0.4 }}>{lastTime}</span>
                               </div>
-                              {v.firstRef && (
-                                <div className="small" style={{ opacity: 0.45, marginTop: 2 }}>
-                                  🔗 {formatRef(v.firstRef)}
-                                </div>
-                              )}
+                              <div className="small" style={{ opacity: 0.45, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                流入元: {sourceSummary}
+                              </div>
+                              <div className="small" style={{ opacity: isSelected ? 0.52 : 0.34, marginTop: 5, fontWeight: isSelected ? 600 : 500 }}>
+                                {isSelected ? "右側でタイムラインを表示中" : "クリックで詳細表示"}
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -1789,29 +1834,57 @@ export default function AnalyticsPage() {
                   ) : (
                     <>
                       {/* タイムラインヘッダー */}
-                      <div style={{ padding: "12px 20px", borderBottom: "1px solid rgba(15,23,42,.07)", background: "rgba(15,23,42,.02)", display: "flex", alignItems: "center", gap: 10 }}>
+                      <div style={{ padding: "14px 20px", borderBottom: "1px solid rgba(15,23,42,.07)", background: "rgba(15,23,42,.02)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
                         {(() => {
                           const v = visitorList.find((x) => x.vid === selectedVid);
                           const hue = selectedVid.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360;
                           // 購入情報は selectedJourney ベースで判定（visitorList の hasPurchase は訪問者切替時に不整合が起きるため）
                           const journeyPurchases = selectedJourney.filter((ev) => ev.event === "purchase");
                           const journeyRevenue = journeyPurchases.reduce((sum, ev) => sum + (typeof ev.revenue === "number" ? ev.revenue : 0), 0);
+                          const pageviewCount = selectedJourney.filter((e) => e.event === "pageview").length;
                           return (
                             <>
-                              <div style={{ width: 28, height: 28, borderRadius: 99, background: `hsl(${hue},60%,88%)`, color: `hsl(${hue},60%,35%)`, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 12 }}>
-                                {selectedVid.slice(0, 1).toUpperCase()}
-                              </div>
-                              <div>
-                                <div style={{ fontSize: 12, fontWeight: 700 }}><code>{selectedVid}</code></div>
-                                <div className="small" style={{ opacity: 0.55 }}>
-                                    {/* 右パネルヘッダーは selectedJourney（フィルター済み）ベースで表示 */}
-                                    {selectedJourney.filter((e) => e.event === "pageview").length} ページ閲覧 · {selectedJourney.length} イベント
-                                    {journeyPurchases.length > 0 && <span style={{ color: "#ca8a04", fontWeight: 700 }}> · 💰 ¥{journeyRevenue.toLocaleString()} ({journeyPurchases.length}件購入)</span>}
+                              <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                                <div style={{ width: 28, height: 28, borderRadius: 99, background: `hsl(${hue},60%,88%)`, color: `hsl(${hue},60%,35%)`, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 12 }}>
+                                  {selectedVid.slice(0, 1).toUpperCase()}
+                                </div>
+                                <div style={{ minWidth: 0 }}>
+                                  <div style={{ fontSize: 12, fontWeight: 700 }}><code>{selectedVid}</code></div>
+                                  <div className="small" style={{ opacity: 0.55 }}>
+                                    時系列で確認できます
+                                    {v?.isNew === true && <span> · 新規訪問</span>}
+                                    {v?.isNew === false && <span> · リピート訪問</span>}
                                   </div>
+                                </div>
+                              </div>
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                <div style={{ padding: "6px 10px", borderRadius: 999, background: "#fff", border: "1px solid rgba(15,23,42,.08)" }}>
+                                  <span className="small" style={{ fontWeight: 700 }}>{pageviewCount}</span>
+                                  <span className="small" style={{ opacity: 0.55, marginLeft: 4 }}>ページ閲覧</span>
+                                </div>
+                                <div style={{ padding: "6px 10px", borderRadius: 999, background: "#fff", border: "1px solid rgba(15,23,42,.08)" }}>
+                                  <span className="small" style={{ fontWeight: 700 }}>{selectedJourney.length}</span>
+                                  <span className="small" style={{ opacity: 0.55, marginLeft: 4 }}>イベント</span>
+                                </div>
+                                {journeyPurchases.length > 0 ? (
+                                  <div style={{ padding: "6px 10px", borderRadius: 999, background: "#fffdf2", border: "1px solid #fde68a" }}>
+                                    <span className="small" style={{ fontWeight: 700, color: "#a16207" }}>¥{journeyRevenue.toLocaleString()}</span>
+                                    <span className="small" style={{ opacity: 0.6, marginLeft: 4 }}>{journeyPurchases.length}件購入</span>
+                                  </div>
+                                ) : (
+                                  <div style={{ padding: "6px 10px", borderRadius: 999, background: "#fff", border: "1px solid rgba(15,23,42,.08)" }}>
+                                    <span className="small" style={{ fontWeight: 700 }}>購入なし</span>
+                                  </div>
+                                )}
                               </div>
                             </>
                           );
                         })()}
+                      </div>
+                      <div style={{ padding: "10px 20px", borderBottom: "1px solid rgba(15,23,42,.06)", background: "rgba(15,23,42,.015)" }}>
+                        <div className="small" style={{ opacity: 0.52 }}>
+                          上から順に訪問の流れを追えます。重要なイベントは色を強めて表示しています。
+                        </div>
                       </div>
 
                       {/* タイムライン本体 */}
@@ -1831,6 +1904,16 @@ export default function AnalyticsPage() {
                                   ? new Date(ev.createdAt).toLocaleTimeString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })
                                   : "—";
                                 const dotColor = isPurchase ? "#ca8a04" : isConversion ? "#16a34a" : EVENT_COLOR[ev.event]?.text || "#94a3b8";
+                                const scenarioName = ev.scenario_id ? (scenarios.find((s) => s.id === ev.scenario_id)?.data?.name || ev.scenario_id) : null;
+                                const eventTitle = isPurchase
+                                  ? "購入が完了しました"
+                                  : isConversion
+                                    ? "コンバージョンを記録しました"
+                                    : ev.event === "impression"
+                                      ? `施策を表示しました${scenarioName ? `: ${scenarioName}` : ""}`
+                                      : isPageleave
+                                        ? `${ev.path || "ページ"}を離脱しました`
+                                        : ev.path || "ページを閲覧しました";
                                 // 購入時の施策特定
                                 const attributedScenarioId = isPurchase ? (ev.scenario_id || vidToLastScenario.get(ev.vid || "") || null) : null;
                                 const attributedScenario = attributedScenarioId ? scenarios.find((s) => s.id === attributedScenarioId) : null;
@@ -1852,17 +1935,27 @@ export default function AnalyticsPage() {
                                     <div style={{
                                       flex: 1,
                                       background: isPurchase ? "#fefce8" : isConversion ? "#f0fdf4" : "rgba(15,23,42,.025)",
-                                      borderRadius: 8, padding: "8px 12px",
+                                      borderRadius: 10, padding: "10px 12px",
                                       border: isPurchase ? "1px solid #fde68a" : isConversion ? "1px solid #bbf7d0" : "1px solid transparent",
                                     }}>
-                                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
-                                        <EventBadge event={ev.event} />
-                                        <span className="small" style={{ opacity: 0.5, fontSize: 11 }}>{time}</span>
-                                        {isPurchase && ev.revenue != null && (
-                                          <span style={{ fontSize: 13, fontWeight: 800, color: "#ca8a04" }}>
-                                            ¥{Number(ev.revenue).toLocaleString()}
-                                          </span>
-                                        )}
+                                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+                                        <div style={{ minWidth: 0 }}>
+                                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 3 }}>
+                                            <EventBadge event={ev.event} />
+                                            <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>{eventTitle}</span>
+                                          </div>
+                                          <div className="small" style={{ opacity: 0.48 }}>
+                                            Step {i + 1}
+                                          </div>
+                                        </div>
+                                        <div style={{ textAlign: "right" }}>
+                                          <div className="small" style={{ opacity: 0.5, fontSize: 11 }}>{time}</div>
+                                          {isPurchase && ev.revenue != null && (
+                                            <div style={{ fontSize: 13, fontWeight: 800, color: "#ca8a04", marginTop: 2 }}>
+                                              ¥{Number(ev.revenue).toLocaleString()}
+                                            </div>
+                                          )}
+                                        </div>
                                       </div>
                                       {isPurchase && (
                                         <>
@@ -1899,18 +1992,18 @@ export default function AnalyticsPage() {
                                         </>
                                       )}
                                       {!isPurchase && ev.path && (
-                                        <div className="small" style={{ fontWeight: 600, opacity: 0.8, marginBottom: isPageleave || ev.scenario_id ? 4 : 0 }}>
+                                        <div className="small" style={{ fontWeight: 600, opacity: 0.8, marginBottom: isPageleave || ev.scenario_id || ev.utm_source ? 6 : 0 }}>
                                           {ev.path}
+                                        </div>
+                                      )}
+                                      {!isPurchase && scenarioName && (
+                                        <div className="small" style={{ opacity: 0.58, marginBottom: ev.utm_source ? 4 : 0 }}>
+                                          シナリオ: <span style={{ fontWeight: 600 }}>{scenarioName}</span>
                                         </div>
                                       )}
                                       {isPageleave && ev.duration_sec != null && (
                                         <div className="small" style={{ opacity: 0.55 }}>
                                           滞在時間: {ev.duration_sec >= 60 ? `${Math.floor(ev.duration_sec / 60)}分${ev.duration_sec % 60}秒` : `${ev.duration_sec}秒`}
-                                        </div>
-                                      )}
-                                      {!isPurchase && ev.scenario_id && (
-                                        <div className="small" style={{ opacity: 0.55 }}>
-                                          シナリオ: <code style={{ fontSize: 10 }}>{ev.scenario_id}</code>
                                         </div>
                                       )}
                                       {ev.utm_source && (
