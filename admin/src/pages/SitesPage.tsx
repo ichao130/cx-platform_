@@ -3,6 +3,8 @@ import { onAuthStateChanged, getAuth } from 'firebase/auth';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db, apiPostJson } from '../firebase';
 import { genId } from '../components/id';
+import RightDrawer from '../components/RightDrawer';
+import StickySaveBar from '../components/StickySaveBar';
 
 function genPublicKey() {
   const d = new Date();
@@ -23,6 +25,13 @@ type Site = {
 };
 
 type WorkspaceMember = { uid: string; role: string; email: string; displayName: string };
+type EditorSnapshot = {
+  id: string;
+  name: string;
+  workspaceId: string;
+  domainsText: string;
+  publicKey: string;
+};
 
 function AddMemberSelect({
   siteId,
@@ -123,6 +132,7 @@ export default function SitesPage() {
   const [expandedSiteId, setExpandedSiteId] = useState<string | null>(null);
   const [memberOpLoading, setMemberOpLoading] = useState<string | null>(null);
   const [workspaceMembers, setWorkspaceMembers] = useState<WorkspaceMember[]>([]);
+  const [editorSnapshot, setEditorSnapshot] = useState<EditorSnapshot | null>(null);
   const migratedWs = useRef<Set<string>>(new Set());
 
   // マイグレーション: workspaceId が変わったら1回だけ実行（冪等）
@@ -243,6 +253,17 @@ export default function SitesPage() {
   }, [currentUid, workspaceId, currentRole, runMigration]);
 
   const selectedWorkspaceName = useMemo(() => workspaceLabel(workspaces, workspaceId), [workspaces, workspaceId]);
+  const isEditing = useMemo(() => rows.some((r) => r.id === id), [rows, id]);
+  const isDirty = useMemo(() => {
+    if (!isModalOpen || !editorSnapshot) return false;
+    return (
+      id !== editorSnapshot.id ||
+      name !== editorSnapshot.name ||
+      workspaceId !== editorSnapshot.workspaceId ||
+      domainsText !== editorSnapshot.domainsText ||
+      publicKey !== editorSnapshot.publicKey
+    );
+  }, [isModalOpen, editorSnapshot, id, name, workspaceId, domainsText, publicKey]);
 
   // owner/admin のときワークスペースメンバー一覧を取得
   useEffect(() => {
@@ -275,26 +296,55 @@ export default function SitesPage() {
     setPublicKey(genPublicKey());
     setError('');
     setCopyMessage('');
+    setCopyPixelMessage('');
+    setTagMode('direct');
+  }
+
+  function applyEditorState(next: EditorSnapshot) {
+    setId(next.id);
+    setName(next.name);
+    setWorkspaceId(next.workspaceId);
+    setDomainsText(next.domainsText);
+    setPublicKey(next.publicKey);
+    setEditorSnapshot(next);
+    setError('');
+    setCopyMessage('');
+    setCopyPixelMessage('');
+    setTagMode('direct');
   }
 
   function openCreateModal() {
-    resetEditor();
-    if (!workspaceId && workspaces.length) {
-      setWorkspaceId(workspaces[0].id);
-    }
+    const nextWorkspaceId = workspaceId || workspaces[0]?.id || '';
+    applyEditorState({
+      id: genId('site'),
+      name: '',
+      workspaceId: nextWorkspaceId,
+      domainsText: '',
+      publicKey: genPublicKey(),
+    });
     setIsModalOpen(true);
   }
 
   function openEditModal(row: { id: string; data: Site }) {
-    setId(row.id);
-    setName(row.data.name || '');
-    setWorkspaceId(row.data.workspaceId || '');
+    const nextWorkspaceId = row.data.workspaceId || '';
+    applyEditorState({
+      id: row.id,
+      name: row.data.name || '',
+      workspaceId: nextWorkspaceId,
+      domainsText: (row.data.domains || []).join('\n'),
+      publicKey: row.data.publicKey || '',
+    });
     writeSelectedWorkspaceId(row.data.workspaceId || '', currentUid);
-    setDomainsText((row.data.domains || []).join('\n'));
-    setPublicKey(row.data.publicKey || '');
+    setIsModalOpen(true);
+  }
+
+  function closeEditor() {
+    if (isDirty && !window.confirm('保存されていない変更があります。閉じますか？')) return;
+    setIsModalOpen(false);
+    setEditorSnapshot(null);
     setError('');
     setCopyMessage('');
-    setIsModalOpen(true);
+    setCopyPixelMessage('');
   }
 
   async function copyPixelCode() {
@@ -395,8 +445,6 @@ export default function SitesPage() {
     setIsSaving(true);
 
     try {
-      const isEditing = rows.some((r) => r.id === safeId);
-
       if (isEditing) {
         const j = await apiPostJson('/v1/sites/updateDomains', { site_id: safeId, domains });
         if (!j.ok) throw new Error(j.message || j.error || "更新に失敗しました");
@@ -411,6 +459,7 @@ export default function SitesPage() {
       }
 
       resetEditor();
+      setEditorSnapshot(null);
       setIsModalOpen(false);
     } catch (e: any) {
       setError(e?.message || '保存に失敗しました。');
@@ -596,104 +645,75 @@ export default function SitesPage() {
         </div>
       </div>
 
-      {isModalOpen ? (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(15,23,42,0.24)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 24,
-            zIndex: 50,
-          }}
-          onClick={() => {
-            setIsModalOpen(false);
-            setError('');
-            setCopyMessage('');
-          }}
-        >
-          <div
-            className="card liquid-page"
-            style={{ width: 'min(980px, 100%)', maxHeight: '88vh', overflow: 'auto', minWidth: 0 }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="page-header" style={{ marginBottom: 10 }}>
-              <div className="page-header__meta">
-                <h2 className="h1" style={{ fontSize: 22 }}>{rows.some((r) => r.id === id) ? 'サイトを編集' : 'サイトを作成'}</h2>
-                <div className="small">新規登録・編集はモーダルで行います。公開キーや埋め込みタグは必要な時だけ確認してください。</div>
-              </div>
-              <div className="page-header__actions">
-                <button className="btn" onClick={() => { setIsModalOpen(false); setError(''); setCopyMessage(''); }}>閉じる</button>
-              </div>
+      <RightDrawer
+        open={isModalOpen}
+        width={1040}
+        title={isEditing ? 'サイトを編集' : 'サイトを作成'}
+        description="一覧を見ながら、サイト設定と埋め込み情報を右側で確認・更新できます。"
+        onClose={closeEditor}
+        actions={isDirty ? <span className="badge" style={{ color: '#b45309', borderColor: '#fcd34d', background: '#fef3c7' }}>未保存</span> : undefined}
+      >
+        <div className="row liquid-page" style={{ alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: 280 }}>
+            <div className="h2">サイト名</div>
+            <input className="input" placeholder="例:サイト名" value={name} onChange={(e) => setName(e.target.value)} />
+            <div className="small" style={{ marginTop: 8, opacity: 0.72 }}>
+              実際に運用担当者が見て分かる名前を付けてください。
             </div>
+            <div className="small" style={{ marginTop: 6, opacity: 0.72 }}>
+              サイトID: <code>{id}</code>
+            </div>
+            <div style={{ height: 14 }} />
+            <div className="h2">ワークスペース</div>
+            <select
+              className="input"
+              value={workspaceId}
+              onChange={(e) => {
+                const next = e.target.value;
+                setWorkspaceId(next);
+                writeSelectedWorkspaceId(next, currentUid);
+              }}
+            >
+              {workspaces.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.data?.name ? `${w.data.name} (${w.id})` : w.id}
+                </option>
+              ))}
+            </select>
+            <div className="small" style={{ marginTop: 8, opacity: 0.72 }}>
+              このサイトをどのワークスペースで管理するかを選びます。
+            </div>
+            <div style={{ height: 14 }} />
+            <div style={{ height: 12 }} />
+            <TextAreaList
+              label="対象ドメイン"
+              value={domainsText}
+              onChange={setDomainsText}
+              help="許可するドメインを1行ずつ入力します（例: https://example.com）。未入力の場合はワークスペースのドメイン設定を引き継ぎます。"
+            />
+          </div>
 
-            <div className="row liquid-page" style={{ alignItems: 'flex-start', flexWrap: 'wrap' }}>
-              <div style={{ flex: 1, minWidth: 280 }}>
-                <div className="h2">サイト名</div>
-                <input className="input" placeholder="例:サイト名" value={name} onChange={(e) => setName(e.target.value)} />
-                <div className="small" style={{ marginTop: 8, opacity: 0.72 }}>
-                  実際に運用担当者が見て分かる名前を付けてください。
-                </div>
-                <div className="small" style={{ marginTop: 6, opacity: 0.72 }}>
-                  サイトID: <code>{id}</code>
-                </div>
-                <div style={{ height: 14 }} />
-                <div className="h2">ワークスペース</div>
-                  <select
-                    className="input"
-                    value={workspaceId}
-                    onChange={(e) => {
-                      const next = e.target.value;
-                      setWorkspaceId(next);
-                      writeSelectedWorkspaceId(next, currentUid);
-                    }}
-                  >
-                  {workspaces.map((w) => (
-                    <option key={w.id} value={w.id}>
-                      {w.data?.name ? `${w.data.name} (${w.id})` : w.id}
-                    </option>
-                  ))}
-                </select>
-                <div className="small" style={{ marginTop: 8, opacity: 0.72 }}>
-                  このサイトをどのワークスペースで管理するかを選びます。
-                </div>
-                <div style={{ height: 14 }} />
-                <div style={{ height: 12 }} />
-                <TextAreaList
-                  label="対象ドメイン"
-                  value={domainsText}
-                  onChange={setDomainsText}
-                  help="許可するドメインを1行ずつ入力します（例: https://example.com）。未入力の場合はワークスペースのドメイン設定を引き継ぎます。"
-                />
+          <div style={{ flex: 1, minWidth: 280 }}>
+            <div className="h2">公開キー</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input className="input" style={{ flex: 1 }} value={publicKey} onChange={(e) => setPublicKey(e.target.value)} placeholder="英数字で入力してください" readOnly={isEditing} />
+              {!isEditing && (
+                <button className="btn" style={{ flexShrink: 0 }} onClick={() => setPublicKey(genPublicKey())}>再生成</button>
+              )}
+            </div>
+            <div className="small">{isEditing ? '公開キーは変更できません（変更するとSDKの埋め込みタグの更新が必要になります）。' : 'SDKの埋め込みタグに使用します。自動生成されたものをそのまま使えます。'}</div>
+            <div style={{ height: 14 }} />
+            {error ? (
+              <div className="small" style={{ color: 'salmon', marginBottom: 12 }}>
+                {error}
               </div>
+            ) : (
+              <div className="small" style={{ marginBottom: 12, opacity: 0.68 }}>
+                保存は右下のバーに集約しています。埋め込みタグは内容確認やコピーだけ先に行えます。
+              </div>
+            )}
 
-              <div style={{ flex: 1, minWidth: 280 }}>
-                <div className="h2">公開キー</div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <input className="input" style={{ flex: 1 }} value={publicKey} onChange={(e) => setPublicKey(e.target.value)} placeholder="英数字で入力してください" readOnly={rows.some((r) => r.id === id)} />
-                  {!rows.some((r) => r.id === id) && (
-                    <button className="btn" style={{ flexShrink: 0 }} onClick={() => setPublicKey(genPublicKey())}>再生成</button>
-                  )}
-                </div>
-                <div className="small">{rows.some((r) => r.id === id) ? '公開キーは変更できません（変更するとSDKの埋め込みタグの更新が必要になります）。' : 'SDKの埋め込みタグに使用します。自動生成されたものをそのまま使えます。'}</div>
-                <div style={{ height: 14 }} />
-                {error ? (
-                  <div className="small" style={{ color: 'salmon', marginBottom: 8 }}>
-                    {error}
-                  </div>
-                ) : null}
-                <div className="page-header__actions" style={{ marginBottom: 14 }}>
-                  <button className="btn" onClick={() => { setIsModalOpen(false); setError(''); setCopyMessage(''); }}>
-                    キャンセル
-                  </button>
-                  <button className="btn btn--primary" onClick={createOrUpdate} disabled={isSaving}>
-                    {isSaving ? '保存中...' : rows.some((r) => r.id === id) ? 'サイトを更新' : 'サイトを作成'}
-                  </button>
-                </div>
-
-                <div className="card" style={{ background: 'var(--panel2)' }}>
+            <div className="card" style={{ background: 'var(--panel2)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
                     <div>
                       <div className="h2" style={{ marginBottom: 6 }}>埋め込みタグ</div>
@@ -878,11 +898,21 @@ export default function SitesPage() {
                     </div>
                   )}
                 </div>
-              </div>
             </div>
-          </div>
         </div>
-      ) : null}
+      </RightDrawer>
+
+      <StickySaveBar
+        visible={isModalOpen}
+        dirty={isDirty}
+        saving={isSaving}
+        error={error}
+        onSave={createOrUpdate}
+        onSecondary={closeEditor}
+        secondaryLabel="閉じる"
+        saveLabel={isEditing ? 'サイトを更新' : 'サイトを作成'}
+        saveDisabled={!name.trim() || !workspaceId || !publicKey.trim()}
+      />
     </div>
   );
 }
