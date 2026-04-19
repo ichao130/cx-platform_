@@ -856,6 +856,46 @@ export default function AnalyticsPage() {
     });
   }, [dailyTrend, visitorList, statRows, siteId]);
 
+  // ---- computed: 訪問頻度分布（sessionCount別バケット） ----
+  const visitFrequencyDist = useMemo(() => {
+    const buckets = [
+      { label: "1回のみ", min: 1, max: 1, count: 0 },
+      { label: "2〜3回",  min: 2, max: 3, count: 0 },
+      { label: "4〜9回",  min: 4, max: 9, count: 0 },
+      { label: "10回以上", min: 10, max: Infinity, count: 0 },
+    ];
+    for (const v of visitorList) {
+      const sc = v.sessionCount;
+      const b = buckets.find((b) => sc >= b.min && sc <= b.max);
+      if (b) b.count++;
+    }
+    return buckets;
+  }, [visitorList]);
+
+  // ---- computed: リターンスパン分布（2回以上訪問者の平均帰還間隔） ----
+  const returnSpanDist = useMemo(() => {
+    const buckets = [
+      { label: "当日",    min: 0,  max: 0,   count: 0 },
+      { label: "1〜3日",  min: 1,  max: 3,   count: 0 },
+      { label: "4〜7日",  min: 4,  max: 7,   count: 0 },
+      { label: "8〜14日", min: 8,  max: 14,  count: 0 },
+      { label: "15〜30日",min: 15, max: 30,  count: 0 },
+      { label: "31日以上",min: 31, max: Infinity, count: 0 },
+    ];
+    // 2回以上訪問した人だけ対象。平均帰還間隔 = spanDays / (sessionCount - 1)
+    const returners = visitorList.filter((v) => v.sessionCount >= 2);
+    for (const v of returners) {
+      const avgInterval = v.sessionCount > 1 ? Math.round(v.spanDays / (v.sessionCount - 1)) : v.spanDays;
+      const b = buckets.find((b) => avgInterval >= b.min && avgInterval <= b.max);
+      if (b) b.count++;
+    }
+    // 平均リターン間隔（全リピーター平均）
+    const avgReturnDays = returners.length > 0
+      ? Math.round(returners.reduce((s, v) => s + (v.sessionCount > 1 ? v.spanDays / (v.sessionCount - 1) : v.spanDays), 0) / returners.length)
+      : null;
+    return { buckets, returnerCount: returners.length, avgReturnDays };
+  }, [visitorList]);
+
   // ---- computed: UTM選択肢（utm_sourceのユニーク値） ----
   const utmOptions = useMemo(() => {
     const sources = [...new Set(visitorList.map((v: any) => v.utmSource).filter(Boolean))].sort() as string[];
@@ -1375,6 +1415,90 @@ export default function AnalyticsPage() {
                     <Bar dataKey="repeatCount" name="リピート" stackId="a" fill="#94a3b8" fillOpacity={0.7} radius={[3, 3, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
+              </div>
+            )}
+
+            {/* ④ 訪問頻度分布 ＋ リターンスパン分布 */}
+            {!journeyLoading && visitorList.length > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14, marginBottom: 16 }}>
+
+                {/* 訪問頻度分布 */}
+                <div className="card" style={{ padding: "20px 20px 12px", background: "#fff" }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 4 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#374151" }}>🔁 訪問頻度分布</div>
+                    <span className="small" style={{ opacity: 0.5 }}>{visitorList.length}人</span>
+                  </div>
+                  <div className="small" style={{ opacity: 0.5, marginBottom: 14 }}>
+                    同じユーザーが何回サイトを訪れたか（セッション単位）
+                  </div>
+                  <ResponsiveContainer width="100%" height={160}>
+                    <BarChart data={visitFrequencyDist} margin={{ top: 4, right: 8, left: -20, bottom: 0 }} barSize={28}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,.06)" />
+                      <XAxis dataKey="label" tick={{ fontSize: 11, fill: "rgba(15,23,42,.5)" }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fontSize: 10, fill: "rgba(15,23,42,.4)" }} axisLine={false} tickLine={false} allowDecimals={false} />
+                      <Tooltip
+                        contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid rgba(15,23,42,.1)", boxShadow: "0 4px 12px rgba(0,0,0,.08)" }}
+                        formatter={(value: any) => [`${value}人`, "訪問者数"]}
+                      />
+                      <Bar dataKey="count" name="訪問者数" fill="#3b82f6" fillOpacity={0.75} radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                  {/* サマリー行 */}
+                  <div style={{ display: "flex", gap: 12, marginTop: 10, paddingTop: 10, borderTop: "1px solid rgba(15,23,42,.06)", flexWrap: "wrap" }}>
+                    {visitFrequencyDist.map((b) => (
+                      <div key={b.label} style={{ textAlign: "center", minWidth: 52 }}>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: "#1d4ed8" }}>{b.count}</div>
+                        <div style={{ fontSize: 10, opacity: 0.5 }}>{b.label}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* リターンスパン分布 */}
+                <div className="card" style={{ padding: "20px 20px 12px", background: "#fff" }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 4 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#374151" }}>📅 リターンスパン分布</div>
+                    <span className="small" style={{ opacity: 0.5 }}>{returnSpanDist.returnerCount}人（リピーター）</span>
+                  </div>
+                  <div className="small" style={{ opacity: 0.5, marginBottom: 14 }}>
+                    2回以上訪問した人が、平均何日後に戻ってくるか
+                  </div>
+                  {returnSpanDist.returnerCount === 0 ? (
+                    <div style={{ padding: "32px 0", textAlign: "center", opacity: 0.4, fontSize: 13 }}>
+                      リピーターデータがまだありません
+                    </div>
+                  ) : (
+                    <>
+                      <ResponsiveContainer width="100%" height={160}>
+                        <BarChart data={returnSpanDist.buckets} margin={{ top: 4, right: 8, left: -20, bottom: 0 }} barSize={28}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,.06)" />
+                          <XAxis dataKey="label" tick={{ fontSize: 10, fill: "rgba(15,23,42,.5)" }} axisLine={false} tickLine={false} />
+                          <YAxis tick={{ fontSize: 10, fill: "rgba(15,23,42,.4)" }} axisLine={false} tickLine={false} allowDecimals={false} />
+                          <Tooltip
+                            contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid rgba(15,23,42,.1)", boxShadow: "0 4px 12px rgba(0,0,0,.08)" }}
+                            formatter={(value: any) => [`${value}人`, "訪問者数"]}
+                          />
+                          <Bar dataKey="count" name="訪問者数" fill="#8b5cf6" fillOpacity={0.75} radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                      <div style={{ display: "flex", gap: 16, marginTop: 10, paddingTop: 10, borderTop: "1px solid rgba(15,23,42,.06)" }}>
+                        <div>
+                          <div style={{ fontSize: 20, fontWeight: 800, color: "#7c3aed" }}>
+                            {returnSpanDist.avgReturnDays != null ? `${returnSpanDist.avgReturnDays}日` : "—"}
+                          </div>
+                          <div style={{ fontSize: 11, opacity: 0.5 }}>平均リターン間隔</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 20, fontWeight: 800, color: "#374151" }}>
+                            {returnSpanDist.returnerCount}人
+                          </div>
+                          <div style={{ fontSize: 11, opacity: 0.5 }}>リピーター数</div>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+
               </div>
             )}
 
