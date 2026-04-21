@@ -302,7 +302,7 @@ async function executeTool(name: string, args: any, uid: string): Promise<string
 
     const snap = await db.collection("logs")
       .where("site_id", "==", site_id)
-      .where("visitor_id", "==", visitor_id)
+      .where("vid", "==", visitor_id)
       .orderBy("createdAt", "asc")
       .limit(Math.min(Number(limit), 100))
       .get();
@@ -356,7 +356,7 @@ async function executeTool(name: string, args: any, uid: string): Promise<string
     const visitorMap = new Map<string, { lastSeen: string; pv: number; cv: boolean; purchase: boolean; revenue: number; lastPath: string }>();
     for (const d of snap.docs) {
       const data = d.data() as any;
-      const vid = String(data.visitor_id || "");
+      const vid = String(data.vid || "");
       if (!vid) continue;
       const existing = visitorMap.get(vid) || { lastSeen: "", pv: 0, cv: false, purchase: false, revenue: 0, lastPath: "" };
       if (!existing.lastSeen) existing.lastSeen = String(data.createdAt || "");
@@ -400,7 +400,7 @@ async function executeTool(name: string, args: any, uid: string): Promise<string
 
     for (const d of snap.docs) {
       const data = d.data() as any;
-      const vid = String(data.visitor_id || "");
+      const vid = String(data.vid || "");
       if (!vid) continue;
       if (data.event === "pageview") {
         const paths = visitorPaths.get(vid) || [];
@@ -698,26 +698,28 @@ async function executeTool(name: string, args: any, uid: string): Promise<string
 
   if (name === "get_top_pages") {
     const { site_id, day_from, day_to, limit = 10 } = args;
-    const statsSnap = await db
-      .collection("stats_daily")
-      .where("siteId", "==", site_id)
-      .where("day", ">=", day_from)
-      .where("day", "<=", day_to)
+    // stats_daily には path が存在しないため logs コレクションから直接集計
+    const logsSnap = await db
+      .collection("logs")
+      .where("site_id", "==", site_id)
       .where("event", "==", "pageview")
+      .where("createdAt", ">=", day_from)
+      .where("createdAt", "<=", day_to + "T23:59:59.999Z")
+      .limit(5000)
       .get();
 
     const pageMap = new Map<string, number>();
-    for (const d of statsSnap.docs) {
+    for (const d of logsSnap.docs) {
       const data = d.data() as any;
-      const path: string = data.path || data.page || "(不明)";
-      pageMap.set(path, (pageMap.get(path) || 0) + (Number(data.count) || 0));
+      const path: string = String(data.path || data.url || "(不明)");
+      pageMap.set(path, (pageMap.get(path) || 0) + 1);
     }
 
     if (!pageMap.size) return "期間内のページビューデータがありません。";
 
     const sorted = Array.from(pageMap.entries())
       .sort((a, b) => b[1] - a[1])
-      .slice(0, limit);
+      .slice(0, Number(limit));
 
     const lines = [`🏆 人気ページ TOP${sorted.length}: ${site_id} (${day_from} 〜 ${day_to})`, ``];
     sorted.forEach(([path, count], i) => {
