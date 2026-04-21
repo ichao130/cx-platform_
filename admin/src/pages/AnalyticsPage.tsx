@@ -743,8 +743,11 @@ export default function AnalyticsPage() {
       const uvDoc = statRows.find((r: any) => r.day === day && r.event === "uv" && r.siteId === siteId);
       const dayLogs = pvLogs.filter((l) => utcIsoToJstDay(l.createdAt || "") === day);
       const uv = uvDoc?.vids?.length ?? new Set(dayLogs.map((l: any) => l.vid).filter(Boolean)).size;
-      // セッション数: journeyLogs の sid（sessionStorage ベース、タブ/ブラウザ終了でリセット）
-      const session = new Set(journeyLogs.filter((l) => utcIsoToJstDay(l.createdAt || "") === day && l.sid).map((l) => l.sid)).size;
+      // セッション数: stats_daily の "session" ドキュメント（sid の arrayUnion）を優先
+      // フォールバック: pvLogs（pageview のみ）の sid でカウント（journeyLogs の全イベントは使わない）
+      const sessionDoc = statRows.find((r: any) => r.day === day && r.event === "session" && r.siteId === siteId);
+      const session = sessionDoc?.sids?.length
+        ?? new Set(pvLogs.filter((l) => utcIsoToJstDay(l.createdAt || "") === day && l.sid).map((l) => l.sid)).size;
       const imp = statRows.filter((r) => r.day === day && r.event === "impression").reduce((s, r) => s + safeNum(r.count), 0);
       const cv = statRows.filter((r) => r.day === day && r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
       result.push({ day, label, pv, uv, session, imp, cv });

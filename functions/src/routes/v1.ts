@@ -3690,7 +3690,7 @@ export function registerV1Routes(app: Express) {
       batch.set(newLogRef, logPayload);
       batch.set(statsRef, statsPayload, { merge: true });
 
-      // UV / 新規・リピーター追跡: pageview イベントのみ vid を arrayUnion で保存（自動デデュプ）
+      // UV / セッション / 新規・リピーター追跡: pageview イベントのみ vid/sid を arrayUnion で保存（自動デデュプ）
       // journeyLogs の limit 制限に依存せずサーバー側で正確に集計する
       if (event === "pageview" && body.vid) {
         // UV（全訪問者）
@@ -3703,6 +3703,19 @@ export function registerV1Routes(app: Express) {
           vids: FieldValue.arrayUnion(body.vid),
           updatedAt: FieldValue.serverTimestamp(),
         }, { merge: true });
+
+        // セッション（sid 単位でデデュプ）
+        if (body.sid) {
+          const sessionDocId = `${siteId}__${day}__all__all__na__session`;
+          const sessionRef = db.collection("stats_daily").doc(sessionDocId);
+          batch.set(sessionRef, {
+            siteId, day,
+            scenarioId: null, actionId: null, templateId: null, variantId: "na",
+            event: "session",
+            sids: FieldValue.arrayUnion(body.sid),
+            updatedAt: FieldValue.serverTimestamp(),
+          }, { merge: true });
+        }
 
         // 新規 / リピーター（is_new フラグが送られてきた場合のみ）
         if (typeof body.is_new === "boolean") {
