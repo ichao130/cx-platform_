@@ -337,43 +337,37 @@ async function executeTool(name: string, args: any, uid: string): Promise<string
     const site = await getSiteAndWorkspace(site_id);
     if (!site) return `サイト ${site_id} へのアクセス権がありません。`;
 
-    let q = db.collection("logs")
-      .where("site_id", "==", site_id)
-      .orderBy("createdAt", "desc")
-      .limit(500); // 多めに取って訪問者単位に集約
+    const maxLimit = Math.min(Number(limit), 50);
+    let q: FirebaseFirestore.Query;
 
-    if (event_filter) {
-      q = db.collection("logs")
+    if (event_filter === "conversion") {
+      q = db.collection("visitors_recent")
         .where("site_id", "==", site_id)
-        .where("event", "==", event_filter)
-        .orderBy("createdAt", "desc")
-        .limit(Math.min(Number(limit), 50) * 5);
+        .where("cv", "==", true)
+        .orderBy("lastSeen", "desc")
+        .limit(maxLimit);
+    } else if (event_filter === "purchase") {
+      q = db.collection("visitors_recent")
+        .where("site_id", "==", site_id)
+        .where("purchase", "==", true)
+        .orderBy("lastSeen", "desc")
+        .limit(maxLimit);
+    } else {
+      q = db.collection("visitors_recent")
+        .where("site_id", "==", site_id)
+        .orderBy("lastSeen", "desc")
+        .limit(maxLimit);
     }
 
     const snap = await q.get();
+    if (snap.empty) return `直近の訪問者データがありません。`;
 
-    // 訪問者ごとに集約
-    const visitorMap = new Map<string, { lastSeen: string; pv: number; cv: boolean; purchase: boolean; revenue: number; lastPath: string }>();
+    const lines = [`👥 直近の訪問者 (${snap.size}件)`, ``];
     for (const d of snap.docs) {
-      const data = d.data() as any;
-      const vid = String(data.vid || "");
-      if (!vid) continue;
-      const existing = visitorMap.get(vid) || { lastSeen: "", pv: 0, cv: false, purchase: false, revenue: 0, lastPath: "" };
-      if (!existing.lastSeen) existing.lastSeen = String(data.createdAt || "");
-      if (data.event === "pageview") { existing.pv++; existing.lastPath = data.path || existing.lastPath; }
-      if (data.event === "conversion") existing.cv = true;
-      if (data.event === "purchase") { existing.purchase = true; existing.revenue += Number(data.revenue || 0); }
-      visitorMap.set(vid, existing);
-    }
-
-    const topN = Array.from(visitorMap.entries()).slice(0, Math.min(Number(limit), 50));
-    if (!topN.length) return `直近の訪問者データがありません。`;
-
-    const lines = [`👥 直近の訪問者 (${topN.length}件)`, ``];
-    for (const [vid, v] of topN) {
-      const badges = [v.cv ? "🎯CV" : "", v.purchase ? `💰¥${v.revenue.toLocaleString()}` : ""].filter(Boolean).join(" ");
+      const v = d.data() as any;
+      const badges = [v.cv ? "🎯CV" : "", v.purchase ? `💰¥${Number(v.revenue || 0).toLocaleString()}` : ""].filter(Boolean).join(" ");
       const time = v.lastSeen ? new Date(v.lastSeen).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
-      lines.push(`  ${time}  ${vid}  PV:${v.pv}  ${v.lastPath}  ${badges}`);
+      lines.push(`  ${time}  ${v.vid}  PV:${v.pv || 0}  ${v.lastPath || ""}  ${badges}`);
     }
     lines.push(`\n詳細は get_visitor_journey で visitor_id を指定してください。`);
     return lines.join("\n");

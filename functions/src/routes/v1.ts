@@ -3690,6 +3690,29 @@ export function registerV1Routes(app: Express) {
       batch.set(newLogRef, logPayload);
       batch.set(statsRef, statsPayload, { merge: true });
 
+      // visitors_recent: 直近訪問者一覧のための訪問者単位 upsert
+      if (body.vid) {
+        const vrRef = db.collection("visitors_recent").doc(`${siteId}__${body.vid}`);
+        const vrUpdate: Record<string, any> = {
+          site_id: siteId,
+          vid: body.vid,
+          updatedAt: FieldValue.serverTimestamp(),
+        };
+        if (event === "pageview") {
+          vrUpdate.lastSeen = nowIso;
+          vrUpdate.lastPath = body.path ?? null;
+          vrUpdate.pv = FieldValue.increment(1);
+        } else if (event === "conversion") {
+          vrUpdate.cv = true;
+        } else if (event === "purchase") {
+          vrUpdate.purchase = true;
+          if (typeof body.revenue === "number") {
+            vrUpdate.revenue = FieldValue.increment(body.revenue);
+          }
+        }
+        batch.set(vrRef, vrUpdate, { merge: true });
+      }
+
       // UV / セッション / 新規・リピーター追跡: pageview イベントのみ vid/sid を arrayUnion で保存（自動デデュプ）
       // journeyLogs の limit 制限に依存せずサーバー側で正確に集計する
       if (event === "pageview" && body.vid) {

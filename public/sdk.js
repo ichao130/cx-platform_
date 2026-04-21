@@ -81,15 +81,22 @@
   }
 
   // セッションID専用: sessionStorage を使うのでブラウザを閉じると消える（タブ間非共有）
+  // 30分以上操作がなければ新しいセッションとして扱う
   function getOrCreateSessionId(key) {
+    var TIMEOUT_MS = 30 * 60 * 1000;
+    var tsKey = key + "_ts";
     try {
+      var now = Date.now();
       var v = sessionStorage.getItem(key);
-      if (v) {
+      var ts = Number(sessionStorage.getItem(tsKey) || 0);
+      if (v && now - ts < TIMEOUT_MS) {
+        sessionStorage.setItem(tsKey, String(now));
         setCookieId(key, v);
         return v;
       }
       v = "sid_" + Math.random().toString(36).slice(2) + "_" + Date.now();
       sessionStorage.setItem(key, v);
+      sessionStorage.setItem(tsKey, String(now));
       setCookieId(key, v);
       return v;
     } catch (e) {
