@@ -506,8 +506,11 @@ export default function ScenariosPage() {
   }, [visibleSites, siteId]);  
 
   useEffect(() => {
-    if (!actionIdToAdd && actionsForWorkspace.length)
-      setActionIdToAdd(actionsForWorkspace[0].id);
+    if (!actionsForWorkspace.length) return;
+    const stillValid = actionsForWorkspace.some((a) => a.id === actionIdToAdd);
+    if (!stillValid) {
+      setActionIdToAdd(actionsForWorkspace[actionsForWorkspace.length - 1].id);
+    }
   }, [actionsForWorkspace, actionIdToAdd]);
 
   useEffect(() => {
@@ -1303,7 +1306,7 @@ export default function ScenariosPage() {
                   >
                     {actionsForWorkspace.map((a) => (
                       <option key={a.id} value={a.id}>
-                        [{a.data?.type || "modal"}] {a.data?.creative?.title || a.id}
+                        [{a.data?.type || "modal"}] {a.data?.creative?.title || a.id} / {a.id}
                       </option>
                     ))}
                   </select>
@@ -1792,7 +1795,7 @@ export default function ScenariosPage() {
                     <div className="row">
                       <select className="input" style={{ flex: 1, maxWidth: 400 }} value={actionIdToAdd} onChange={(e) => setActionIdToAdd(e.target.value)}>
                         {actionsForWorkspace.map((a) => (
-                          <option key={a.id} value={a.id}>[{a.data?.type || "modal"}] {a.data?.creative?.title || a.id}</option>
+                          <option key={a.id} value={a.id}>[{a.data?.type || "modal"}] {a.data?.creative?.title || a.id} / {a.id}</option>
                         ))}
                       </select>
                       <button className="btn" onClick={addActionRefToCurrentVariant}>追加</button>
