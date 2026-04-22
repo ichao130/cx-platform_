@@ -1509,7 +1509,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
           }}>
             {/* ヘッダー */}
             <div style={{
-              background: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)",
+              background: "linear-gradient(135deg, var(--brand) 0%, #1a6b7c 100%)",
               padding: "28px 32px 24px",
               textAlign: "center",
               color: "#fff",
@@ -1757,7 +1757,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
               )}
 
               {/* ボタン */}
-              <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+              <div style={{ display: "flex", gap: 10, marginTop: 20, justifyContent: "flex-end" }}>
                 {wizardStep > 1 && wizardStep < 5 && (
                   <button
                     className="btn"
@@ -1775,7 +1775,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
                     else if (wizardStep === 4) completeWizard(wizardName, wizardContact, wizardEmail, wizardSiteName, wizardSiteDomain);
                     else setShowWizard(false);
                   }}
-                  style={{ flex: 1, padding: "11px 24px", fontSize: 15, fontWeight: 700 }}
+                  style={{ minWidth: 160, marginLeft: "auto", padding: "11px 24px", fontSize: 15, fontWeight: 700, display: "inline-flex", justifyContent: "flex-end", alignItems: "center", textAlign: "right" }}
                 >
                   {wizardStep < 4 ? "次へ →" : wizardStep === 4 ? (bootstrapping ? "作成中..." : "はじめる 🚀") : "完了 →"}
                 </button>
