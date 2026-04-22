@@ -298,7 +298,7 @@ export default function ScenariosPage() {
   >(["other"]);
   const [staySec, setStaySec] = useState(3);
   const [scrollDepthPct, setScrollDepthPct] = useState(0); // 0=無効, 1-100=スクロール深度(%)
-  const [triggerType, setTriggerType] = useState<'stay' | 'scroll' | 'cart_add'>('stay');
+  const [triggerType, setTriggerType] = useState<'immediate' | 'stay' | 'scroll' | 'cart_add'>('stay');
 
   // non-AB actionRefs
   const [actionRefs, setActionRefs] = useState<ActionRef[]>([]);
@@ -527,7 +527,7 @@ export default function ScenariosPage() {
       page: {
         urls: urlRules.length > 0 ? urlRules.map((r) => ({ ...r, value: r.value.trim() })).filter((r) => r.value) : undefined,
       },
-      behavior: triggerType === 'cart_add'
+      behavior: (triggerType === 'cart_add' || triggerType === 'immediate')
         ? { stay_gte_sec: 0 }
         : {
             stay_gte_sec: Number(staySec),
@@ -535,6 +535,8 @@ export default function ScenariosPage() {
           },
       trigger: triggerType === 'cart_add'
         ? { type: "cart_add", ms: 0 }
+        : triggerType === 'immediate'
+        ? { type: "immediate", ms: 0 }
         : {
             type: triggerType === 'scroll' ? "scroll" : "stay",
             ms: Number(staySec) * 1000,
@@ -901,7 +903,11 @@ export default function ScenariosPage() {
     setPageTypeIn((s.entry_rules?.page?.page_type_in as any) || ["other"]);
     setStaySec(Number(s.entry_rules?.behavior?.stay_gte_sec ?? 3));
     setScrollDepthPct(Number(s.entry_rules?.behavior?.scroll_depth_pct ?? 0));
-    setTriggerType(s.entry_rules?.trigger?.type === 'cart_add' ? 'cart_add' : s.entry_rules?.behavior?.scroll_depth_pct ? 'scroll' : 'stay');
+    setTriggerType(
+      s.entry_rules?.trigger?.type === 'cart_add' ? 'cart_add' :
+      s.entry_rules?.trigger?.type === 'immediate' ? 'immediate' :
+      s.entry_rules?.behavior?.scroll_depth_pct ? 'scroll' : 'stay'
+    );
 
     setActionRefs(reorder(normalizeActionRefs(s.actionRefs)));
 
@@ -1411,6 +1417,7 @@ export default function ScenariosPage() {
                 <div className="h2">発動タイミング</div>
                 <div className="row" style={{ gap: 8, marginBottom: 12 }}>
                   {([
+                    { value: 'immediate', label: '⚡ 即時' },
                     { value: 'stay', label: '⏱ 滞在時間' },
                     { value: 'scroll', label: '📜 スクロール' },
                     { value: 'cart_add', label: '🛒 カート追加' },
@@ -1426,7 +1433,11 @@ export default function ScenariosPage() {
                   ))}
                 </div>
 
-                {triggerType === 'cart_add' ? (
+                {triggerType === 'immediate' ? (
+                  <div className="small" style={{ color: "var(--brand)", marginBottom: 8 }}>
+                    ⚡ ページ表示直後に即時発動します
+                  </div>
+                ) : triggerType === 'cart_add' ? (
                   <CartAddSnippet siteId={siteId} publicKey={(selectedSite?.data as any)?.publicKey || ''} />
                 ) : (
                   <div className="row" style={{ gap: 16, flexWrap: "wrap" }}>

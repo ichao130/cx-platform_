@@ -1221,6 +1221,12 @@
       runActions(actions, apiBase, ctx);
     }
 
+    // 即時トリガー
+    if (er.trigger && er.trigger.type === "immediate") {
+      fire();
+      return;
+    }
+
     // カートトリガー
     if (er.trigger && er.trigger.type === "cart_add") {
       window.addEventListener("cx:cart:add", function onCartAdd() {
