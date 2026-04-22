@@ -1437,6 +1437,35 @@
       if (document.visibilityState === "hidden") sendPageLeave();
     });
 
+    var cacheKey = "cx_serve_" + siteId + "_" + window.location.pathname;
+    var CACHE_TTL = 5 * 60 * 1000;
+
+    function runScenarios(scenarios) {
+      if (!Array.isArray(scenarios) || !scenarios.length) return;
+      warmupImages(scenarios);
+      scenarios.sort(function (a, b) { return Number((b.priority || 0)) - Number((a.priority || 0)); });
+      for (var i = 0; i < scenarios.length; i++) {
+        if (!shouldRunScenario(scenarios[i], ctx)) continue;
+        scheduleScenario(scenarios[i], ctx, apiBase);
+        break;
+      }
+    }
+
+    // キャッシュから即時実行
+    var ranFromCache = false;
+    try {
+      var raw = sessionStorage.getItem(cacheKey);
+      if (raw) {
+        var cached = JSON.parse(raw);
+        if (cached && cached.ts && (Date.now() - cached.ts < CACHE_TTL)) {
+          log("[cx] serve cache hit", window.location.pathname);
+          runScenarios(cached.scenarios);
+          ranFromCache = true;
+        }
+      }
+    } catch (e) {}
+
+    // バックグラウンドでAPIを叩いてキャッシュを更新
     fetch(apiBase + (apiBase.indexOf("?") >= 0 ? "&" : "?") + qs(ctx), {
       headers: {
         "X-Site-Id": siteId,
@@ -1446,17 +1475,11 @@
       .then(function (r) { return r.json(); })
       .then(function (data) {
         var scenarios = (data && data.scenarios) || [];
-        if (!Array.isArray(scenarios) || !scenarios.length) return;
-
-        // stay timer と並行して画像を先読み開始（ロード完了前でも表示は止めない）
-        warmupImages(scenarios);
-
-        scenarios.sort(function (a, b) { return Number((b.priority || 0)) - Number((a.priority || 0)); });
-        for (var i = 0; i < scenarios.length; i++) {
-          var s = scenarios[i];
-          if (!shouldRunScenario(s, ctx)) continue;
-          scheduleScenario(s, ctx, apiBase);
-          break;
+        try {
+          sessionStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), scenarios: scenarios }));
+        } catch (e) {}
+        if (!ranFromCache) {
+          runScenarios(scenarios);
         }
       })
       .catch(function (e) {
