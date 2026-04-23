@@ -74,10 +74,26 @@ type ActionDoc = {
     cta_url_text?: string;
     image_url?: string;
     launcher_image_url?: string; // ランチャーボタン専用画像
-    coupon_code?: string; // クーポンコード（モーダル用）
+    launcher_bottom?: number;    // ランチャー: 下からの距離(px)
+    coupon_code?: string;        // クーポンコード（モーダル用）
+
+    // トースト表示設定
+    toast_position?: "bottom-right" | "bottom-left" | "top-right" | "top-left";
+    toast_bottom?: number;       // 下 or 上からの距離(px)
+    toast_duration_sec?: number; // 0=消えない, 省略=5秒
+    toast_click_action?: "close_and_url" | "close_only" | "none"; // クリック時の動作
 
     // primary media id (optional)
     image_media_id?: string;
+  };
+
+  modal_creative?: {
+    title?: string;
+    body?: string;
+    cta_text?: string;
+    cta_url?: string;
+    cta_url_text?: string;
+    coupon_code?: string;
   };
 };
 
@@ -187,8 +203,19 @@ function normalizeActionFromDb(a: ActionDoc) {
     ctaUrlText: a.creative?.cta_url_text ?? "詳細を見る",
     imageUrl: a.creative?.image_url ?? "",
     launcherImageUrl: a.creative?.launcher_image_url ?? "",
+    modalCreativeTitle: a.modal_creative?.title ?? "",
+    modalCreativeBody: a.modal_creative?.body ?? "",
+    modalCreativeCtaText: a.modal_creative?.cta_text ?? "閉じる",
+    modalCreativeCtaUrl: a.modal_creative?.cta_url ?? "",
+    modalCreativeCtaUrlText: a.modal_creative?.cta_url_text ?? "詳細を見る",
+    modalCreativeCouponCode: a.modal_creative?.coupon_code ?? "",
+    launcherBottom: a.creative?.launcher_bottom ?? 20,
     imageMediaId: a.creative?.image_media_id ?? "",
     couponCode: a.creative?.coupon_code ?? "",
+    toastPosition: (a.creative?.toast_position ?? "bottom-right") as "bottom-right" | "bottom-left" | "top-right" | "top-left",
+    toastBottom: a.creative?.toast_bottom ?? 12,
+    toastDurationSec: a.creative?.toast_duration_sec ?? 5,
+    toastClickAction: (a.creative?.toast_click_action ?? "close_and_url") as "close_and_url" | "close_only" | "none",
     mediaIds: Array.isArray(a.mediaIds) ? a.mediaIds : [],
   };
 }
@@ -229,6 +256,7 @@ function buildActionPayload(form: {
   templateId: string;
   modalTemplateId: string;
   creative: ActionDoc["creative"];
+  modal_creative?: ActionDoc["modal_creative"];
   mediaIds: string[];
 }): ActionDoc {
   const selector = (form.selector || "").trim();
@@ -251,6 +279,7 @@ function buildActionPayload(form: {
       image_url: form.creative.image_url ?? "",
       image_media_id: primary || undefined,
     },
+    ...(form.type === "launcher" && form.modal_creative ? { modal_creative: form.modal_creative } : {}),
   };
 
   const canMount = form.type !== "modal";
@@ -500,6 +529,17 @@ export default function ActionsPage() {
   const [ctaUrlText, setCtaUrlText] = useState("詳細を見る");
 
   const [launcherPosition, setLauncherPosition] = useState<"left" | "right">("right");
+  const [launcherBottom, setLauncherBottom] = useState(20);
+  const [modalCreativeTitle, setModalCreativeTitle] = useState("");
+  const [modalCreativeBody, setModalCreativeBody] = useState("");
+  const [modalCreativeCtaText, setModalCreativeCtaText] = useState("閉じる");
+  const [modalCreativeCouponCode, setModalCreativeCouponCode] = useState("");
+  const [modalCreativeCtaUrl, setModalCreativeCtaUrl] = useState("");
+  const [modalCreativeCtaUrlText, setModalCreativeCtaUrlText] = useState("詳細を見る");
+  const [toastPosition, setToastPosition] = useState<"bottom-right" | "bottom-left" | "top-right" | "top-left">("bottom-right");
+  const [toastBottom, setToastBottom] = useState(12);
+  const [toastDurationSec, setToastDurationSec] = useState(5);
+  const [toastClickAction, setToastClickAction] = useState<"close_and_url" | "close_only" | "none">("close_and_url");
   const [imageUrl, setImageUrl] = useState("");
   const [launcherImageUrl, setLauncherImageUrl] = useState("");
   const [imageMediaId, setImageMediaId] = useState<string>("");
@@ -634,6 +674,17 @@ export default function ActionsPage() {
     setImageUrl("");
     setImageMediaId("");
     setMediaIds([]);
+    setLauncherBottom(20);
+    setModalCreativeTitle("");
+    setModalCreativeBody("");
+    setModalCreativeCtaText("閉じる");
+    setModalCreativeCtaUrl("");
+    setModalCreativeCtaUrlText("詳細を見る");
+    setModalCreativeCouponCode("");
+    setToastPosition("bottom-right");
+    setToastBottom(12);
+    setToastDurationSec(5);
+    setToastClickAction("close_and_url");
     setUploading(false);
     setUploadErr("");
     setSaveError("");
@@ -665,6 +716,17 @@ export default function ActionsPage() {
     setCtaUrlText(f.ctaUrlText);
     setImageUrl(f.imageUrl);
     setLauncherImageUrl(f.launcherImageUrl);
+    setModalCreativeTitle(f.modalCreativeTitle);
+    setModalCreativeBody(f.modalCreativeBody);
+    setModalCreativeCtaText(f.modalCreativeCtaText);
+    setModalCreativeCtaUrl(f.modalCreativeCtaUrl);
+    setModalCreativeCtaUrlText(f.modalCreativeCtaUrlText);
+    setModalCreativeCouponCode(f.modalCreativeCouponCode);
+    setLauncherBottom(f.launcherBottom);
+    setToastPosition(f.toastPosition);
+    setToastBottom(f.toastBottom);
+    setToastDurationSec(f.toastDurationSec);
+    setToastClickAction(f.toastClickAction);
     setImageMediaId(f.imageMediaId);
     setCouponCode(f.couponCode);
     setMediaIds(f.mediaIds);
@@ -822,8 +884,22 @@ export default function ActionsPage() {
         launcher_image_url: type === "launcher" ? (launcherImageUrl || undefined) : undefined,
         image_media_id: imageMediaId || undefined,
         coupon_code: couponCode || undefined,
-        ...(type === "launcher" ? { launcher_position: launcherPosition } : {}),
+        ...(type === "launcher" ? { launcher_position: launcherPosition, launcher_bottom: launcherBottom } : {}),
+        ...(type === "toast" ? {
+          toast_position: toastPosition,
+          toast_bottom: toastBottom,
+          toast_duration_sec: toastDurationSec,
+          toast_click_action: toastClickAction,
+        } : {}),
       },
+      modal_creative: type === "launcher" ? {
+        title: modalCreativeTitle,
+        body: modalCreativeBody,
+        cta_text: modalCreativeCtaText,
+        cta_url: modalCreativeCtaUrl,
+        cta_url_text: modalCreativeCtaUrlText,
+        coupon_code: modalCreativeCouponCode || undefined,
+      } : undefined,
       mediaIds,
     });
   }, [
@@ -843,8 +919,19 @@ export default function ActionsPage() {
     imageUrl,
     launcherImageUrl,
     launcherPosition,
+    launcherBottom,
+    toastPosition,
+    toastBottom,
+    toastDurationSec,
+    toastClickAction,
     imageMediaId,
     couponCode,
+    modalCreativeTitle,
+    modalCreativeBody,
+    modalCreativeCtaText,
+    modalCreativeCtaUrl,
+    modalCreativeCtaUrlText,
+    modalCreativeCouponCode,
     mediaIds,
   ]);
 
@@ -1258,102 +1345,194 @@ export default function ActionsPage() {
                   </div>
                 </div>
 
-                <div style={{ height: 10 }} />
                 {type === "launcher" ? (
                   <>
-                    <div className="h2">ランチャーボタン テンプレート（任意）</div>
-                    <div className="small" style={{ opacity: 0.72, marginBottom: 6 }}>画面隅に常駐するボタンのデザイン。未選択の場合はビルトインデザインが使われます。</div>
-                    <select className="input" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
-                      <option value="">（標準 / built-in）</option>
-                      {templates
-                        .filter((t) => t.data?.workspaceId === workspaceId && t.data?.type === "launcher" && (!t.data?.siteId || t.data?.siteId === siteId))
-                        .map((t) => (
-                          <option key={t.id} value={t.id}>
-                            {t.id} — {t.data?.name || ""}
-                          </option>
-                        ))}
-                    </select>
-                    <div style={{ height: 10 }} />
-                    <div className="h2">クリック後モーダル テンプレート（任意）</div>
-                    <div className="small" style={{ opacity: 0.72, marginBottom: 6 }}>ボタンをクリックしたときに開くモーダルのデザイン。未選択の場合はビルトインモーダルが使われます。</div>
-                    <select className="input" value={modalTemplateId} onChange={(e) => setModalTemplateId(e.target.value)}>
-                      <option value="">（標準 / built-in）</option>
-                      {templates
-                        .filter((t) => t.data?.workspaceId === workspaceId && t.data?.type === "modal" && (!t.data?.siteId || t.data?.siteId === siteId))
-                        .map((t) => (
-                          <option key={t.id} value={t.id}>
-                            {t.id} — {t.data?.name || ""}
-                          </option>
-                        ))}
-                    </select>
+                    {/* ─── ランチャーボタン カード ─── */}
+                    <div style={{ marginTop: 14, borderRadius: 14, border: "1px solid rgba(99,102,241,.3)", background: "rgba(99,102,241,.07)", padding: 16 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+                        <span style={{ fontSize: 20 }}>🔘</span>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 14 }}>ランチャーボタン</div>
+                          <div className="small" style={{ opacity: 0.6 }}>ページに常駐するフローティングボタン</div>
+                        </div>
+                      </div>
+
+                      <div className="h2">ボタン テンプレート（任意）</div>
+                      <div className="small" style={{ opacity: 0.72, marginBottom: 6 }}>未選択の場合はビルトインデザインが使われます</div>
+                      <select className="input" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
+                        <option value="">（標準 / built-in）</option>
+                        {templates
+                          .filter((t) => t.data?.workspaceId === workspaceId && t.data?.type === "launcher" && (!t.data?.siteId || t.data?.siteId === siteId))
+                          .map((t) => (
+                            <option key={t.id} value={t.id}>{t.id} — {t.data?.name || ""}</option>
+                          ))}
+                      </select>
+
+                      <div style={{ height: 12 }} />
+                      <div className="h2">ボタン文言</div>
+                      <input className="input" value={ctaText} onChange={(e) => setCtaText(e.target.value)} placeholder="お問い合わせ" />
+
+                      <div style={{ height: 12 }} />
+                      <div className="row" style={{ gap: 12 }}>
+                        <div style={{ flex: 1 }}>
+                          <div className="h2">表示位置</div>
+                          <select className="input" value={launcherPosition} onChange={(e) => setLauncherPosition(e.target.value as "left" | "right")}>
+                            <option value="right">右下</option>
+                            <option value="left">左下</option>
+                          </select>
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <div className="h2">下からの距離（px）</div>
+                          <input className="input" type="number" min={0} value={launcherBottom} onChange={(e) => setLauncherBottom(Number(e.target.value))} />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* ─── 矢印 ─── */}
+                    <div style={{ textAlign: "center", padding: "10px 0", opacity: 0.5, fontSize: 12 }}>
+                      ボタンをクリックすると
+                      <div style={{ fontSize: 24, lineHeight: 1.2 }}>↓</div>
+                    </div>
+
+                    {/* ─── クリック後モーダル カード ─── */}
+                    <div style={{ borderRadius: 14, border: "1px solid rgba(16,185,129,.3)", background: "rgba(16,185,129,.07)", padding: 16 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+                        <span style={{ fontSize: 20 }}>💬</span>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 14 }}>クリック後に開くモーダル</div>
+                          <div className="small" style={{ opacity: 0.6 }}>ボタンを押したときに表示されるポップアップ</div>
+                        </div>
+                      </div>
+
+                      <div className="h2">モーダル テンプレート（任意）</div>
+                      <div className="small" style={{ opacity: 0.72, marginBottom: 6 }}>未選択の場合はビルトインモーダルが使われます</div>
+                      <select className="input" value={modalTemplateId} onChange={(e) => setModalTemplateId(e.target.value)}>
+                        <option value="">（標準 / built-in）</option>
+                        {templates
+                          .filter((t) => t.data?.workspaceId === workspaceId && t.data?.type === "modal" && (!t.data?.siteId || t.data?.siteId === siteId))
+                          .map((t) => (
+                            <option key={t.id} value={t.id}>{t.id} — {t.data?.name || ""}</option>
+                          ))}
+                      </select>
+
+                      <div style={{ height: 12 }} />
+                      <div className="h2">タイトル</div>
+                      <input className="input" value={modalCreativeTitle} onChange={(e) => setModalCreativeTitle(e.target.value)} placeholder="モーダルのタイトル" />
+
+                      <div style={{ height: 12 }} />
+                      <div className="h2">本文</div>
+                      <textarea className="input" value={modalCreativeBody} onChange={(e) => setModalCreativeBody(e.target.value)} />
+
+                      <div style={{ height: 12 }} />
+                      <div className="row" style={{ gap: 12 }}>
+                        <div style={{ flex: 2 }}>
+                          <div className="h2">リンクURL（任意）</div>
+                          <input className="input" placeholder="https://example.com" value={modalCreativeCtaUrl} onChange={(e) => setModalCreativeCtaUrl(e.target.value)} />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <div className="h2">リンクボタン文言</div>
+                          <input className="input" value={modalCreativeCtaUrlText} onChange={(e) => setModalCreativeCtaUrlText(e.target.value)} />
+                        </div>
+                      </div>
+
+                      <div style={{ height: 12 }} />
+                      <div className="h2">閉じるボタン文言</div>
+                      <input className="input" value={modalCreativeCtaText} onChange={(e) => setModalCreativeCtaText(e.target.value)} />
+
+                      <div style={{ height: 12 }} />
+                      <div className="h2">クーポンコード（任意）</div>
+                      <input className="input" placeholder="SUMMER2025" value={modalCreativeCouponCode} onChange={(e) => setModalCreativeCouponCode(e.target.value)} />
+                      <div className="small" style={{ marginTop: 4 }}>入力するとモーダルにコピーボタン付きで表示されます</div>
+                    </div>
                   </>
                 ) : (
                   <>
+                    <div style={{ height: 10 }} />
+                    {/* 非ランチャー: テンプレート選択 */}
                     <div className="h2">テンプレート（任意）</div>
                     <select className="input" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
                       <option value="">（標準 / built-in）</option>
                       {templates
                         .filter((t) => t.data?.workspaceId === workspaceId && t.data?.type === type && (!t.data?.siteId || t.data?.siteId === siteId))
                         .map((t) => (
-                          <option key={t.id} value={t.id}>
-                            {t.id} — {t.data?.name || ""}
-                          </option>
+                          <option key={t.id} value={t.id}>{t.id} — {t.data?.name || ""}</option>
                         ))}
                     </select>
-                  </>
-                )}
 
-                <div style={{ height: 10 }} />
+                    <div style={{ height: 10 }} />
+                    <div className="h2">本文</div>
+                    <textarea className="input" value={body} onChange={(e) => setBody(e.target.value)} />
 
-                <div style={{ height: 10 }} />
-                <div className="h2">本文</div>
-                <textarea className="input" value={body} onChange={(e) => setBody(e.target.value)} />
+                    {type === "toast" && (
+                      <>
+                        <div style={{ height: 10 }} />
+                        <div className="h2">🍞 トースト表示設定</div>
+                        <div className="row" style={{ gap: 12, flexWrap: "wrap" }}>
+                          <div style={{ flex: 1, minWidth: 160 }}>
+                            <div className="h2">表示位置</div>
+                            <select className="input" value={toastPosition} onChange={(e) => setToastPosition(e.target.value as typeof toastPosition)}>
+                              <option value="bottom-right">右下</option>
+                              <option value="bottom-left">左下</option>
+                              <option value="top-right">右上</option>
+                              <option value="top-left">左上</option>
+                            </select>
+                          </div>
+                          <div style={{ flex: 1, minWidth: 140 }}>
+                            <div className="h2">端からの距離（px）</div>
+                            <input className="input" type="number" min={0} value={toastBottom} onChange={(e) => setToastBottom(Number(e.target.value))} />
+                            <div className="small" style={{ marginTop: 4 }}>上下・左右の端からの距離</div>
+                          </div>
+                        </div>
+                        <div className="row" style={{ gap: 12, marginTop: 10, flexWrap: "wrap" }}>
+                          <div style={{ flex: 1, minWidth: 160 }}>
+                            <div className="h2">自動で消えるまでの時間（秒）</div>
+                            <input className="input" type="number" min={0} value={toastDurationSec} onChange={(e) => setToastDurationSec(Number(e.target.value))} />
+                            <div className="small" style={{ marginTop: 4 }}>0を入力すると自動では消えません</div>
+                          </div>
+                          <div style={{ flex: 1, minWidth: 160 }}>
+                            <div className="h2">クリックしたときの動作</div>
+                            <select className="input" value={toastClickAction} onChange={(e) => setToastClickAction(e.target.value as typeof toastClickAction)}>
+                              <option value="close_and_url">閉じる＋リンクURLを開く</option>
+                              <option value="close_only">閉じるだけ</option>
+                              <option value="none">何もしない</option>
+                            </select>
+                          </div>
+                        </div>
+                      </>
+                    )}
 
-                {type === "launcher" && (
-                  <>
                     <div style={{ height: 10 }} />
                     <div className="row">
                       <div style={{ flex: 1 }}>
-                        <div className="h2">ボタン位置</div>
-                        <select className="input" value={launcherPosition} onChange={(e) => setLauncherPosition(e.target.value as "left" | "right")}>
-                          <option value="right">右下</option>
-                          <option value="left">左下</option>
-                        </select>
+                        <div className="h2">閉じるボタン文言</div>
+                        <input className="input" value={ctaText} onChange={(e) => setCtaText(e.target.value)} />
                       </div>
                     </div>
-                  </>
-                )}
 
-                <div style={{ height: 10 }} />
-                <div className="row">
-                  <div style={{ flex: 1 }}>
-                    <div className="h2">{type === "launcher" ? "ボタン文言" : "閉じるボタン文言"}</div>
-                    <input className="input" value={ctaText} onChange={(e) => setCtaText(e.target.value)} />
-                  </div>
-                </div>
-
-                <div style={{ height: 10 }} />
-                <div className="row">
-                  <div style={{ flex: 2 }}>
-                    <div className="h2">リンクURL（任意）</div>
-                    <input className="input" placeholder="https://example.com" value={ctaUrl} onChange={(e) => setCtaUrl(e.target.value)} />
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div className="h2">リンクボタン文言</div>
-                    <input className="input" value={ctaUrlText} onChange={(e) => setCtaUrlText(e.target.value)} />
-                  </div>
-                </div>
-
-                {type === "modal" && (
-                  <>
                     <div style={{ height: 10 }} />
                     <div className="row">
+                      <div style={{ flex: 2 }}>
+                        <div className="h2">リンクURL（任意）</div>
+                        <input className="input" placeholder="https://example.com" value={ctaUrl} onChange={(e) => setCtaUrl(e.target.value)} />
+                      </div>
                       <div style={{ flex: 1 }}>
-                        <div className="h2">クーポンコード（任意）</div>
-                        <input className="input" placeholder="SUMMER2025" value={couponCode} onChange={(e) => setCouponCode(e.target.value)} />
-                        <div className="small" style={{ marginTop: 4 }}>入力するとモーダルにコピーボタン付きで表示されます</div>
+                        <div className="h2">リンクボタン文言</div>
+                        <input className="input" value={ctaUrlText} onChange={(e) => setCtaUrlText(e.target.value)} />
                       </div>
                     </div>
+
+                    {type === "modal" && (
+                      <>
+                        <div style={{ height: 10 }} />
+                        <div className="row">
+                          <div style={{ flex: 1 }}>
+                            <div className="h2">クーポンコード（任意）</div>
+                            <input className="input" placeholder="SUMMER2025" value={couponCode} onChange={(e) => setCouponCode(e.target.value)} />
+                            <div className="small" style={{ marginTop: 4 }}>入力するとモーダルにコピーボタン付きで表示されます</div>
+                          </div>
+                        </div>
+                      </>
+                    )}
                   </>
                 )}
 

@@ -855,8 +855,20 @@
 
     // 従来のfixed toast
     var creative2 = normalizeCreative(action.creative);
+
+    // 表示設定
+    var toastPos = creative2.toast_position || "bottom-right";
+    var toastOffset = Number(creative2.toast_bottom != null ? creative2.toast_bottom : 12);
+    var durationMs = creative2.toast_duration_sec != null ? Number(creative2.toast_duration_sec) * 1000 : 5000;
+    var clickAction = creative2.toast_click_action || "close_and_url";
+
+    var isTop = toastPos.indexOf("top") === 0;
+    var isLeft = toastPos.indexOf("left") >= 0;
+    var posStyle = (isTop ? "top:" : "bottom:") + toastOffset + "px;" + (isLeft ? "left:" : "right:") + toastOffset + "px;";
+
     var toast2 = document.createElement("div");
     toast2.className = "cx-toast";
+    toast2.style.cssText = posStyle;
     toast2.textContent = creative2.title || creative2.body || "";
     document.body.appendChild(toast2);
 
@@ -870,7 +882,7 @@
       url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid
     }, ctx.site_id, ctx.site_key);
 
-    var timer2 = setTimeout(function () {
+    var timer2 = durationMs > 0 ? setTimeout(function () {
       try { toast2.remove(); } catch (e) {}
       postLog(apiBase, {
         site_id: ctx.site_id,
@@ -883,11 +895,14 @@
       }, ctx.site_id, ctx.site_key);
 
       if (typeof next === "function") next();
-    }, 5000);
+    }, durationMs) : null;
 
     toast2.addEventListener("click", function () {
-      clearTimeout(timer2);
-      try { toast2.remove(); } catch (e) {}
+      if (clickAction === "none") return;
+      if (timer2) clearTimeout(timer2);
+      if (clickAction !== "none") {
+        try { toast2.remove(); } catch (e) {}
+      }
       postLog(apiBase, {
         site_id: ctx.site_id,
         scenario_id: ctx.scenario_id,
@@ -898,7 +913,7 @@
         url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid
       }, ctx.site_id, ctx.site_key);
 
-      if (creative2.cta_url) {
+      if (clickAction === "close_and_url" && creative2.cta_url) {
         try { window.open(creative2.cta_url, "_blank"); } catch (e) {}
       }
       if (typeof next === "function") next();
@@ -910,6 +925,7 @@
   function renderLauncher(action, next, apiBase, ctx) {
     var creative = normalizeCreative(action.creative);
     var pos = String(creative.launcher_position || "right");
+    var lBottom = Number(creative.launcher_bottom != null ? creative.launcher_bottom : 20);
     var label = creative.cta_text || "お問い合わせ";
 
     // テンプレートがある場合はそれでランチャーボタンを描画
@@ -917,7 +933,7 @@
       var mount = { mode: "shadow" };
       var host = document.createElement("div");
       host.setAttribute("data-cx-host", "1");
-      host.style.cssText = "position:fixed;bottom:20px;" + (pos === "left" ? "left:20px;" : "right:20px;") + "z-index:2147483645;";
+      host.style.cssText = "position:fixed;bottom:" + lBottom + "px;" + (pos === "left" ? "left:" + lBottom + "px;" : "right:" + lBottom + "px;") + "z-index:2147483645;";
       document.body.appendChild(host);
 
       var handle = mountRootFor(host, mount);
@@ -932,7 +948,7 @@
         openBtn.addEventListener("click", function () {
           postLog(apiBase, { site_id: ctx.site_id, scenario_id: ctx.scenario_id, action_id: action.action_id, variant_id: ctx.variant_id || null, event: "click", url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid }, ctx.site_id, ctx.site_key);
           // モーダルとして同じクリエイティブを表示
-          var modalAction = { action_id: action.action_id, type: "modal", creative: action.creative, template: action.modal_template || null };
+          var modalAction = { action_id: action.action_id, type: "modal", creative: action.modal_creative || action.creative, template: action.modal_template || null };
           renderModal(modalAction, function () {}, apiBase, ctx);
         });
       }
@@ -947,14 +963,14 @@
     var btn = document.createElement("button");
     btn.className = "cx-launcher";
     btn.textContent = label;
-    btn.style.cssText = "position:fixed;bottom:20px;" + (pos === "left" ? "left:20px;" : "right:20px;") +
+    btn.style.cssText = "position:fixed;bottom:" + lBottom + "px;" + (pos === "left" ? "left:" + lBottom + "px;" : "right:" + lBottom + "px;") +
       "z-index:2147483645;background:#111;color:#fff;border:none;border-radius:50px;padding:12px 20px;" +
       "font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 4px 20px rgba(0,0,0,.3);display:flex;align-items:center;gap:8px;";
     document.body.appendChild(btn);
 
     btn.addEventListener("click", function () {
       postLog(apiBase, { site_id: ctx.site_id, scenario_id: ctx.scenario_id, action_id: action.action_id, variant_id: ctx.variant_id || null, event: "click", url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid }, ctx.site_id, ctx.site_key);
-      var modalAction = { action_id: action.action_id, type: "modal", creative: action.creative, template: null };
+      var modalAction = { action_id: action.action_id, type: "modal", creative: action.modal_creative || action.creative, template: null };
       renderModal(modalAction, function () {}, apiBase, ctx);
     });
 
