@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
-  getDocs,
   limit,
   onSnapshot,
   orderBy,
@@ -490,25 +489,28 @@ export default function AnalyticsPage() {
     setSelectedVid(null);
   }, [siteId]);
 
-  // ---- 訪問者ジャーニー用ログ（全イベント取得） ----
+  // ---- 訪問者ジャーニー用ログ（リアルタイム: onSnapshot） ----
   useEffect(() => {
     setJourneyLogs([]);
     if (!siteId) { return; }
     setJourneyLoading(true);
     const since = effectiveFrom.toISOString();
-    getDocs(
+    const to = effectiveTo.toISOString();
+    const unsub = onSnapshot(
       query(
         collection(db, "logs"),
         where("site_id", "==", siteId),
         where("createdAt", ">", since),
         orderBy("createdAt", "desc"),
         limit(5000)
-      )
-    ).then((snap) => {
-      const to = effectiveTo.toISOString();
-      setJourneyLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((l) => (l.createdAt || "") <= to));
-      setJourneyLoading(false);
-    }).catch(() => setJourneyLoading(false));
+      ),
+      (snap) => {
+        setJourneyLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((l) => (l.createdAt || "") <= to));
+        setJourneyLoading(false);
+      },
+      () => setJourneyLoading(false)
+    );
+    return unsub;
   }, [siteId, effectiveFrom, effectiveTo]);
 
   // ---- 購入ログ取得（リアルタイム） ----
