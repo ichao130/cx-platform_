@@ -362,6 +362,12 @@ export default function ScenariosPage() {
   // カゴ落ち
   const [cartAbandonedEnabled, setCartAbandonedEnabled] = useState(false);
 
+  // 訪問回数条件
+  const [visitCountEnabled, setVisitCountEnabled] = useState(false);
+  const [visitCountMin, setVisitCountMin] = useState(3);
+  const [visitCountHours, setVisitCountHours] = useState(24);
+  const [visitCountUtmSource, setVisitCountUtmSource] = useState("");
+
   useEffect(() => {
     if (!currentUid) { setSites([]); return; }
     if (workspaceId) runMigration(workspaceId);
@@ -544,9 +550,18 @@ export default function ScenariosPage() {
       display: (displayUnit === "pageview" && displayInterval === 1)
         ? undefined  // デフォルト（毎回）は保存しない
         : { unit: displayUnit, interval: displayInterval },
-      visitor: cartAbandonedEnabled ? { cart_abandoned: true } : undefined,
+      visitor: (cartAbandonedEnabled || visitCountEnabled) ? {
+        ...(cartAbandonedEnabled ? { cart_abandoned: true } : {}),
+        ...(visitCountEnabled ? {
+          visit_count: {
+            min_count: visitCountMin,
+            within_hours: visitCountHours,
+            ...(visitCountUtmSource.trim() ? { utm_source: visitCountUtmSource.trim() } : {}),
+          }
+        } : {}),
+      } : undefined,
     }),
-    [pageTypeIn, staySec, scrollDepthPct, triggerType, urlRules, displayUnit, displayInterval, cartAbandonedEnabled]
+    [pageTypeIn, staySec, scrollDepthPct, triggerType, urlRules, displayUnit, displayInterval, cartAbandonedEnabled, visitCountEnabled, visitCountMin, visitCountHours, visitCountUtmSource]
   );
 
 
@@ -819,6 +834,10 @@ export default function ScenariosPage() {
     setDisplayInterval(1);
 
     setCartAbandonedEnabled(false);
+    setVisitCountEnabled(false);
+    setVisitCountMin(3);
+    setVisitCountHours(24);
+    setVisitCountUtmSource("");
 
     setScheduleEnabled(false);
     setScheduleStart("");
@@ -933,6 +952,12 @@ export default function ScenariosPage() {
 
     // カゴ落ち
     setCartAbandonedEnabled(!!(s.entry_rules as any)?.visitor?.cart_abandoned);
+    // 訪問回数条件
+    const vc = (s.entry_rules as any)?.visitor?.visit_count;
+    setVisitCountEnabled(!!vc);
+    setVisitCountMin(vc?.min_count ?? 3);
+    setVisitCountHours(vc?.within_hours ?? 24);
+    setVisitCountUtmSource(vc?.utm_source ?? "");
 
     // schedule
     if (s.schedule && (s.schedule.startAt || s.schedule.endAt)) {
@@ -1617,6 +1642,60 @@ export default function ScenariosPage() {
                     <div className="small" style={{ marginTop: 3, color: "#6b7280", lineHeight: 1.6 }}>
                       過去のセッションでカートに追加したが購入しなかったユーザーが、次に訪問したときに配信します。
                     </div>
+                  </div>
+                </label>
+
+                <div style={{ height: 10 }} />
+                <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", padding: "12px 14px", borderRadius: 10, border: visitCountEnabled ? "1.5px solid #6366f1" : "1.5px solid #e2e8f0", background: visitCountEnabled ? "#eef2ff" : "#f8fafc", transition: "all .15s" }}>
+                  <input type="checkbox" checked={visitCountEnabled} onChange={(e) => setVisitCountEnabled(e.target.checked)} style={{ marginTop: 2, accentColor: "#6366f1" }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: visitCountEnabled ? "#4f46e5" : "#374151" }}>🔁 訪問回数で絞り込む</div>
+                    <div className="small" style={{ marginTop: 3, color: "#6b7280", lineHeight: 1.6 }}>
+                      指定した時間内に一定回数以上訪問したユーザーにだけ配信します。メール・LINE経由などの流入元でも絞り込めます。
+                    </div>
+                    {visitCountEnabled && (
+                      <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+                        <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+                          <div style={{ flex: 1, minWidth: 120 }}>
+                            <div className="h2">訪問回数（N回以上）</div>
+                            <select className="input" value={visitCountMin} onChange={(e) => setVisitCountMin(Number(e.target.value))}>
+                              {[2, 3, 5, 7, 10].map((n) => (
+                                <option key={n} value={n}>{n}回以上</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div style={{ flex: 1, minWidth: 140 }}>
+                            <div className="h2">集計期間</div>
+                            <select className="input" value={visitCountHours} onChange={(e) => setVisitCountHours(Number(e.target.value))}>
+                              <option value={1}>1時間以内</option>
+                              <option value={6}>6時間以内</option>
+                              <option value={12}>12時間以内</option>
+                              <option value={24}>24時間以内</option>
+                              <option value={48}>48時間以内</option>
+                              <option value={72}>72時間以内</option>
+                              <option value={168}>7日以内</option>
+                            </select>
+                          </div>
+                        </div>
+                        <div>
+                          <div className="h2">流入元フィルター（任意）</div>
+                          <input
+                            className="input"
+                            placeholder="例: email / line / instagram（空白=すべての流入元）"
+                            value={visitCountUtmSource}
+                            onChange={(e) => setVisitCountUtmSource(e.target.value)}
+                          />
+                          <div className="small" style={{ marginTop: 4, color: "#6b7280" }}>
+                            UTMパラメータの <code>utm_source</code> 値と照合します。空白にするとすべての流入元が対象になります。
+                          </div>
+                        </div>
+                        {visitCountEnabled && (
+                          <div className="small" style={{ padding: "8px 10px", borderRadius: 8, background: "#e0e7ff", color: "#3730a3", fontWeight: 600 }}>
+                            ✅ 「{visitCountHours}時間以内に{visitCountMin}回以上{visitCountUtmSource ? `（${visitCountUtmSource}経由）` : ""}訪問したユーザー」に配信
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </label>
 

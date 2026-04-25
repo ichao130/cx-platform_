@@ -1182,6 +1182,25 @@
     // 配信頻度チェック
     if (!checkAndMarkFrequency(s.scenario_id || s.id, er.display || null)) return false;
 
+    // 訪問回数チェック
+    if (er.visitor && er.visitor.visit_count) {
+      var vc = er.visitor.visit_count;
+      var vcMin = Number(vc.min_count || 1);
+      var vcHours = Number(vc.within_hours || 24);
+      var vcUtm = vc.utm_source || "";
+      try {
+        var vcKey = "cx_visits_" + ctx.site_id;
+        var vcVisits = JSON.parse(localStorage.getItem(vcKey) || "[]");
+        var vcCutoff = new Date(Date.now() - vcHours * 60 * 60 * 1000).toISOString();
+        var vcCount = vcVisits.filter(function(v) {
+          if (v.ts < vcCutoff) return false;
+          if (vcUtm && v.utm_source !== vcUtm) return false;
+          return true;
+        }).length;
+        if (vcCount < vcMin) return false;
+      } catch (e) { return false; }
+    }
+
     // カゴ落ちチェック: 前のセッションでカゴ追加 → 購入せず離脱 → 今回の訪問に配信
     if (er.visitor && er.visitor.cart_abandoned) {
       var cartKey = "cx_cart_" + ctx.site_id;
@@ -1350,6 +1369,17 @@
     // 新規訪問者判定: cx_vid が存在しない = 初回訪問
     var isNewVisitor = false;
     try { isNewVisitor = !localStorage.getItem("cx_vid"); } catch (e) {}
+
+    // 訪問履歴を記録（訪問回数条件の判定に使用）
+    try {
+      var visitsKey = "cx_visits_" + siteId;
+      var visits = JSON.parse(localStorage.getItem(visitsKey) || "[]");
+      visits.push({ ts: new Date().toISOString(), utm_source: utm.utm_source || "" });
+      // 7日より古いエントリは削除
+      var pruneTs = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      visits = visits.filter(function(v) { return v.ts > pruneTs; });
+      localStorage.setItem(visitsKey, JSON.stringify(visits));
+    } catch (e) {}
 
     var ctx = {
       site_id: siteId,
