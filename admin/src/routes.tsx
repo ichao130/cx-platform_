@@ -16,6 +16,7 @@ import WorkspaceBillingPage from "./pages/WorkspaceBillingPage";
 import AcceptInvitePage from "./pages/AcceptInvitePage";
 import AnalyticsPage from "./pages/AnalyticsPage";
 import OptimizePage from "./pages/OptimizePage";
+import RmsPage from "./pages/RmsPage";
 
 type AccessKey =
   | "dashboard"
@@ -28,12 +29,14 @@ type AccessKey =
   | "media"
   | "ai"
   | "members"
-  | "billing";
+  | "billing"
+  | "rms";
 
 type AppRoutesProps = {
   canAccess?: (key: AccessKey) => boolean;
   workspaceRole?: string | null;
   isPlatformAdmin?: boolean;
+  workspaceId?: string;
 };
 
 function canShow(canAccess: AppRoutesProps["canAccess"], key: AccessKey) {
@@ -59,7 +62,7 @@ function Guard({
   );
 }
 
-export default function AppRoutes({ canAccess, workspaceRole, isPlatformAdmin }: AppRoutesProps) {
+export default function AppRoutes({ canAccess, workspaceRole, isPlatformAdmin, workspaceId }: AppRoutesProps) {
   return (
     <div className="container">
       <Routes>
@@ -79,6 +82,7 @@ export default function AppRoutes({ canAccess, workspaceRole, isPlatformAdmin }:
         <Route path="/scenarios/:scenarioId/ai" element={<Guard allow={canShow(canAccess, "ai")} title="AIインサイト"><ScenarioAiPage /></Guard>} />
         <Route path="/ai" element={<Guard allow={canShow(canAccess, "ai")} title="AIインサイト"><ScenarioAiPage /></Guard>} />
         <Route path="/ai/optimize" element={<Guard allow={canShow(canAccess, "ai")} title="配信最適化"><OptimizePage /></Guard>} />
+        <Route path="/rms" element={<Guard allow={canShow(canAccess, "rms")} title="楽天RMS"><RmsPage workspaceId={workspaceId || ""} /></Guard>} />
 
         {/* ワークスペース関連 */}
         <Route path="/workspace/members" element={<Guard allow={canShow(canAccess, "members")} title="メンバー"><WorkspaceMembersPage /></Guard>} />

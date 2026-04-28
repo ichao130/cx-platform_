@@ -40,7 +40,8 @@ type AccessKey =
   | "media"
   | "ai"
   | "members"
-  | "billing";
+  | "billing"
+  | "rms";
 
 type AccessMatrix = Record<RoleKey, Partial<Record<AccessKey, boolean>>>;
 
@@ -62,6 +63,7 @@ const ACCESS_KEYS: AccessKey[] = [
   "ai",
   "members",
   "billing",
+  "rms",
 ];
 
 function defaultAccessMatrix(): AccessMatrix {
@@ -78,6 +80,7 @@ function defaultAccessMatrix(): AccessMatrix {
       ai: true,
       members: true,
       billing: true,
+      rms: true,
     },
     admin: {
       dashboard: true,
@@ -91,6 +94,7 @@ function defaultAccessMatrix(): AccessMatrix {
       ai: true,
       members: true,
       billing: false,
+      rms: true,
     },
     member: {
       dashboard: true,
@@ -104,6 +108,7 @@ function defaultAccessMatrix(): AccessMatrix {
       ai: true,
       members: false,
       billing: false,
+      rms: true,
     },
     viewer: {
       dashboard: true,
@@ -117,6 +122,7 @@ function defaultAccessMatrix(): AccessMatrix {
       ai: true,
       members: false,
       billing: false,
+      rms: false,
     },
   };
 }
@@ -790,6 +796,17 @@ function AppShell({ children }: { children: React.ReactNode }) {
             {canShow(canAccess, "ai") && <SidebarLink to="/ai/optimize">配信最適化</SidebarLink>}
           </div>
         </div>
+
+        {(selectedWorkspaceRow?.data as any)?.rmsEnabled && canShow(canAccess, "rms") && (
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "rgba(255,255,255,.38)", marginBottom: 8, paddingLeft: 12 }}>
+              楽天RMS
+            </div>
+            <div style={{ display: "grid", gap: 4 }}>
+              <SidebarLink to="/rms">RMSダッシュボード</SidebarLink>
+            </div>
+          </div>
+        )}
 
         <div>
           <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "rgba(255,255,255,.38)", marginBottom: 8, paddingLeft: 12 }}>
@@ -1791,7 +1808,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 }
 
 function AppRoutesGuarded() {
-  const { user } = useAuth();
+  const { user, workspaceId } = useAuth();
   const isPlatformAdmin = isPlatformAdminEmail(user?.email);
   const pathname = window.location.pathname || "/";
 
@@ -1799,7 +1816,7 @@ function AppRoutesGuarded() {
     return <Navigate to="/dashboard" replace />;
   }
 
-  return <AppRoutes isPlatformAdmin={isPlatformAdmin} />;
+  return <AppRoutes isPlatformAdmin={isPlatformAdmin} workspaceId={workspaceId || ""} />;
 }
 
 export default function App() {

@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deleteMedia = exports.processBackupRun = exports.enqueueDailyBackups = exports.sendMonthlyMisocaInvoices = exports.cleanupExpiredFreeAccounts = exports.api = void 0;
+exports.syncRmsDailyAll = exports.deleteMedia = exports.processBackupRun = exports.enqueueDailyBackups = exports.sendMonthlyMisocaInvoices = exports.cleanupExpiredFreeAccounts = exports.api = void 0;
 // functions/src/index.ts
 const v2_1 = require("firebase-functions/v2");
 const https_1 = require("firebase-functions/v2/https");
@@ -64,6 +64,8 @@ const MISOCA_CLIENT_SECRET = (0, params_1.defineSecret)("MISOCA_CLIENT_SECRET");
  */
 const v1_1 = require("./routes/v1");
 const mcp_1 = require("./routes/mcp");
+const rms_1 = require("./routes/rms");
+const rms_2 = require("./services/rms");
 const misoca_1 = require("./services/misoca");
 const backup_1 = require("./services/backup");
 const app = (0, express_1.default)();
@@ -132,6 +134,7 @@ app.use("/v1/", apiLimiter);
 app.get("/", (_req, res) => res.status(200).send("ok"));
 (0, v1_1.registerV1Routes)(app);
 (0, mcp_1.registerMcpRoutes)(app);
+(0, rms_1.registerRmsRoutes)(app);
 exports.api = (0, https_1.onRequest)({
     region: "asia-northeast1",
     // コスト爆発防止: インスタンスの最大数を制限
@@ -396,4 +399,35 @@ exports.deleteMedia = (0, https_1.onCall)({ region: "asia-northeast1" }, async (
     // Firestore meta delete
     await mediaRef.delete();
     return { ok: true };
+});
+/**
+ * ==========================
+ * Scheduled: 楽天RMS 日次同期
+ * 毎日JST 04:00 (UTC 19:00) に実行
+ * ==========================
+ */
+exports.syncRmsDailyAll = (0, scheduler_1.onSchedule)({
+    region: "asia-northeast1",
+    schedule: "0 19 * * *",
+    timeZone: "UTC",
+    timeoutSeconds: 540,
+    memory: "512MiB",
+}, async () => {
+    const db = (0, admin_1.adminDb)();
+    const snap = await db.collection("rms_credentials").where("enabled", "==", true).get();
+    let success = 0;
+    let failed = 0;
+    for (const doc of snap.docs) {
+        const workspaceId = doc.id;
+        try {
+            const result = await (0, rms_2.syncRmsData)(workspaceId, 90);
+            console.log(`[syncRmsDailyAll] workspaceId=${workspaceId} orders=${result.orders} items=${result.items}`);
+            success++;
+        }
+        catch (e) {
+            console.error(`[syncRmsDailyAll] workspaceId=${workspaceId} error:`, e);
+            failed++;
+        }
+    }
+    console.log(`[syncRmsDailyAll] done: success=${success} failed=${failed}`);
 });

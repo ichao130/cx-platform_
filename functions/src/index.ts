@@ -32,6 +32,8 @@ const MISOCA_CLIENT_SECRET = defineSecret("MISOCA_CLIENT_SECRET");
  */
 import { registerV1Routes } from "./routes/v1";
 import { registerMcpRoutes } from "./routes/mcp";
+import { registerRmsRoutes } from "./routes/rms";
+import { syncRmsData } from "./services/rms";
 import { sendMisocaInvoicesJob } from "./services/misoca";
 import { executeQueuedBackupRun, maybeEnqueueScheduledBackup } from "./services/backup";
 
@@ -104,6 +106,7 @@ app.use("/v1/", apiLimiter);
 app.get("/", (_req, res) => res.status(200).send("ok"));
 registerV1Routes(app);
 registerMcpRoutes(app);
+registerRmsRoutes(app);
 export const api = onRequest(
 {
   region: "asia-northeast1",
@@ -397,3 +400,37 @@ export const deleteMedia = onCall({ region: "asia-northeast1" }, async (req) => 
 
   return { ok: true };
 });
+
+/**
+ * ==========================
+ * Scheduled: 楽天RMS 日次同期
+ * 毎日JST 04:00 (UTC 19:00) に実行
+ * ==========================
+ */
+export const syncRmsDailyAll = onSchedule(
+  {
+    region: "asia-northeast1",
+    schedule: "0 19 * * *",
+    timeZone: "UTC",
+    timeoutSeconds: 540,
+    memory: "512MiB",
+  },
+  async () => {
+    const db = adminDb();
+    const snap = await db.collection("rms_credentials").where("enabled", "==", true).get();
+    let success = 0;
+    let failed = 0;
+    for (const doc of snap.docs) {
+      const workspaceId = doc.id;
+      try {
+        const result = await syncRmsData(workspaceId, 90);
+        console.log(`[syncRmsDailyAll] workspaceId=${workspaceId} orders=${result.orders} items=${result.items}`);
+        success++;
+      } catch (e) {
+        console.error(`[syncRmsDailyAll] workspaceId=${workspaceId} error:`, e);
+        failed++;
+      }
+    }
+    console.log(`[syncRmsDailyAll] done: success=${success} failed=${failed}`);
+  }
+);
