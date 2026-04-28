@@ -421,13 +421,13 @@ export const syncRmsDailyAll = onSchedule(
     let success = 0;
     let failed = 0;
     for (const doc of snap.docs) {
-      const workspaceId = doc.id;
+      const siteId = doc.data().siteId || doc.id;
       try {
-        const result = await syncRmsData(workspaceId, 90);
-        console.log(`[syncRmsDailyAll] workspaceId=${workspaceId} orders=${result.orders} items=${result.items}`);
+        const result = await syncRmsData(siteId, 90);
+        console.log(`[syncRmsDailyAll] siteId=${siteId} orders=${result.orders} items=${result.items}`);
         success++;
       } catch (e) {
-        console.error(`[syncRmsDailyAll] workspaceId=${workspaceId} error:`, e);
+        console.error(`[syncRmsDailyAll] siteId=${siteId} error:`, e);
         failed++;
       }
     }

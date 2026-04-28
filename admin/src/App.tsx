@@ -430,6 +430,9 @@ function getWorkspaceRailIcon(row: { id: string; data: any }) {
   };
 }
 
+const SelectedSiteContext = React.createContext<string | null>(null);
+export function useSelectedSiteId() { return React.useContext(SelectedSiteContext); }
+
 function AppShell({ children }: { children: React.ReactNode }) {
 
   const { user, workspaceId, workspaceRole, canAccess, currentUid, logout } = useAuth();
@@ -797,7 +800,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
 
-        {(selectedWorkspaceRow?.data as any)?.rmsEnabled && canShow(canAccess, "rms") && (
+        {(selectedWorkspaceRow?.data as any)?.rmsEnabled && selectedSiteId && (selectedSiteRow?.data as any)?.rmsEnabled && canShow(canAccess, "rms") && (
           <div style={{ marginBottom: 18 }}>
             <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "rgba(255,255,255,.38)", marginBottom: 8, paddingLeft: 12 }}>
               楽天RMS
@@ -949,6 +952,7 @@ function AuthScreen({
   children?: React.ReactNode;
 }) {
   return (
+    <SelectedSiteContext.Provider value={selectedSiteId}>
     <div
       style={{
         minHeight: "100vh",
@@ -1029,6 +1033,7 @@ function AuthScreen({
         </div>
       </div>
     </div>
+    </SelectedSiteContext.Provider>
   );
 }
 
@@ -1810,13 +1815,14 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 function AppRoutesGuarded() {
   const { user, workspaceId } = useAuth();
   const isPlatformAdmin = isPlatformAdminEmail(user?.email);
+  const selectedSiteId = useSelectedSiteId();
   const pathname = window.location.pathname || "/";
 
   if (!isPlatformAdmin && isPlatformAdminOnlyPath(pathname)) {
     return <Navigate to="/dashboard" replace />;
   }
 
-  return <AppRoutes isPlatformAdmin={isPlatformAdmin} workspaceId={workspaceId || ""} />;
+  return <AppRoutes isPlatformAdmin={isPlatformAdmin} workspaceId={workspaceId || ""} siteId={selectedSiteId || ""} />;
 }
 
 export default function App() {

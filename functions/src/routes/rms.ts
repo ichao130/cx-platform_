@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { z } from "zod";
 import { requireAuthUid } from "../services/admin";
-import { assertWorkspaceRole } from "../services/site";
+import { assertWorkspaceRole, pickSiteById } from "../services/site";
 import {
   getRmsCredentials,
   saveRmsCredentials,
@@ -11,8 +11,18 @@ import {
 } from "../services/rms";
 import { adminDb } from "../services/admin";
 
+// siteId から workspaceId を取得し、ユーザーのロールを検証するヘルパー
+async function assertSiteRole(siteId: string, uid: string, allowedRoles: string[]) {
+  const site = await pickSiteById(siteId);
+  if (!site) throw new Error("site_not_found");
+  const workspaceId = String(site.workspaceId || "");
+  if (!workspaceId) throw new Error("site_has_no_workspace");
+  await assertWorkspaceRole({ workspaceId, uid, allowedRoles });
+  return { workspaceId };
+}
+
 const SaveCredsSchema = z.object({
-  workspaceId: z.string().min(1),
+  siteId: z.string().min(1),
   serviceSecret: z.string().min(1),
   licenseKey: z.string().min(1),
   shopUrl: z.string().optional(),
@@ -20,7 +30,7 @@ const SaveCredsSchema = z.object({
 });
 
 const SyncSchema = z.object({
-  workspaceId: z.string().min(1),
+  siteId: z.string().min(1),
   daysBack: z.number().int().min(1).max(90).optional().default(90),
 });
 
@@ -30,7 +40,7 @@ export function registerRmsRoutes(app: Express) {
     try {
       const uid = await requireAuthUid(req);
       const body = SaveCredsSchema.parse(req.body);
-      await assertWorkspaceRole({ workspaceId: body.workspaceId, uid, allowedRoles: ["owner", "admin"] });
+      await assertSiteRole(body.siteId, uid, ["owner", "admin"]);
 
       // 接続テスト
       const client = new RmsClient(body.serviceSecret, body.licenseKey);
@@ -40,11 +50,11 @@ export function registerRmsRoutes(app: Express) {
         return;
       }
 
-      await saveRmsCredentials(body.workspaceId, body);
+      await saveRmsCredentials(body.siteId, body);
 
-      // ワークスペースに rmsEnabled フラグをセット
+      // サイトに rmsEnabled フラグをセット
       const db = adminDb();
-      await db.collection("workspaces").doc(body.workspaceId).set(
+      await db.collection("sites").doc(body.siteId).set(
         { rmsEnabled: body.enabled ?? true },
         { merge: true }
       );
@@ -60,11 +70,11 @@ export function registerRmsRoutes(app: Express) {
   app.get("/v1/rms/credentials", async (req, res) => {
     try {
       const uid = await requireAuthUid(req);
-      const workspaceId = String(req.query.workspaceId || "");
-      if (!workspaceId) { res.status(400).json({ error: "workspaceId required" }); return; }
-      await assertWorkspaceRole({ workspaceId, uid, allowedRoles: ["owner", "admin", "member"] });
+      const siteId = String(req.query.siteId || "");
+      if (!siteId) { res.status(400).json({ error: "siteId required" }); return; }
+      await assertSiteRole(siteId, uid, ["owner", "admin", "member"]);
 
-      const creds = await getRmsCredentials(workspaceId);
+      const creds = await getRmsCredentials(siteId);
       if (!creds) { res.json({ exists: false }); return; }
 
       // secretは返さない
@@ -83,13 +93,13 @@ export function registerRmsRoutes(app: Express) {
   app.delete("/v1/rms/credentials", async (req, res) => {
     try {
       const uid = await requireAuthUid(req);
-      const workspaceId = String(req.query.workspaceId || "");
-      if (!workspaceId) { res.status(400).json({ error: "workspaceId required" }); return; }
-      await assertWorkspaceRole({ workspaceId, uid, allowedRoles: ["owner", "admin"] });
+      const siteId = String(req.query.siteId || "");
+      if (!siteId) { res.status(400).json({ error: "siteId required" }); return; }
+      await assertSiteRole(siteId, uid, ["owner", "admin"]);
 
-      await deleteRmsCredentials(workspaceId);
+      await deleteRmsCredentials(siteId);
       const db = adminDb();
-      await db.collection("workspaces").doc(workspaceId).set({ rmsEnabled: false }, { merge: true });
+      await db.collection("sites").doc(siteId).set({ rmsEnabled: false }, { merge: true });
 
       res.json({ ok: true });
     } catch (e: any) {
@@ -102,9 +112,9 @@ export function registerRmsRoutes(app: Express) {
     try {
       const uid = await requireAuthUid(req);
       const body = SyncSchema.parse(req.body);
-      await assertWorkspaceRole({ workspaceId: body.workspaceId, uid, allowedRoles: ["owner", "admin"] });
+      await assertSiteRole(body.siteId, uid, ["owner", "admin"]);
 
-      const result = await syncRmsData(body.workspaceId, body.daysBack);
+      const result = await syncRmsData(body.siteId, body.daysBack);
       res.json({ ok: true, ...result });
     } catch (e: any) {
       if (e.name === "ZodError") { res.status(400).json({ error: "validation", issues: e.issues }); return; }
@@ -116,12 +126,12 @@ export function registerRmsRoutes(app: Express) {
   app.get("/v1/rms/sync/status", async (req, res) => {
     try {
       const uid = await requireAuthUid(req);
-      const workspaceId = String(req.query.workspaceId || "");
-      if (!workspaceId) { res.status(400).json({ error: "workspaceId required" }); return; }
-      await assertWorkspaceRole({ workspaceId, uid, allowedRoles: ["owner", "admin", "member"] });
+      const siteId = String(req.query.siteId || "");
+      if (!siteId) { res.status(400).json({ error: "siteId required" }); return; }
+      await assertSiteRole(siteId, uid, ["owner", "admin", "member"]);
 
       const db = adminDb();
-      const snap = await db.collection("rms_sync_logs").doc(workspaceId).get();
+      const snap = await db.collection("rms_sync_logs").doc(siteId).get();
       if (!snap.exists) { res.json({ exists: false }); return; }
       res.json({ exists: true, ...snap.data() });
     } catch (e: any) {
@@ -133,13 +143,13 @@ export function registerRmsRoutes(app: Express) {
   app.get("/v1/rms/orders", async (req, res) => {
     try {
       const uid = await requireAuthUid(req);
-      const workspaceId = String(req.query.workspaceId || "");
-      if (!workspaceId) { res.status(400).json({ error: "workspaceId required" }); return; }
-      await assertWorkspaceRole({ workspaceId, uid, allowedRoles: ["owner", "admin", "member"] });
+      const siteId = String(req.query.siteId || "");
+      if (!siteId) { res.status(400).json({ error: "siteId required" }); return; }
+      await assertSiteRole(siteId, uid, ["owner", "admin", "member"]);
 
       const db = adminDb();
       const snap = await db.collection("rms_orders")
-        .where("workspaceId", "==", workspaceId)
+        .where("siteId", "==", siteId)
         .orderBy("orderDate", "desc")
         .limit(100)
         .get();
@@ -153,13 +163,13 @@ export function registerRmsRoutes(app: Express) {
   app.get("/v1/rms/items", async (req, res) => {
     try {
       const uid = await requireAuthUid(req);
-      const workspaceId = String(req.query.workspaceId || "");
-      if (!workspaceId) { res.status(400).json({ error: "workspaceId required" }); return; }
-      await assertWorkspaceRole({ workspaceId, uid, allowedRoles: ["owner", "admin", "member"] });
+      const siteId = String(req.query.siteId || "");
+      if (!siteId) { res.status(400).json({ error: "siteId required" }); return; }
+      await assertSiteRole(siteId, uid, ["owner", "admin", "member"]);
 
       const db = adminDb();
       const snap = await db.collection("rms_items")
-        .where("workspaceId", "==", workspaceId)
+        .where("siteId", "==", siteId)
         .limit(200)
         .get();
       res.json({ items: snap.docs.map((d) => ({ id: d.id, ...d.data() })) });
@@ -172,15 +182,15 @@ export function registerRmsRoutes(app: Express) {
   app.get("/v1/rms/sales", async (req, res) => {
     try {
       const uid = await requireAuthUid(req);
-      const workspaceId = String(req.query.workspaceId || "");
-      if (!workspaceId) { res.status(400).json({ error: "workspaceId required" }); return; }
-      await assertWorkspaceRole({ workspaceId, uid, allowedRoles: ["owner", "admin", "member"] });
+      const siteId = String(req.query.siteId || "");
+      if (!siteId) { res.status(400).json({ error: "siteId required" }); return; }
+      await assertSiteRole(siteId, uid, ["owner", "admin", "member"]);
 
       const dateFrom = String(req.query.from || "");
       const dateTo = String(req.query.to || "");
 
       const db = adminDb();
-      let q = db.collection("rms_sales_daily").where("workspaceId", "==", workspaceId) as any;
+      let q = db.collection("rms_sales_daily").where("siteId", "==", siteId) as any;
       if (dateFrom) q = q.where("date", ">=", dateFrom);
       if (dateTo) q = q.where("date", "<=", dateTo);
       const snap = await q.orderBy("date", "desc").limit(90).get();

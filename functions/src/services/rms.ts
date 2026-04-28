@@ -5,7 +5,7 @@ import { FieldValue } from "firebase-admin/firestore";
 // Types
 // =====================
 export type RmsCredentials = {
-  workspaceId: string;
+  siteId: string;
   serviceSecret: string;
   licenseKey: string;
   shopUrl?: string;
@@ -15,7 +15,7 @@ export type RmsCredentials = {
 };
 
 export type RmsOrder = {
-  workspaceId: string;
+  siteId: string;
   orderId: string;
   orderDate: string; // ISO string
   status: string;
@@ -30,7 +30,7 @@ export type RmsOrder = {
 };
 
 export type RmsItem = {
-  workspaceId: string;
+  siteId: string;
   itemUrl: string;
   itemName: string;
   itemPrice: number;
@@ -39,7 +39,7 @@ export type RmsItem = {
 };
 
 export type RmsSalesDaily = {
-  workspaceId: string;
+  siteId: string;
   date: string; // YYYY-MM-DD
   totalSales: number;
   orderCount: number;
@@ -121,20 +121,20 @@ export class RmsClient {
 // =====================
 const CREDS_COLLECTION = "rms_credentials";
 
-export async function getRmsCredentials(workspaceId: string): Promise<RmsCredentials | null> {
+export async function getRmsCredentials(siteId: string): Promise<RmsCredentials | null> {
   const db = adminDb();
-  const snap = await db.collection(CREDS_COLLECTION).doc(workspaceId).get();
+  const snap = await db.collection(CREDS_COLLECTION).doc(siteId).get();
   if (!snap.exists) return null;
-  return { workspaceId, ...snap.data() } as RmsCredentials;
+  return { siteId, ...snap.data() } as RmsCredentials;
 }
 
 export async function saveRmsCredentials(
-  workspaceId: string,
+  siteId: string,
   data: { serviceSecret: string; licenseKey: string; shopUrl?: string; enabled?: boolean }
 ): Promise<void> {
   const db = adminDb();
-  await db.collection(CREDS_COLLECTION).doc(workspaceId).set({
-    workspaceId,
+  await db.collection(CREDS_COLLECTION).doc(siteId).set({
+    siteId,
     serviceSecret: data.serviceSecret,
     licenseKey: data.licenseKey,
     shopUrl: data.shopUrl || "",
@@ -144,18 +144,18 @@ export async function saveRmsCredentials(
   }, { merge: true });
 }
 
-export async function deleteRmsCredentials(workspaceId: string): Promise<void> {
+export async function deleteRmsCredentials(siteId: string): Promise<void> {
   const db = adminDb();
-  await db.collection(CREDS_COLLECTION).doc(workspaceId).delete();
+  await db.collection(CREDS_COLLECTION).doc(siteId).delete();
 }
 
 // =====================
 // Sync Logic
 // =====================
-export async function syncRmsData(workspaceId: string, daysBack = 90): Promise<{
+export async function syncRmsData(siteId: string, daysBack = 90): Promise<{
   orders: number; items: number; message?: string;
 }> {
-  const creds = await getRmsCredentials(workspaceId);
+  const creds = await getRmsCredentials(siteId);
   if (!creds || !creds.enabled) throw new Error("RMS credentials not found or disabled");
 
   const client = new RmsClient(creds.serviceSecret, creds.licenseKey);
@@ -181,7 +181,7 @@ export async function syncRmsData(workspaceId: string, daysBack = 90): Promise<{
       for (const o of orders) {
         const orderId = String(o.orderNumber || o.orderId || "");
         if (!orderId) continue;
-        const docId = `${workspaceId}_${orderId}`;
+        const docId = `${siteId}_${orderId}`;
         const items = (o.PackageModelList || o.packageList || []).flatMap((pkg: any) =>
           (pkg.ItemModelList || pkg.itemList || []).map((item: any) => ({
             itemId: String(item.itemId || item.manageNumber || ""),
@@ -192,7 +192,7 @@ export async function syncRmsData(workspaceId: string, daysBack = 90): Promise<{
         );
         const totalPrice = items.reduce((s: number, it: any) => s + it.price * it.quantity, 0);
         batch.set(db.collection("rms_orders").doc(docId), {
-          workspaceId,
+          siteId,
           orderId,
           orderDate: String(o.orderDatetime || o.orderDate || "").slice(0, 10),
           status: String(o.orderProgress || o.status || ""),
@@ -215,9 +215,9 @@ export async function syncRmsData(workspaceId: string, daysBack = 90): Promise<{
       for (const item of itemList) {
         const itemUrl = String(item.itemUrl || item.manageNumber || "");
         if (!itemUrl) continue;
-        const docId = `${workspaceId}_${itemUrl}`;
+        const docId = `${siteId}_${itemUrl}`;
         batch.set(db.collection("rms_items").doc(docId), {
-          workspaceId,
+          siteId,
           itemUrl,
           itemName: String(item.itemName || ""),
           itemPrice: Number(item.itemPrice || 0),
@@ -232,11 +232,11 @@ export async function syncRmsData(workspaceId: string, daysBack = 90): Promise<{
     }
 
     // 日次売上集計
-    await aggregateDailySales(workspaceId, dateFrom, dateTo);
+    await aggregateDailySales(siteId, dateFrom, dateTo);
 
     // sync log 更新
-    await db.collection("rms_sync_logs").doc(workspaceId).set({
-      workspaceId,
+    await db.collection("rms_sync_logs").doc(siteId).set({
+      siteId,
       lastSyncAt: FieldValue.serverTimestamp(),
       lastSyncStatus: "success",
       lastSyncOrders: orderCount,
@@ -245,8 +245,8 @@ export async function syncRmsData(workspaceId: string, daysBack = 90): Promise<{
 
     return { orders: orderCount, items: itemCount };
   } catch (e: any) {
-    await db.collection("rms_sync_logs").doc(workspaceId).set({
-      workspaceId,
+    await db.collection("rms_sync_logs").doc(siteId).set({
+      siteId,
       lastSyncAt: FieldValue.serverTimestamp(),
       lastSyncStatus: "error",
       lastSyncError: e.message || String(e),
@@ -256,10 +256,10 @@ export async function syncRmsData(workspaceId: string, daysBack = 90): Promise<{
 }
 
 // 日次売上集計
-export async function aggregateDailySales(workspaceId: string, dateFrom: string, dateTo: string): Promise<void> {
+export async function aggregateDailySales(siteId: string, dateFrom: string, dateTo: string): Promise<void> {
   const db = adminDb();
   const snap = await db.collection("rms_orders")
-    .where("workspaceId", "==", workspaceId)
+    .where("siteId", "==", siteId)
     .where("orderDate", ">=", dateFrom)
     .where("orderDate", "<=", dateTo)
     .get();
@@ -284,9 +284,9 @@ export async function aggregateDailySales(workspaceId: string, dateFrom: string,
 
   const batch = db.batch();
   for (const [date, agg] of Object.entries(byDate)) {
-    const docId = `${workspaceId}_${date}`;
+    const docId = `${siteId}_${date}`;
     batch.set(db.collection("rms_sales_daily").doc(docId), {
-      workspaceId,
+      siteId,
       date,
       ...agg,
       syncedAt: FieldValue.serverTimestamp(),

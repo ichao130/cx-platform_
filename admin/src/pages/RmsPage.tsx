@@ -31,10 +31,10 @@ function formatMoney(n: number) {
 type Tab = "settings" | "sales" | "orders" | "items";
 
 type Props = {
-  workspaceId: string;
+  siteId: string;
 };
 
-export default function RmsPage({ workspaceId }: Props) {
+export default function RmsPage({ siteId }: Props) {
   const [tab, setTab] = useState<Tab>("settings");
 
   // ---- 設定 ----
@@ -56,31 +56,31 @@ export default function RmsPage({ workspaceId }: Props) {
 
   // 認証情報 & ステータス取得
   useEffect(() => {
-    if (!workspaceId) return;
-    apiFetch(`/v1/rms/credentials?workspaceId=${workspaceId}`)
+    if (!siteId) return;
+    apiFetch(`/v1/rms/credentials?siteId=${siteId}`)
       .then((r) => r.json())
       .then((d) => {
         setCredsExists(d.exists);
         if (d.shopUrl) setShopUrl(d.shopUrl);
       }).catch(() => {});
-    apiFetch(`/v1/rms/sync/status?workspaceId=${workspaceId}`)
+    apiFetch(`/v1/rms/sync/status?siteId=${siteId}`)
       .then((r) => r.json())
       .then((d) => setSyncStatus(d.exists ? d : null))
       .catch(() => {});
-  }, [workspaceId]);
+  }, [siteId]);
 
   // タブ切り替え時にデータ取得
   useEffect(() => {
-    if (!workspaceId || !credsExists) return;
+    if (!siteId || !credsExists) return;
     if (tab === "orders") loadOrders();
     if (tab === "items") loadItems();
     if (tab === "sales") loadSales();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, workspaceId, credsExists]);
+  }, [tab, siteId, credsExists]);
 
   async function loadOrders() {
     setDataLoading(true);
-    const r = await apiFetch(`/v1/rms/orders?workspaceId=${workspaceId}`);
+    const r = await apiFetch(`/v1/rms/orders?siteId=${siteId}`);
     const d = await r.json();
     setOrders(d.orders || []);
     setDataLoading(false);
@@ -88,7 +88,7 @@ export default function RmsPage({ workspaceId }: Props) {
 
   async function loadItems() {
     setDataLoading(true);
-    const r = await apiFetch(`/v1/rms/items?workspaceId=${workspaceId}`);
+    const r = await apiFetch(`/v1/rms/items?siteId=${siteId}`);
     const d = await r.json();
     setItems(d.items || []);
     setDataLoading(false);
@@ -98,7 +98,7 @@ export default function RmsPage({ workspaceId }: Props) {
     setDataLoading(true);
     const to = new Date().toISOString().slice(0, 10);
     const from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const r = await apiFetch(`/v1/rms/sales?workspaceId=${workspaceId}&from=${from}&to=${to}`);
+    const r = await apiFetch(`/v1/rms/sales?siteId=${siteId}&from=${from}&to=${to}`);
     const d = await r.json();
     setSales(d.sales || []);
     setDataLoading(false);
@@ -112,7 +112,7 @@ export default function RmsPage({ workspaceId }: Props) {
     try {
       const r = await apiFetch("/v1/rms/credentials", {
         method: "POST",
-        body: JSON.stringify({ workspaceId, serviceSecret, licenseKey, shopUrl }),
+        body: JSON.stringify({ siteId, serviceSecret, licenseKey, shopUrl }),
       });
       const d = await r.json();
       if (!r.ok) {
@@ -131,7 +131,7 @@ export default function RmsPage({ workspaceId }: Props) {
 
   async function handleDeleteCreds() {
     if (!confirm("RMS認証情報を削除しますか？")) return;
-    await apiFetch(`/v1/rms/credentials?workspaceId=${workspaceId}`, { method: "DELETE" });
+    await apiFetch(`/v1/rms/credentials?siteId=${siteId}`, { method: "DELETE" });
     setCredsExists(false);
     setSyncStatus(null);
   }
@@ -142,7 +142,7 @@ export default function RmsPage({ workspaceId }: Props) {
     try {
       const r = await apiFetch("/v1/rms/sync", {
         method: "POST",
-        body: JSON.stringify({ workspaceId, daysBack: 90 }),
+        body: JSON.stringify({ siteId, daysBack: 90 }),
       });
       const d = await r.json();
       if (!r.ok) {
@@ -150,7 +150,7 @@ export default function RmsPage({ workspaceId }: Props) {
       } else {
         setSyncMsg({ type: "success", text: `同期完了！注文 ${d.orders}件 / 商品 ${d.items}件` });
         // ステータス再取得
-        const sr = await apiFetch(`/v1/rms/sync/status?workspaceId=${workspaceId}`);
+        const sr = await apiFetch(`/v1/rms/sync/status?siteId=${siteId}`);
         const sd = await sr.json();
         setSyncStatus(sd.exists ? sd : null);
       }

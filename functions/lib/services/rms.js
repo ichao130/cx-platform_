@@ -78,17 +78,17 @@ exports.RmsClient = RmsClient;
 // Credentials CRUD
 // =====================
 const CREDS_COLLECTION = "rms_credentials";
-async function getRmsCredentials(workspaceId) {
+async function getRmsCredentials(siteId) {
     const db = (0, admin_1.adminDb)();
-    const snap = await db.collection(CREDS_COLLECTION).doc(workspaceId).get();
+    const snap = await db.collection(CREDS_COLLECTION).doc(siteId).get();
     if (!snap.exists)
         return null;
-    return { workspaceId, ...snap.data() };
+    return { siteId, ...snap.data() };
 }
-async function saveRmsCredentials(workspaceId, data) {
+async function saveRmsCredentials(siteId, data) {
     const db = (0, admin_1.adminDb)();
-    await db.collection(CREDS_COLLECTION).doc(workspaceId).set({
-        workspaceId,
+    await db.collection(CREDS_COLLECTION).doc(siteId).set({
+        siteId,
         serviceSecret: data.serviceSecret,
         licenseKey: data.licenseKey,
         shopUrl: data.shopUrl || "",
@@ -97,15 +97,15 @@ async function saveRmsCredentials(workspaceId, data) {
         createdAt: firestore_1.FieldValue.serverTimestamp(),
     }, { merge: true });
 }
-async function deleteRmsCredentials(workspaceId) {
+async function deleteRmsCredentials(siteId) {
     const db = (0, admin_1.adminDb)();
-    await db.collection(CREDS_COLLECTION).doc(workspaceId).delete();
+    await db.collection(CREDS_COLLECTION).doc(siteId).delete();
 }
 // =====================
 // Sync Logic
 // =====================
-async function syncRmsData(workspaceId, daysBack = 90) {
-    const creds = await getRmsCredentials(workspaceId);
+async function syncRmsData(siteId, daysBack = 90) {
+    const creds = await getRmsCredentials(siteId);
     if (!creds || !creds.enabled)
         throw new Error("RMS credentials not found or disabled");
     const client = new RmsClient(creds.serviceSecret, creds.licenseKey);
@@ -129,7 +129,7 @@ async function syncRmsData(workspaceId, daysBack = 90) {
                 const orderId = String(o.orderNumber || o.orderId || "");
                 if (!orderId)
                     continue;
-                const docId = `${workspaceId}_${orderId}`;
+                const docId = `${siteId}_${orderId}`;
                 const items = (o.PackageModelList || o.packageList || []).flatMap((pkg) => (pkg.ItemModelList || pkg.itemList || []).map((item) => ({
                     itemId: String(item.itemId || item.manageNumber || ""),
                     itemName: String(item.itemName || ""),
@@ -138,7 +138,7 @@ async function syncRmsData(workspaceId, daysBack = 90) {
                 })));
                 const totalPrice = items.reduce((s, it) => s + it.price * it.quantity, 0);
                 batch.set(db.collection("rms_orders").doc(docId), {
-                    workspaceId,
+                    siteId,
                     orderId,
                     orderDate: String(o.orderDatetime || o.orderDate || "").slice(0, 10),
                     status: String(o.orderProgress || o.status || ""),
@@ -162,9 +162,9 @@ async function syncRmsData(workspaceId, daysBack = 90) {
                 const itemUrl = String(item.itemUrl || item.manageNumber || "");
                 if (!itemUrl)
                     continue;
-                const docId = `${workspaceId}_${itemUrl}`;
+                const docId = `${siteId}_${itemUrl}`;
                 batch.set(db.collection("rms_items").doc(docId), {
-                    workspaceId,
+                    siteId,
                     itemUrl,
                     itemName: String(item.itemName || ""),
                     itemPrice: Number(item.itemPrice || 0),
@@ -179,10 +179,10 @@ async function syncRmsData(workspaceId, daysBack = 90) {
             offset += 100;
         }
         // 日次売上集計
-        await aggregateDailySales(workspaceId, dateFrom, dateTo);
+        await aggregateDailySales(siteId, dateFrom, dateTo);
         // sync log 更新
-        await db.collection("rms_sync_logs").doc(workspaceId).set({
-            workspaceId,
+        await db.collection("rms_sync_logs").doc(siteId).set({
+            siteId,
             lastSyncAt: firestore_1.FieldValue.serverTimestamp(),
             lastSyncStatus: "success",
             lastSyncOrders: orderCount,
@@ -191,8 +191,8 @@ async function syncRmsData(workspaceId, daysBack = 90) {
         return { orders: orderCount, items: itemCount };
     }
     catch (e) {
-        await db.collection("rms_sync_logs").doc(workspaceId).set({
-            workspaceId,
+        await db.collection("rms_sync_logs").doc(siteId).set({
+            siteId,
             lastSyncAt: firestore_1.FieldValue.serverTimestamp(),
             lastSyncStatus: "error",
             lastSyncError: e.message || String(e),
@@ -201,10 +201,10 @@ async function syncRmsData(workspaceId, daysBack = 90) {
     }
 }
 // 日次売上集計
-async function aggregateDailySales(workspaceId, dateFrom, dateTo) {
+async function aggregateDailySales(siteId, dateFrom, dateTo) {
     const db = (0, admin_1.adminDb)();
     const snap = await db.collection("rms_orders")
-        .where("workspaceId", "==", workspaceId)
+        .where("siteId", "==", siteId)
         .where("orderDate", ">=", dateFrom)
         .where("orderDate", "<=", dateTo)
         .get();
@@ -229,9 +229,9 @@ async function aggregateDailySales(workspaceId, dateFrom, dateTo) {
     }
     const batch = db.batch();
     for (const [date, agg] of Object.entries(byDate)) {
-        const docId = `${workspaceId}_${date}`;
+        const docId = `${siteId}_${date}`;
         batch.set(db.collection("rms_sales_daily").doc(docId), {
-            workspaceId,
+            siteId,
             date,
             ...agg,
             syncedAt: firestore_1.FieldValue.serverTimestamp(),
