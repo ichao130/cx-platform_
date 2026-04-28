@@ -9,6 +9,7 @@ type Workspace = {
   billingNote: string;
   accessOverrideActive: boolean; accessOverrideUntil: string | null; accessOverrideNote: string;
   memberCount: number; createdAt: string | null;
+  rmsEnabled: boolean; rmsMonthlyPrice: number;
 };
 
 const PLAN_OPTIONS = ["free", "pro", "advanced", "enterprise"];
@@ -32,6 +33,7 @@ function fmt(iso: string | null) {
 
 type EditForm = {
   plan: string; status: string; trial_days: number | ""; note: string;
+  rmsEnabled: boolean; rmsMonthlyPrice: number | "";
 };
 
 export default function WorkspacesPage() {
@@ -43,6 +45,8 @@ export default function WorkspacesPage() {
   const [form, setForm] = useState<EditForm>({ plan: "free", status: "inactive", trial_days: "", note: "" });
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
+  const [savingOptions, setSavingOptions] = useState(false);
+  const [saveOptionsMsg, setSaveOptionsMsg] = useState("");
   const [deleting, setDeleting] = useState<string | null>(null);
 
   const load = async () => {
@@ -64,8 +68,9 @@ export default function WorkspacesPage() {
 
   const openEdit = (w: Workspace) => {
     setEditTarget(w);
-    setForm({ plan: w.plan, status: w.status, trial_days: "", note: w.billingNote || "" });
+    setForm({ plan: w.plan, status: w.status, trial_days: "", note: w.billingNote || "", rmsEnabled: w.rmsEnabled || false, rmsMonthlyPrice: w.rmsMonthlyPrice || "" });
     setSaveMsg("");
+    setSaveOptionsMsg("");
   };
 
   const deleteWorkspace = async (w: Workspace) => {
@@ -95,6 +100,21 @@ export default function WorkspacesPage() {
       setTimeout(() => setEditTarget(null), 800);
     } catch (e: any) { setSaveMsg(`エラー: ${e.message}`); }
     finally { setSaving(false); }
+  };
+
+  const saveOptions = async () => {
+    if (!editTarget) return;
+    setSavingOptions(true); setSaveOptionsMsg("");
+    try {
+      await opsPost("/v1/ops/workspaces/options/update", {
+        workspace_id: editTarget.id,
+        rms_enabled: form.rmsEnabled,
+        rms_monthly_price: form.rmsMonthlyPrice !== "" ? Number(form.rmsMonthlyPrice) : 0,
+      });
+      setSaveOptionsMsg("保存しました ✓");
+      await load();
+    } catch (e: any) { setSaveOptionsMsg(`エラー: ${e.message}`); }
+    finally { setSavingOptions(false); }
   };
 
   const td: React.CSSProperties = { padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,.06)", verticalAlign: "middle" };
@@ -127,7 +147,7 @@ export default function WorkspacesPage() {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ background: "rgba(255,255,255,.04)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em", opacity: 0.5 }}>
-                {["ワークスペース", "プラン", "ステータス", "トライアル期限", "更新日", "メンバー", "操作"].map((h) => (
+                {["ワークスペース", "プラン", "ステータス", "オプション", "トライアル期限", "更新日", "メンバー", "操作"].map((h) => (
                   <th key={h} style={{ ...td, fontWeight: 600, textAlign: "left" }}>{h}</th>
                 ))}
               </tr>
@@ -142,6 +162,15 @@ export default function WorkspacesPage() {
                   </td>
                   <td style={td}><Badge label={w.plan} color={PLAN_COLOR[w.plan] || "#64748b"} /></td>
                   <td style={td}><Badge label={w.status} color={STATUS_COLOR[w.status] || "#64748b"} /></td>
+                  <td style={td}>
+                    {w.rmsEnabled ? (
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: "rgba(234,179,8,.15)", color: "#eab308", border: "1px solid rgba(234,179,8,.3)" }}>
+                        🏪 RMS {w.rmsMonthlyPrice > 0 ? `¥${w.rmsMonthlyPrice.toLocaleString()}` : ""}
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: 11, opacity: 0.3 }}>—</span>
+                    )}
+                  </td>
                   <td style={td}><span style={{ fontSize: 12, opacity: 0.7 }}>{fmt(w.trialEndsAt)}</span></td>
                   <td style={td}><span style={{ fontSize: 12, opacity: 0.7 }}>{fmt(w.currentPeriodEndsAt)}</span></td>
                   <td style={td}><span style={{ fontSize: 12, opacity: 0.7 }}>{w.memberCount}人</span></td>
@@ -213,6 +242,57 @@ export default function WorkspacesPage() {
               <button onClick={save} disabled={saving} style={{ padding: "9px 24px", borderRadius: 8, border: "none", background: "#2563eb", color: "#fff", fontWeight: 700, cursor: "pointer", opacity: saving ? 0.6 : 1 }}>
                 {saving ? "保存中..." : "保存する"}
               </button>
+            </div>
+
+            {/* ── オプション設定 ── */}
+            <div style={{ marginTop: 28, paddingTop: 20, borderTop: "1px solid rgba(255,255,255,.08)" }}>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 14, color: "#eab308" }}>🏪 オプション機能</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", borderRadius: 10, border: "1px solid rgba(234,179,8,.2)", background: "rgba(234,179,8,.05)" }}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>楽天RMS連携</div>
+                    <div style={{ fontSize: 11, opacity: 0.5, marginTop: 2 }}>受注・商品・売上データの自動同期</div>
+                  </div>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                    <span style={{ fontSize: 12, opacity: 0.6 }}>{form.rmsEnabled ? "有効" : "無効"}</span>
+                    <div
+                      onClick={() => setForm({ ...form, rmsEnabled: !form.rmsEnabled })}
+                      style={{
+                        width: 40, height: 22, borderRadius: 11, cursor: "pointer", transition: "background .2s",
+                        background: form.rmsEnabled ? "#eab308" : "rgba(255,255,255,.15)",
+                        position: "relative",
+                      }}
+                    >
+                      <div style={{
+                        position: "absolute", top: 3, left: form.rmsEnabled ? 21 : 3,
+                        width: 16, height: 16, borderRadius: "50%", background: "#fff",
+                        transition: "left .2s", boxShadow: "0 1px 3px rgba(0,0,0,.3)",
+                      }} />
+                    </div>
+                  </label>
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, opacity: 0.6, display: "block", marginBottom: 5 }}>RMS月額料金（円）</label>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ opacity: 0.5, fontSize: 14 }}>¥</span>
+                    <input
+                      type="number" min={0} step={1000}
+                      value={form.rmsMonthlyPrice}
+                      onChange={(e) => setForm({ ...form, rmsMonthlyPrice: e.target.value === "" ? "" : Number(e.target.value) })}
+                      placeholder="例: 9800"
+                      style={{ flex: 1, padding: "9px 12px", borderRadius: 8, border: "1px solid rgba(255,255,255,.15)", background: "#0f172a", color: "#e2e8f0", fontSize: 13 }}
+                    />
+                    <span style={{ opacity: 0.4, fontSize: 12 }}>/月</span>
+                  </div>
+                </div>
+              </div>
+
+              {saveOptionsMsg && <div style={{ marginTop: 10, fontSize: 13, color: saveOptionsMsg.startsWith("エラー") ? "#fca5a5" : "#86efac" }}>{saveOptionsMsg}</div>}
+              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
+                <button onClick={saveOptions} disabled={savingOptions} style={{ padding: "8px 20px", borderRadius: 8, border: "none", background: "#854d0e", color: "#fef08a", fontWeight: 700, cursor: "pointer", fontSize: 13, opacity: savingOptions ? 0.6 : 1 }}>
+                  {savingOptions ? "保存中..." : "オプションを保存"}
+                </button>
+              </div>
             </div>
           </div>
         </div>

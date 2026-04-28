@@ -4049,6 +4049,8 @@ function registerV1Routes(app) {
                     accessOverrideNote: wsBilling.access_override_note || "",
                     memberCount: Object.keys(members).length,
                     createdAt: data.createdAt || null,
+                    rmsEnabled: data.rmsEnabled || false,
+                    rmsMonthlyPrice: data.rmsMonthlyPrice || 0,
                 };
             });
             return res.json({ ok: true, workspaces });
@@ -4090,6 +4092,29 @@ function registerV1Routes(app) {
         }
     });
     app.options("/v1/ops/workspaces/billing/update", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /* --- /v1/ops/workspaces/options/update --- オプション機能フラグ更新 */
+    app.post("/v1/ops/workspaces/options/update", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            await requirePlatformAdmin(req);
+            const { workspace_id, rms_enabled, rms_monthly_price } = req.body || {};
+            if (!workspace_id)
+                return res.status(400).json({ error: "workspace_id required" });
+            const db = (0, admin_1.adminDb)();
+            const update = { updatedAt: new Date().toISOString() };
+            if (typeof rms_enabled === "boolean")
+                update.rmsEnabled = rms_enabled;
+            if (typeof rms_monthly_price === "number")
+                update.rmsMonthlyPrice = rms_monthly_price;
+            await db.collection("workspaces").doc(workspace_id).set(update, { merge: true });
+            return res.json({ ok: true, workspace_id });
+        }
+        catch (e) {
+            console.error("[/v1/ops/workspaces/options/update] error:", e);
+            return res.status(opsErrStatus(e)).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/ops/workspaces/options/update", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
     /* --- /v1/ops/special-trials/list --- */
     app.post("/v1/ops/special-trials/list", async (req, res) => {
         try {
