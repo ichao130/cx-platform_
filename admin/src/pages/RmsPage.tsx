@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { getAuth } from "firebase/auth";
+import { collection, query, where, getDocs } from "firebase/firestore";
+import { db } from "../firebase";
 
 // ユーティリティ
 function apiBase() {
@@ -28,13 +30,60 @@ function formatMoney(n: number) {
   return `¥${Number(n || 0).toLocaleString()}`;
 }
 
+const LS_SITE_KEY = "cx_admin_site_id";
+function readSelectedSiteId() {
+  try { return localStorage.getItem(LS_SITE_KEY) || ""; } catch { return ""; }
+}
+function writeSelectedSiteId(id: string) {
+  try {
+    localStorage.setItem(LS_SITE_KEY, id);
+    window.dispatchEvent(new CustomEvent("cx_admin_site_changed", { detail: { siteId: id } }));
+  } catch {}
+}
+
 type Tab = "settings" | "sales" | "orders" | "items";
+type SiteRow = { id: string; name: string };
 
 type Props = {
-  siteId: string;
+  siteId?: string; // 外から渡される場合（optional）
 };
 
-export default function RmsPage({ siteId }: Props) {
+export default function RmsPage(_props: Props) {
+  // ---- サイト選択 ----
+  const [sites, setSites] = useState<SiteRow[]>([]);
+  const [activeSiteId, setActiveSiteId] = useState(() => readSelectedSiteId());
+
+  // サイト一覧を取得
+  useEffect(() => {
+    const user = getAuth().currentUser;
+    if (!user) return;
+    getDocs(query(collection(db, "sites"), where("memberUids", "array-contains", user.uid)))
+      .then((snap) => {
+        setSites(snap.docs.map((d) => ({
+          id: d.id,
+          name: String(d.data()?.name || d.data()?.siteName || d.id),
+        })));
+      }).catch(() => {});
+  }, []);
+
+  // サイドバーのサイト変更イベントに同期
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => { if (e.key === LS_SITE_KEY) setActiveSiteId(readSelectedSiteId()); };
+    const onCustom = (e: Event) => {
+      const siteId = (e as CustomEvent)?.detail?.siteId;
+      if (siteId) setActiveSiteId(siteId);
+    };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("cx_admin_site_changed" as any, onCustom);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("cx_admin_site_changed" as any, onCustom);
+    };
+  }, []);
+
+  const siteId = activeSiteId;
+  const activeSiteName = sites.find((s) => s.id === siteId)?.name || siteId;
+
   const [tab, setTab] = useState<Tab>("settings");
 
   // ---- 設定 ----
@@ -54,8 +103,12 @@ export default function RmsPage({ siteId }: Props) {
   const [sales, setSales] = useState<any[]>([]);
   const [dataLoading, setDataLoading] = useState(false);
 
-  // 認証情報 & ステータス取得
+  // siteId 変更時にリセット & 再取得
   useEffect(() => {
+    setCredsExists(false);
+    setSyncStatus(null);
+    setOrders([]); setItems([]); setSales([]);
+    setCredsMsg(null); setSyncMsg(null);
     if (!siteId) return;
     apiFetch(`/v1/rms/credentials?siteId=${siteId}`)
       .then((r) => r.json())
@@ -149,7 +202,6 @@ export default function RmsPage({ siteId }: Props) {
         setSyncMsg({ type: "error", text: d.message || "同期に失敗しました" });
       } else {
         setSyncMsg({ type: "success", text: `同期完了！注文 ${d.orders}件 / 商品 ${d.items}件` });
-        // ステータス再取得
         const sr = await apiFetch(`/v1/rms/sync/status?siteId=${siteId}`);
         const sd = await sr.json();
         setSyncStatus(sd.exists ? sd : null);
@@ -175,266 +227,300 @@ export default function RmsPage({ siteId }: Props) {
   }, [sales]);
 
   const TABS: { key: Tab; label: string }[] = [
-    { key: "settings", label: "設定" },
-    { key: "sales", label: "売上集計" },
-    { key: "orders", label: "注文データ" },
-    { key: "items", label: "商品データ" },
+    { key: "settings", label: "⚙️ 設定" },
+    { key: "sales", label: "📊 売上集計" },
+    { key: "orders", label: "🧾 注文データ" },
+    { key: "items", label: "📦 商品データ" },
   ];
 
   return (
     <div className="liquid-page">
       {/* ヘッダー */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-        <div>
-          <div className="h1" style={{ margin: 0 }}>楽天RMS連携</div>
-          <div className="small" style={{ opacity: 0.6 }}>注文・商品・売上データの取得と分析</div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div>
+            <div className="h1" style={{ margin: 0 }}>楽天RMS連携</div>
+            <div className="small" style={{ opacity: 0.6 }}>注文・商品・売上データの取得と分析</div>
+          </div>
+          {credsExists && (
+            <span className="badge" style={{ background: "#dcfce7", color: "#15803d", borderColor: "#86efac" }}>連携済み</span>
+          )}
         </div>
-        {credsExists && (
-          <span className="badge" style={{ background: "#dcfce7", color: "#15803d", borderColor: "#86efac" }}>連携済み</span>
-        )}
-      </div>
 
-      {/* タブ */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 20, borderBottom: "1px solid rgba(15,23,42,.1)", paddingBottom: 0 }}>
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
+        {/* サイト選択 */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 12, opacity: 0.5 }}>サイト：</span>
+          <select
+            value={activeSiteId}
+            onChange={(e) => {
+              setActiveSiteId(e.target.value);
+              writeSelectedSiteId(e.target.value);
+            }}
             style={{
-              padding: "8px 16px", border: "none", background: "transparent", cursor: "pointer",
-              fontWeight: tab === t.key ? 700 : 400, fontSize: 13,
-              borderBottom: tab === t.key ? "2px solid #6366f1" : "2px solid transparent",
-              color: tab === t.key ? "#6366f1" : "inherit",
+              padding: "7px 12px", borderRadius: 8, border: "1px solid rgba(15,23,42,.15)",
+              background: "#fff", fontSize: 13, cursor: "pointer", minWidth: 180,
             }}
           >
-            {t.label}
-          </button>
-        ))}
+            <option value="">サイトを選択してください</option>
+            {sites.map((s) => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
-      {/* ---- 設定タブ ---- */}
-      {tab === "settings" && (
-        <div style={{ maxWidth: 560 }}>
-          <div className="card">
-            <div className="h2">RMS認証情報</div>
-            <div className="small" style={{ marginBottom: 12, opacity: 0.7 }}>
-              楽天RMS管理画面 → API設定から取得できます。入力した認証情報はサーバーに安全に保管され、管理画面には表示されません。
-            </div>
+      {/* サイト未選択 */}
+      {!siteId && (
+        <div className="card" style={{ textAlign: "center", padding: 40 }}>
+          <div style={{ fontSize: 32, marginBottom: 12 }}>🏪</div>
+          <div style={{ fontWeight: 700, marginBottom: 8 }}>サイトを選択してください</div>
+          <div className="small" style={{ opacity: 0.6 }}>上のドロップダウンからRMSを設定するサイトを選択してください。</div>
+        </div>
+      )}
 
-            {credsExists && (
-              <div style={{ padding: "10px 14px", borderRadius: 10, background: "#f0fdf4", border: "1px solid #86efac", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div>
-                  <div style={{ fontWeight: 700, color: "#15803d", fontSize: 13 }}>認証情報が登録されています</div>
-                  {shopUrl && <div className="small" style={{ color: "#15803d" }}>{shopUrl}</div>}
-                </div>
-                <button className="btn" onClick={handleDeleteCreds} style={{ fontSize: 11, padding: "4px 10px" }}>削除</button>
-              </div>
-            )}
-
-            <form onSubmit={handleSaveCreds}>
-              <div style={{ marginBottom: 12 }}>
-                <div className="h2">serviceSecret</div>
-                <input className="input" type="password" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" value={serviceSecret} onChange={(e) => setServiceSecret(e.target.value)} required />
-              </div>
-              <div style={{ marginBottom: 12 }}>
-                <div className="h2">licenseKey</div>
-                <input className="input" type="password" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" value={licenseKey} onChange={(e) => setLicenseKey(e.target.value)} required />
-              </div>
-              <div style={{ marginBottom: 16 }}>
-                <div className="h2">ショップURL（任意）</div>
-                <input className="input" type="url" placeholder="https://www.rakuten.co.jp/yourshop/" value={shopUrl} onChange={(e) => setShopUrl(e.target.value)} />
-              </div>
-              {credsMsg && (
-                <div style={{ padding: "8px 12px", borderRadius: 8, marginBottom: 12, background: credsMsg.type === "success" ? "#f0fdf4" : "#fef2f2", color: credsMsg.type === "success" ? "#15803d" : "#dc2626", fontSize: 13 }}>
-                  {credsMsg.text}
-                </div>
-              )}
-              <button className="btn" type="submit" disabled={credsSaving} style={{ background: "#6366f1", color: "#fff" }}>
-                {credsSaving ? "接続確認中..." : credsExists ? "認証情報を更新" : "認証情報を保存"}
+      {siteId && (
+        <>
+          {/* タブ */}
+          <div style={{ display: "flex", gap: 4, marginBottom: 20, borderBottom: "1px solid rgba(15,23,42,.1)" }}>
+            {TABS.map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                style={{
+                  padding: "8px 16px", border: "none", background: "transparent", cursor: "pointer",
+                  fontWeight: tab === t.key ? 700 : 400, fontSize: 13,
+                  borderBottom: tab === t.key ? "2px solid #6366f1" : "2px solid transparent",
+                  color: tab === t.key ? "#6366f1" : "inherit",
+                }}
+              >
+                {t.label}
               </button>
-            </form>
+            ))}
           </div>
 
-          {credsExists && (
-            <div className="card" style={{ marginTop: 16 }}>
-              <div className="h2">データ同期</div>
-              {syncStatus && (
-                <div className="small" style={{ marginBottom: 12, opacity: 0.7 }}>
-                  最終同期: {syncStatus.lastSyncAt?.toDate?.()?.toLocaleString("ja-JP") || "-"}
-                  {" "} / ステータス: <span style={{ color: syncStatus.lastSyncStatus === "success" ? "#15803d" : "#dc2626" }}>{syncStatus.lastSyncStatus}</span>
-                  {syncStatus.lastSyncOrders != null && ` / 注文 ${syncStatus.lastSyncOrders}件 商品 ${syncStatus.lastSyncItems}件`}
-                </div>
-              )}
-              <div className="small" style={{ marginBottom: 12, opacity: 0.7 }}>
-                過去90日分の注文・商品・在庫データを取得します。毎日AM4時に自動同期されます。
-              </div>
-              {syncMsg && (
-                <div style={{ padding: "8px 12px", borderRadius: 8, marginBottom: 12, background: syncMsg.type === "success" ? "#f0fdf4" : "#fef2f2", color: syncMsg.type === "success" ? "#15803d" : "#dc2626", fontSize: 13 }}>
-                  {syncMsg.text}
-                </div>
-              )}
-              <button className="btn" onClick={handleSync} disabled={syncing} style={{ background: "#0f172a", color: "#fff" }}>
-                {syncing ? "同期中..." : "今すぐ同期"}
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ---- 売上集計タブ ---- */}
-      {tab === "sales" && (
-        <div>
-          {!credsExists ? (
-            <div className="card"><div className="small">先に設定タブでRMS認証情報を登録してください。</div></div>
-          ) : dataLoading ? (
-            <div className="small" style={{ opacity: 0.6 }}>読み込み中...</div>
-          ) : (
-            <>
-              {/* 日次グラフ（簡易テキスト表） */}
-              <div className="card" style={{ marginBottom: 16 }}>
-                <div className="h2">日次売上（直近30日）</div>
-                {sales.length === 0 ? (
-                  <div className="small" style={{ opacity: 0.6 }}>データがありません。同期を実行してください。</div>
-                ) : (
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                    <thead>
-                      <tr style={{ borderBottom: "1px solid rgba(15,23,42,.1)" }}>
-                        <th style={{ textAlign: "left", padding: "6px 8px" }}>日付</th>
-                        <th style={{ textAlign: "right", padding: "6px 8px" }}>売上</th>
-                        <th style={{ textAlign: "right", padding: "6px 8px" }}>注文数</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sales.map((s) => (
-                        <tr key={s.id} style={{ borderBottom: "1px solid rgba(15,23,42,.06)" }}>
-                          <td style={{ padding: "6px 8px" }}>{s.date}</td>
-                          <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600 }}>{formatMoney(s.totalSales)}</td>
-                          <td style={{ padding: "6px 8px", textAlign: "right" }}>{s.orderCount}件</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-
-              {/* 商品別売上TOP */}
+          {/* ---- 設定タブ ---- */}
+          {tab === "settings" && (
+            <div style={{ maxWidth: 560 }}>
               <div className="card">
-                <div className="h2">商品別売上TOP（直近30日）</div>
-                {topItems.length === 0 ? (
-                  <div className="small" style={{ opacity: 0.6 }}>データがありません。</div>
-                ) : (
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                    <thead>
-                      <tr style={{ borderBottom: "1px solid rgba(15,23,42,.1)" }}>
-                        <th style={{ textAlign: "left", padding: "6px 8px" }}>商品</th>
-                        <th style={{ textAlign: "right", padding: "6px 8px" }}>売上</th>
-                        <th style={{ textAlign: "right", padding: "6px 8px" }}>個数</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {topItems.map(([itemId, v]) => (
-                        <tr key={itemId} style={{ borderBottom: "1px solid rgba(15,23,42,.06)" }}>
-                          <td style={{ padding: "6px 8px" }}><div style={{ fontWeight: 600 }}>{v.itemName || itemId}</div><div className="small" style={{ opacity: 0.5 }}>{itemId}</div></td>
-                          <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600 }}>{formatMoney(v.revenue)}</td>
-                          <td style={{ padding: "6px 8px", textAlign: "right" }}>{v.quantity}個</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div className="h2">RMS認証情報</div>
+                <div className="small" style={{ marginBottom: 4, opacity: 0.5 }}>対象サイト: {activeSiteName}</div>
+                <div className="small" style={{ marginBottom: 12, opacity: 0.7 }}>
+                  楽天RMS管理画面 → API設定から取得できます。入力した認証情報はサーバーに安全に保管され、管理画面には表示されません。
+                </div>
+
+                {credsExists && (
+                  <div style={{ padding: "10px 14px", borderRadius: 10, background: "#f0fdf4", border: "1px solid #86efac", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <div style={{ fontWeight: 700, color: "#15803d", fontSize: 13 }}>認証情報が登録されています</div>
+                      {shopUrl && <div className="small" style={{ color: "#15803d" }}>{shopUrl}</div>}
+                    </div>
+                    <button className="btn" onClick={handleDeleteCreds} style={{ fontSize: 11, padding: "4px 10px" }}>削除</button>
+                  </div>
                 )}
-              </div>
-            </>
-          )}
-        </div>
-      )}
 
-      {/* ---- 注文タブ ---- */}
-      {tab === "orders" && (
-        <div>
-          {!credsExists ? (
-            <div className="card"><div className="small">先に設定タブでRMS認証情報を登録してください。</div></div>
-          ) : dataLoading ? (
-            <div className="small" style={{ opacity: 0.6 }}>読み込み中...</div>
-          ) : (
-            <div className="card">
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <div className="h2" style={{ margin: 0 }}>注文データ（直近100件）</div>
-                <button className="btn" onClick={loadOrders} style={{ fontSize: 11 }}>更新</button>
+                <form onSubmit={handleSaveCreds}>
+                  <div style={{ marginBottom: 12 }}>
+                    <div className="h2">serviceSecret</div>
+                    <input className="input" type="password" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" value={serviceSecret} onChange={(e) => setServiceSecret(e.target.value)} required />
+                  </div>
+                  <div style={{ marginBottom: 12 }}>
+                    <div className="h2">licenseKey</div>
+                    <input className="input" type="password" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" value={licenseKey} onChange={(e) => setLicenseKey(e.target.value)} required />
+                  </div>
+                  <div style={{ marginBottom: 16 }}>
+                    <div className="h2">ショップURL（任意）</div>
+                    <input className="input" type="url" placeholder="https://www.rakuten.co.jp/yourshop/" value={shopUrl} onChange={(e) => setShopUrl(e.target.value)} />
+                  </div>
+                  {credsMsg && (
+                    <div style={{ padding: "8px 12px", borderRadius: 8, marginBottom: 12, background: credsMsg.type === "success" ? "#f0fdf4" : "#fef2f2", color: credsMsg.type === "success" ? "#15803d" : "#dc2626", fontSize: 13 }}>
+                      {credsMsg.text}
+                    </div>
+                  )}
+                  <button className="btn" type="submit" disabled={credsSaving} style={{ background: "#6366f1", color: "#fff" }}>
+                    {credsSaving ? "接続確認中..." : credsExists ? "認証情報を更新" : "認証情報を保存"}
+                  </button>
+                </form>
               </div>
-              {orders.length === 0 ? (
-                <div className="small" style={{ opacity: 0.6 }}>データがありません。同期を実行してください。</div>
-              ) : (
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                  <thead>
-                    <tr style={{ borderBottom: "1px solid rgba(15,23,42,.1)" }}>
-                      <th style={{ textAlign: "left", padding: "6px 8px" }}>注文番号</th>
-                      <th style={{ textAlign: "left", padding: "6px 8px" }}>注文日</th>
-                      <th style={{ textAlign: "left", padding: "6px 8px" }}>ステータス</th>
-                      <th style={{ textAlign: "right", padding: "6px 8px" }}>金額</th>
-                      <th style={{ textAlign: "right", padding: "6px 8px" }}>商品数</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {orders.map((o) => (
-                      <tr key={o.id} style={{ borderBottom: "1px solid rgba(15,23,42,.06)" }}>
-                        <td style={{ padding: "6px 8px" }}><code style={{ fontSize: 11 }}>{o.orderId}</code></td>
-                        <td style={{ padding: "6px 8px" }}>{formatDate(o.orderDate)}</td>
-                        <td style={{ padding: "6px 8px" }}>{o.status || "-"}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600 }}>{formatMoney(o.totalPrice)}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "right" }}>{(o.items || []).length}点</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+
+              {credsExists && (
+                <div className="card" style={{ marginTop: 16 }}>
+                  <div className="h2">データ同期</div>
+                  {syncStatus && (
+                    <div className="small" style={{ marginBottom: 12, opacity: 0.7 }}>
+                      最終同期: {syncStatus.lastSyncAt?.toDate?.()?.toLocaleString("ja-JP") || "-"}
+                      {" "} / ステータス: <span style={{ color: syncStatus.lastSyncStatus === "success" ? "#15803d" : "#dc2626" }}>{syncStatus.lastSyncStatus}</span>
+                      {syncStatus.lastSyncOrders != null && ` / 注文 ${syncStatus.lastSyncOrders}件 商品 ${syncStatus.lastSyncItems}件`}
+                    </div>
+                  )}
+                  <div className="small" style={{ marginBottom: 12, opacity: 0.7 }}>
+                    過去90日分の注文・商品・在庫データを取得します。毎日AM4時に自動同期されます。
+                  </div>
+                  {syncMsg && (
+                    <div style={{ padding: "8px 12px", borderRadius: 8, marginBottom: 12, background: syncMsg.type === "success" ? "#f0fdf4" : "#fef2f2", color: syncMsg.type === "success" ? "#15803d" : "#dc2626", fontSize: 13 }}>
+                      {syncMsg.text}
+                    </div>
+                  )}
+                  <button className="btn" onClick={handleSync} disabled={syncing} style={{ background: "#0f172a", color: "#fff" }}>
+                    {syncing ? "同期中..." : "今すぐ同期"}
+                  </button>
+                </div>
               )}
             </div>
           )}
-        </div>
-      )}
 
-      {/* ---- 商品タブ ---- */}
-      {tab === "items" && (
-        <div>
-          {!credsExists ? (
-            <div className="card"><div className="small">先に設定タブでRMS認証情報を登録してください。</div></div>
-          ) : dataLoading ? (
-            <div className="small" style={{ opacity: 0.6 }}>読み込み中...</div>
-          ) : (
-            <div className="card">
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <div className="h2" style={{ margin: 0 }}>商品データ（最大200件）</div>
-                <button className="btn" onClick={loadItems} style={{ fontSize: 11 }}>更新</button>
-              </div>
-              {items.length === 0 ? (
-                <div className="small" style={{ opacity: 0.6 }}>データがありません。同期を実行してください。</div>
+          {/* ---- 売上集計タブ ---- */}
+          {tab === "sales" && (
+            <div>
+              {!credsExists ? (
+                <div className="card"><div className="small">先に設定タブでRMS認証情報を登録してください。</div></div>
+              ) : dataLoading ? (
+                <div className="small" style={{ opacity: 0.6 }}>読み込み中...</div>
               ) : (
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                  <thead>
-                    <tr style={{ borderBottom: "1px solid rgba(15,23,42,.1)" }}>
-                      <th style={{ textAlign: "left", padding: "6px 8px" }}>商品名</th>
-                      <th style={{ textAlign: "right", padding: "6px 8px" }}>価格</th>
-                      <th style={{ textAlign: "right", padding: "6px 8px" }}>在庫</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((item) => (
-                      <tr key={item.id} style={{ borderBottom: "1px solid rgba(15,23,42,.06)" }}>
-                        <td style={{ padding: "6px 8px" }}>
-                          <div style={{ fontWeight: 600 }}>{item.itemName}</div>
-                          <div className="small" style={{ opacity: 0.5 }}>{item.itemUrl}</div>
-                        </td>
-                        <td style={{ padding: "6px 8px", textAlign: "right" }}>{formatMoney(item.itemPrice)}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "right" }}>
-                          {item.inventory === -1 ? "在庫管理なし" : `${item.inventory}点`}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <>
+                  <div className="card" style={{ marginBottom: 16 }}>
+                    <div className="h2">日次売上（直近30日）</div>
+                    {sales.length === 0 ? (
+                      <div className="small" style={{ opacity: 0.6 }}>データがありません。同期を実行してください。</div>
+                    ) : (
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                        <thead>
+                          <tr style={{ borderBottom: "1px solid rgba(15,23,42,.1)" }}>
+                            <th style={{ textAlign: "left", padding: "6px 8px" }}>日付</th>
+                            <th style={{ textAlign: "right", padding: "6px 8px" }}>売上</th>
+                            <th style={{ textAlign: "right", padding: "6px 8px" }}>注文数</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sales.map((s) => (
+                            <tr key={s.id} style={{ borderBottom: "1px solid rgba(15,23,42,.06)" }}>
+                              <td style={{ padding: "6px 8px" }}>{s.date}</td>
+                              <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600 }}>{formatMoney(s.totalSales)}</td>
+                              <td style={{ padding: "6px 8px", textAlign: "right" }}>{s.orderCount}件</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                  <div className="card">
+                    <div className="h2">商品別売上TOP（直近30日）</div>
+                    {topItems.length === 0 ? (
+                      <div className="small" style={{ opacity: 0.6 }}>データがありません。</div>
+                    ) : (
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                        <thead>
+                          <tr style={{ borderBottom: "1px solid rgba(15,23,42,.1)" }}>
+                            <th style={{ textAlign: "left", padding: "6px 8px" }}>商品</th>
+                            <th style={{ textAlign: "right", padding: "6px 8px" }}>売上</th>
+                            <th style={{ textAlign: "right", padding: "6px 8px" }}>個数</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {topItems.map(([itemId, v]) => (
+                            <tr key={itemId} style={{ borderBottom: "1px solid rgba(15,23,42,.06)" }}>
+                              <td style={{ padding: "6px 8px" }}><div style={{ fontWeight: 600 }}>{v.itemName || itemId}</div><div className="small" style={{ opacity: 0.5 }}>{itemId}</div></td>
+                              <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600 }}>{formatMoney(v.revenue)}</td>
+                              <td style={{ padding: "6px 8px", textAlign: "right" }}>{v.quantity}個</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </>
               )}
             </div>
           )}
-        </div>
+
+          {/* ---- 注文タブ ---- */}
+          {tab === "orders" && (
+            <div>
+              {!credsExists ? (
+                <div className="card"><div className="small">先に設定タブでRMS認証情報を登録してください。</div></div>
+              ) : dataLoading ? (
+                <div className="small" style={{ opacity: 0.6 }}>読み込み中...</div>
+              ) : (
+                <div className="card">
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                    <div className="h2" style={{ margin: 0 }}>注文データ（直近100件）</div>
+                    <button className="btn" onClick={loadOrders} style={{ fontSize: 11 }}>更新</button>
+                  </div>
+                  {orders.length === 0 ? (
+                    <div className="small" style={{ opacity: 0.6 }}>データがありません。同期を実行してください。</div>
+                  ) : (
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ borderBottom: "1px solid rgba(15,23,42,.1)" }}>
+                          <th style={{ textAlign: "left", padding: "6px 8px" }}>注文番号</th>
+                          <th style={{ textAlign: "left", padding: "6px 8px" }}>注文日</th>
+                          <th style={{ textAlign: "left", padding: "6px 8px" }}>ステータス</th>
+                          <th style={{ textAlign: "right", padding: "6px 8px" }}>金額</th>
+                          <th style={{ textAlign: "right", padding: "6px 8px" }}>商品数</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {orders.map((o) => (
+                          <tr key={o.id} style={{ borderBottom: "1px solid rgba(15,23,42,.06)" }}>
+                            <td style={{ padding: "6px 8px" }}><code style={{ fontSize: 11 }}>{o.orderId}</code></td>
+                            <td style={{ padding: "6px 8px" }}>{formatDate(o.orderDate)}</td>
+                            <td style={{ padding: "6px 8px" }}>{o.status || "-"}</td>
+                            <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600 }}>{formatMoney(o.totalPrice)}</td>
+                            <td style={{ padding: "6px 8px", textAlign: "right" }}>{(o.items || []).length}点</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ---- 商品タブ ---- */}
+          {tab === "items" && (
+            <div>
+              {!credsExists ? (
+                <div className="card"><div className="small">先に設定タブでRMS認証情報を登録してください。</div></div>
+              ) : dataLoading ? (
+                <div className="small" style={{ opacity: 0.6 }}>読み込み中...</div>
+              ) : (
+                <div className="card">
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                    <div className="h2" style={{ margin: 0 }}>商品データ（最大200件）</div>
+                    <button className="btn" onClick={loadItems} style={{ fontSize: 11 }}>更新</button>
+                  </div>
+                  {items.length === 0 ? (
+                    <div className="small" style={{ opacity: 0.6 }}>データがありません。同期を実行してください。</div>
+                  ) : (
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ borderBottom: "1px solid rgba(15,23,42,.1)" }}>
+                          <th style={{ textAlign: "left", padding: "6px 8px" }}>商品名</th>
+                          <th style={{ textAlign: "right", padding: "6px 8px" }}>価格</th>
+                          <th style={{ textAlign: "right", padding: "6px 8px" }}>在庫</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {items.map((item) => (
+                          <tr key={item.id} style={{ borderBottom: "1px solid rgba(15,23,42,.06)" }}>
+                            <td style={{ padding: "6px 8px" }}>
+                              <div style={{ fontWeight: 600 }}>{item.itemName}</div>
+                              <div className="small" style={{ opacity: 0.5 }}>{item.itemUrl}</div>
+                            </td>
+                            <td style={{ padding: "6px 8px", textAlign: "right" }}>{formatMoney(item.itemPrice)}</td>
+                            <td style={{ padding: "6px 8px", textAlign: "right" }}>
+                              {item.inventory === -1 ? "在庫管理なし" : `${item.inventory}点`}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
