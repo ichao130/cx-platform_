@@ -800,7 +800,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
 
-        {(selectedWorkspaceRow?.data as any)?.rmsEnabled && selectedSiteId && (selectedSiteRow?.data as any)?.rmsEnabled && canShow(canAccess, "rms") && (
+        {(selectedWorkspaceRow?.data as any)?.rmsEnabled && canShow(canAccess, "rms") && (
           <div style={{ marginBottom: 18 }}>
             <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "rgba(255,255,255,.38)", marginBottom: 8, paddingLeft: 12 }}>
               楽天RMS
