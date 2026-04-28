@@ -17,16 +17,17 @@ class RmsClient {
         const encoded = Buffer.from(`${serviceSecret}:${licenseKey}`).toString("base64");
         this.authHeader = `ESA ${encoded}`;
     }
-    // 接続テスト用: ショップ情報取得
+    // 接続テスト用: 商品検索（hits=1）でAPI認証を確認
     async testConnection() {
         try {
-            const res = await fetch(`${this.baseUrl}/shop/get`, {
-                headers: { Authorization: this.authHeader, "Content-Type": "application/json" },
+            const res = await fetch(`${this.baseUrl}/item/search?hits=1&offset=0`, {
+                headers: { Authorization: this.authHeader },
             });
-            if (!res.ok)
-                return { ok: false, error: `HTTP ${res.status}` };
-            const data = await res.json();
-            return { ok: true, shopName: data?.shopGetResult?.shopName || "" };
+            // 401/403 は認証失敗、200/404 は認証は通っている（商品0件でも可）
+            if (res.status === 401 || res.status === 403) {
+                return { ok: false, error: `認証エラー (HTTP ${res.status})` };
+            }
+            return { ok: true };
         }
         catch (e) {
             return { ok: false, error: e.message };
