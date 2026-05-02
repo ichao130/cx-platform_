@@ -37,6 +37,7 @@ const AiReviewReqSchema = z.object({
   day_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   scenario_id: z.string().min(1),
   variant_id: z.string().optional().default("na"),
+  force_refresh: z.boolean().optional().default(false), // キャッシュを無視して再生成
 });
 
 const CopyReqSchema = z.object({
@@ -4170,11 +4171,14 @@ export function registerV1Routes(app: Express) {
       // ===============================
       // 1) キャッシュ（期間単位）
       // ===============================
+      const forceRefresh = body.force_refresh === true;
       const cacheId = `${siteId}__${scenarioId}__${variantId}__${dayFrom}__${dayTo}`;
       const cacheRef = db.collection("ai_reviews_daily").doc(cacheId);
-      const cacheSnap = await cacheRef.get();
-      if (cacheSnap.exists) {
-        return res.json({ ok: true, cached: true, ...(cacheSnap.data() as any) });
+      if (!forceRefresh) {
+        const cacheSnap = await cacheRef.get();
+        if (cacheSnap.exists) {
+          return res.json({ ok: true, cached: true, ...(cacheSnap.data() as any) });
+        }
       }
 
       // ===============================
@@ -4353,11 +4357,13 @@ export function registerV1Routes(app: Express) {
         return {
           action_id: a.action_id,
           type: a.type,
-          // テンプレートがある場合はテンプレートのテキストを優先、なければcreativeフィールドを使用
-          title: hasTemplate ? "(カスタムテンプレート)" : String(a.creative?.title || ""),
-          body: hasTemplate ? a.templateText : String(a.creative?.body || ""),
+          // creative fields は常に渡す（テンプレートがある場合は参考程度）
+          title: String(a.creative?.title || ""),
+          body: String(a.creative?.body || ""),
           cta_text: String(a.creative?.cta_text || ""),
           cta_url: String(a.creative?.cta_url || ""),
+          // カスタムテンプレートがある場合はそのテキストも渡す（こちらが実際に表示される内容）
+          ...(hasTemplate ? { custom_template_text: a.templateText } : {}),
           uses_custom_template: hasTemplate,
           metrics: metricsMap[a.action_id] || {
             impressions: 0,
@@ -4374,7 +4380,12 @@ export function registerV1Routes(app: Express) {
 
       const prompt = {
         role: "ux_optimizer",
-        task: "以下の actions から改善優先度が高いものを最大3つ選び、短い見出し(label)と理由(reason)を返してください。必ず action_id は入力のものをそのまま返す。",
+        task: [
+          "以下の actions から改善優先度が高いものを最大3つ選び、短い見出し(label)と理由(reason)を返してください。",
+          "必ず action_id は入力のものをそのまま返す。",
+          "uses_custom_template=true の action は、custom_template_text が実際にユーザーに表示されるコンテンツです。title/bodyフィールドより custom_template_text を優先して評価してください。",
+          "custom_template_text が空でも title/body/cta_text を元に評価してください。",
+        ].join(" "),
         severity_guide: {
           bad: "明確な問題（例: CTR/リンクCTRが極端に低い、close_rateが高い、文言が弱い/誤解を招く、CTAが不明瞭）",
           warn: "改善余地あり（例: 数字は悪くないが伸ばせる、CTA/本文が長い、価値が伝わりにくい）",

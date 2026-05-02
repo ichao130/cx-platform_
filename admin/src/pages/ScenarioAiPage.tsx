@@ -201,7 +201,7 @@ export default function ScenarioAiPage() {
   }, [insight, review]);
 
 
-  async function runReview() {
+  async function runReview(forceRefresh = false) {
     if (!siteId || !scenarioId || !dayFrom || !dayTo) return;
     setErr("");
     setLoading("review");
@@ -214,6 +214,7 @@ export default function ScenarioAiPage() {
           day_to: dayTo,
           scenario_id: scenarioId,
           variant_id: variantId || "na",
+          ...(forceRefresh ? { force_refresh: true } : {}),
         },
         { siteId }
       );
@@ -357,9 +358,13 @@ export default function ScenarioAiPage() {
 
         <div style={{ height: 12 }} />
 
-        <div className="row" style={{ gap: 10, alignItems: "center" }}>
-          <button onClick={runReview} disabled={loading !== ""}>
+        <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <button onClick={() => runReview()} disabled={loading !== ""}>
             {loading === "review" ? "生成中..." : "AIレビュー生成"}
+          </button>
+          <button onClick={() => runReview(true)} disabled={loading !== ""} title="キャッシュを無視して再生成（テンプレート変更後に使用）"
+            style={{ fontSize: 12, opacity: 0.8 }}>
+            {loading === "review" ? "生成中..." : "↺ 再生成"}
           </button>
           <button onClick={runInsight} disabled={loading !== ""}>
             {loading === "insight" ? "生成中..." : "AI運用アシスタント生成"}
