@@ -15,7 +15,7 @@ import {
 } from "../services/site";
 import { generateCopy3 } from "../services/openaiCopy";
 import { pickVariant } from "../services/experiment";
-import { callOpenAIJson } from "../services/openaiJson";
+import { callOpenAIJson, callOpenAIVisionJson } from "../services/openaiJson";
 import { defineString, defineSecret } from "firebase-functions/params";
 import Stripe from "stripe";
 import { getMisocaAccessToken, getMisocaStatus, sendMisocaInvoicesJob } from "../services/misoca";
@@ -38,6 +38,7 @@ const AiReviewReqSchema = z.object({
   scenario_id: z.string().min(1),
   variant_id: z.string().optional().default("na"),
   force_refresh: z.boolean().optional().default(false), // キャッシュを無視して再生成
+  preview_image: z.string().optional(), // base64 PNG（スクリーンショット）
 });
 
 const CopyReqSchema = z.object({
@@ -4167,6 +4168,7 @@ export function registerV1Routes(app: Express) {
       const dayTo = body.day_to;
       const scenarioId = body.scenario_id;
       const variantId = String(body.variant_id ?? "na") || "na";
+      const previewImage = body.preview_image || null; // base64 PNG（あればvisionモデルを使用）
 
       // ===============================
       // 1) キャッシュ（期間単位）
@@ -4404,32 +4406,58 @@ export function registerV1Routes(app: Express) {
 
       // NOTE: Model sometimes wraps the array in an object (e.g. { highlights: [...] }).
       // Accept both shapes and normalize to Highlight[].
-      const highlightsRaw = await callOpenAIJson({
-        model: "gpt-4.1-mini",
-        input: {
-          ...prompt,
-          output_rule:
-            "Return a JSON object with a single key 'highlights' containing an array. Example: {\"highlights\":[{\"action_id\":\"...\",\"label\":\"...\",\"reason\":\"...\",\"severity\":\"warn\"}]}. Max 3 items.",
-        },
-        // json_object format always returns an object, never a bare array.
-        // Accept any object shape and extract the first array value found.
-        schema: z.record(z.unknown()).transform((v) => {
-          // Try well-known keys first, then fall back to first array value
-          const raw: any = v;
-          const arr: unknown =
-            raw.highlights ?? raw.items ?? raw.result ?? raw.data ?? raw.reviews ??
-            Object.values(raw).find((x) => Array.isArray(x)) ?? [];
-          return (Array.isArray(arr) ? arr : [])
-            .slice(0, 3)
-            .map((item: any) => ({
-              action_id: String(item?.action_id || ""),
-              label: String(item?.label || ""),
-              reason: String(item?.reason || ""),
-              severity: (["bad", "warn", "info"].includes(item?.severity) ? item.severity : "info") as "bad" | "warn" | "info",
-            }))
-            .filter((h) => h.action_id && h.label);
-        }),
+      const highlightSchema = z.record(z.unknown()).transform((v) => {
+        const raw: any = v;
+        const arr: unknown =
+          raw.highlights ?? raw.items ?? raw.result ?? raw.data ?? raw.reviews ??
+          Object.values(raw).find((x) => Array.isArray(x)) ?? [];
+        return (Array.isArray(arr) ? arr : [])
+          .slice(0, 3)
+          .map((item: any) => ({
+            action_id: String(item?.action_id || ""),
+            label: String(item?.label || ""),
+            reason: String(item?.reason || ""),
+            severity: (["bad", "warn", "info"].includes(item?.severity) ? item.severity : "info") as "bad" | "warn" | "info",
+          }))
+          .filter((h: any) => h.action_id && h.label);
       });
+
+      const outputRule = "Return a JSON object with a single key 'highlights' containing an array. Example: {\"highlights\":[{\"action_id\":\"...\",\"label\":\"...\",\"reason\":\"...\",\"severity\":\"warn\"}]}. Max 3 items.";
+
+      let highlightsRaw: any;
+
+      if (previewImage) {
+        // ===== スクリーンショットあり → GPT-4o Vision =====
+        const systemPrompt = [
+          "You are a UX optimizer for a website personalization tool.",
+          "Analyze the provided screenshot of the actual action displayed on the website.",
+          "Evaluate visual design, text readability, CTA visibility, layout, and overall user experience.",
+          "Do NOT suggest automatic changes. Return JSON only.",
+        ].join(" ");
+
+        const userText = [
+          "The attached screenshot shows the actual rendered action(s) on the website.",
+          "Based on the visual design AND the metrics below, identify up to 3 highest-priority improvements.",
+          "Focus on: visual clarity, CTA prominence, text readability, design/brand consistency, message impact.",
+          `Metrics & action data: ${JSON.stringify({ ...prompt.inputs, actions: aiInput })}`,
+          outputRule,
+        ].join("\n");
+
+        highlightsRaw = await callOpenAIVisionJson({
+          model: "gpt-4o",
+          systemPrompt,
+          userText,
+          imageBase64: previewImage,
+          schema: highlightSchema,
+        });
+      } else {
+        // ===== スクリーンショットなし → gpt-4.1-mini（テキストのみ）=====
+        highlightsRaw = await callOpenAIJson({
+          model: "gpt-4.1-mini",
+          input: { ...prompt, output_rule: outputRule },
+          schema: highlightSchema,
+        });
+      }
 
       const highlights = Array.isArray(highlightsRaw) ? highlightsRaw : [];
 
@@ -4458,6 +4486,7 @@ export function registerV1Routes(app: Express) {
         day_from: dayFrom,
         day_to: dayTo,
         rule,
+        used_vision: Boolean(previewImage),
         packs: [pack],
       };
 

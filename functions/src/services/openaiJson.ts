@@ -2,6 +2,48 @@
 import { z } from "zod";
 import OpenAI from "openai";
 
+/**
+ * Vision対応版: base64画像 + テキストプロンプトでGPT-4oを呼び出し、JSONを返す
+ */
+export async function callOpenAIVisionJson<T extends z.ZodTypeAny>(params: {
+  model: string;
+  systemPrompt: string;
+  userText: string;
+  imageBase64: string; // data:image/png;base64,... の base64部分のみ
+  schema: T;
+}): Promise<z.infer<T>> {
+  const apiKey = process.env.OPENAI_API_KEY || "";
+  if (!apiKey) throw new Error("missing OPENAI_API_KEY");
+
+  const client = new OpenAI({ apiKey });
+
+  const resp = await client.responses.create({
+    model: params.model,
+    input: [
+      { role: "system", content: params.systemPrompt },
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              data: params.imageBase64,
+            },
+          },
+          { type: "input_text", text: params.userText },
+        ] as any,
+      },
+    ],
+    text: { format: { type: "json_object" } },
+  });
+
+  const text = resp.output_text || "{}";
+  const parsed = JSON.parse(text);
+  return params.schema.parse(parsed);
+}
+
 export async function callOpenAIJson<T extends z.ZodTypeAny>(params: {
   model: string;
   input: any;

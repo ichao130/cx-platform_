@@ -127,9 +127,11 @@ function ActionCard({ action, innerRef }: { action: Action; innerRef?: (el: HTML
 export default function AdminPreviewWithPins({
   packs,
   initialVariantId,
+  previewRef,
 }: {
   packs: VariantPack[];
   initialVariantId?: string;
+  previewRef?: React.RefObject<HTMLDivElement | null>;
 }) {
   const [variantId, setVariantId] = useState(initialVariantId || packs?.[0]?.variantId || "v1");
   const [selectedActionId, setSelectedActionId] = useState<string | null>(null);
@@ -270,7 +272,10 @@ export default function AdminPreviewWithPins({
         </div>
 
         <div
-          ref={previewRootRef}
+          ref={(el) => {
+            (previewRootRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+            if (previewRef) (previewRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+          }}
           style={{
             position: "relative",
             height: 640,

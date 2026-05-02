@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import AdminPreviewWithPins from "../components/AdminPreviewWithPins";
 import { apiPostJson } from "../firebase";
+import html2canvas from "html2canvas";
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
@@ -79,6 +80,9 @@ export default function ScenarioReviewPage() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>("");
+  const [screenshotMode, setScreenshotMode] = useState(false);
+  const [screenshotStatus, setScreenshotStatus] = useState<"idle" | "capturing" | "done" | "error">("idle");
+  const previewRef = useRef<HTMLDivElement | null>(null);
   const [siteId, setSiteId] = useState<string>(() => readSelectedSiteId());
   const [dayFrom, setDayFrom] = useState<string>(() => {
     const d = new Date(); d.setDate(d.getDate() - 6); return d.toISOString().slice(0, 10);
@@ -123,7 +127,45 @@ export default function ScenarioReviewPage() {
     };
   }, [data]);
 
-  const fetchReview = useCallback(async () => {
+  /** プレビュー要素をキャプチャして base64 PNG を返す */
+  const capturePreview = useCallback(async (): Promise<string | null> => {
+    const el = previewRef.current;
+    if (!el) return null;
+    setScreenshotStatus("capturing");
+    try {
+      const canvas = await html2canvas(el, {
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: "#1a1a2e",
+        scale: 1.5, // 解像度を上げて見やすく
+        logging: false,
+        width: el.offsetWidth,
+        height: Math.min(el.offsetHeight, 640),
+      });
+      // 幅を最大 900px にリサイズしてコスト削減
+      const maxW = 900;
+      let { width, height } = canvas;
+      if (width > maxW) {
+        height = Math.round(height * maxW / width);
+        width = maxW;
+      }
+      const out = document.createElement("canvas");
+      out.width = width;
+      out.height = height;
+      const ctx = out.getContext("2d");
+      if (ctx) ctx.drawImage(canvas, 0, 0, width, height);
+      const dataUrl = out.toDataURL("image/png");
+      const base64 = dataUrl.split(",")[1];
+      setScreenshotStatus("done");
+      return base64 || null;
+    } catch (e) {
+      console.warn("[capturePreview] failed:", e);
+      setScreenshotStatus("error");
+      return null;
+    }
+  }, []);
+
+  const fetchReview = useCallback(async (withScreenshot = false) => {
     if (!scenarioId) {
       setError("scenarioId がありません");
       setData(null);
@@ -134,6 +176,12 @@ export default function ScenarioReviewPage() {
     setError("");
 
     try {
+      // スクリーンショットモード: プレビューが既にレンダリングされている場合にキャプチャ
+      let previewImage: string | null = null;
+      if (withScreenshot && previewRef.current) {
+        previewImage = await capturePreview();
+      }
+
       const json = await apiPostJson(
         "/v1/ai/review",
         {
@@ -142,6 +190,8 @@ export default function ScenarioReviewPage() {
           day_to: dayTo,
           scenario_id: scenarioId,
           variant_id: variantId,
+          force_refresh: true,
+          ...(previewImage ? { preview_image: previewImage } : {}),
         },
         { siteId }
       );
@@ -154,10 +204,10 @@ export default function ScenarioReviewPage() {
     } finally {
       setLoading(false);
     }
-  }, [scenarioId, siteId, dayFrom, dayTo, variantId]);
+  }, [scenarioId, siteId, dayFrom, dayTo, variantId, capturePreview]);
 
   useEffect(() => {
-    fetchReview();
+    fetchReview(false);
   }, [fetchReview]);
 
   return (
@@ -178,8 +228,22 @@ export default function ScenarioReviewPage() {
           <button className="btn" onClick={() => navigate(-1)}>
             戻る
           </button>
-          <button className="btn btn--primary" onClick={fetchReview} disabled={loading || !scenarioId}>
-            {loading ? "AI分析中..." : "再取得"}
+          <button className="btn" onClick={() => fetchReview(false)} disabled={loading || !scenarioId}>
+            {loading && !screenshotMode ? "分析中..." : "再取得"}
+          </button>
+          <button
+            className="btn btn--primary"
+            onClick={async () => {
+              setScreenshotMode(true);
+              await fetchReview(true);
+              setScreenshotMode(false);
+            }}
+            disabled={loading || !scenarioId || !data}
+            title="プレビューのスクリーンショットを撮り、GPT-4o Visionで視覚的に評価します"
+          >
+            {loading && screenshotMode
+              ? screenshotStatus === "capturing" ? "📷 キャプチャ中..." : "🔍 Vision分析中..."
+              : "📷 ビジュアルAIレビュー"}
           </button>
         </div>
       </div>
@@ -259,11 +323,24 @@ export default function ScenarioReviewPage() {
 
       {pack ? (
         <div className="card" style={{ minWidth: 0 }}>
-          <div className="h2" style={{ marginTop: 0 }}>Preview with Pins</div>
-          <div className="small" style={{ opacity: 0.68, marginBottom: 10 }}>
-            プレビュー上の注釈で、改善ポイントを視覚的に確認できます。
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+            <div>
+              <div className="h2" style={{ margin: 0 }}>実画面レビュー（AI REVIEW + PINS）</div>
+              <div className="small" style={{ opacity: 0.68, marginTop: 4 }}>
+                プレビュー上に改善ポイントをピン表示します。右上の「📷 ビジュアルAIレビュー」でGPT-4o Visionによるデザイン評価が可能です。
+              </div>
+            </div>
+            {data?.used_vision && (
+              <span style={{ fontSize: 12, padding: "4px 10px", borderRadius: 999, background: "rgba(99,102,241,0.18)", color: "#a5b4fc", border: "1px solid rgba(99,102,241,0.35)", fontWeight: 700 }}>
+                👁 GPT-4o Vision
+              </span>
+            )}
           </div>
-          <AdminPreviewWithPins packs={data.packs} initialVariantId={pack.variantId || variantId || "na"} />
+          <AdminPreviewWithPins
+            packs={data.packs}
+            initialVariantId={pack.variantId || variantId || "na"}
+            previewRef={previewRef}
+          />
         </div>
       ) : loading ? (
         <div className="card">AI分析中...</div>
