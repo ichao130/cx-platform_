@@ -606,8 +606,8 @@ function AppShell({ children }: { children: React.ReactNode }) {
   });
 
   const sortedWorkspaceRows = useMemo(() => {
-    if (!railOrder.length) return visibleWorkspaceRows;
-    return [...visibleWorkspaceRows].sort((a, b) => {
+    if (!railOrder.length) return workspaceRows;
+    return [...workspaceRows].sort((a, b) => {
       const ai = railOrder.indexOf(a.id);
       const bi = railOrder.indexOf(b.id);
       if (ai === -1 && bi === -1) return 0;
@@ -615,7 +615,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
       if (bi === -1) return -1;
       return ai - bi;
     });
-  }, [visibleWorkspaceRows, railOrder]);
+  }, [workspaceRows, railOrder]);
 
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
@@ -649,7 +649,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
     setDragOverId(null);
   }
 
-  const showRail = visibleWorkspaceRows.length > 1;
+  const showRail = workspaceRows.length > 1;
 
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     try { return localStorage.getItem("cx_sidebar_open") !== "false"; } catch { return true; }
