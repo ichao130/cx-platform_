@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { useParams } from "react-router-dom";
 import { collection, onSnapshot, orderBy, query, where } from "firebase/firestore";
 import { db, apiPostJson } from "../firebase";
 import AdminPreviewWithPins from "../components/AdminPreviewWithPins";
+import html2canvas from "html2canvas";
 
 
 function isoDay(d: Date) {
@@ -55,6 +56,9 @@ export default function ScenarioAiPage() {
 
   const [review, setReview] = useState<any | null>(null);
   const [insight, setInsight] = useState<any | null>(null);
+  const [visionLoading, setVisionLoading] = useState(false);
+  const [visionStatus, setVisionStatus] = useState<"idle" | "capturing" | "analyzing">("idle");
+  const previewRef = useRef<HTMLDivElement | null>(null);
 
 
   function safeNum(n: any) {
@@ -227,6 +231,60 @@ export default function ScenarioAiPage() {
     }
   }
 
+  async function runVisualReview() {
+    if (!siteId || !scenarioId || !dayFrom || !dayTo) return;
+    if (!previewRef.current) {
+      setErr("プレビューが表示されていません。先に「AIレビュー生成」を実行してください。");
+      return;
+    }
+    setErr("");
+    setVisionLoading(true);
+    setVisionStatus("capturing");
+    try {
+      // スクリーンショットを取得
+      const el = previewRef.current;
+      const canvas = await html2canvas(el, {
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: "#1a1a2e",
+        scale: 1.5,
+        logging: false,
+        width: el.offsetWidth,
+        height: Math.min(el.offsetHeight, 640),
+      });
+      const maxW = 900;
+      let { width, height } = canvas;
+      if (width > maxW) { height = Math.round(height * maxW / width); width = maxW; }
+      const out = document.createElement("canvas");
+      out.width = width; out.height = height;
+      const ctx = out.getContext("2d");
+      if (ctx) ctx.drawImage(canvas, 0, 0, width, height);
+      const base64 = out.toDataURL("image/png").split(",")[1];
+
+      setVisionStatus("analyzing");
+      const data = await apiPostJson(
+        "/v1/ai/review",
+        {
+          site_id: siteId,
+          day_from: dayFrom,
+          day_to: dayTo,
+          scenario_id: scenarioId,
+          variant_id: variantId || "na",
+          force_refresh: true,
+          preview_image: base64,
+        },
+        { siteId }
+      );
+      setReview(data);
+    } catch (e: any) {
+      console.error(e);
+      setErr(`ビジュアルAIレビュー失敗: ${e?.message || String(e)}`);
+    } finally {
+      setVisionLoading(false);
+      setVisionStatus("idle");
+    }
+  }
+
   async function runInsight() {
     if (!siteId || !scenarioId || !dayFrom || !dayTo) return;
     setErr("");
@@ -359,14 +417,25 @@ export default function ScenarioAiPage() {
         <div style={{ height: 12 }} />
 
         <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <button onClick={() => runReview()} disabled={loading !== ""}>
+          <button onClick={() => runReview()} disabled={loading !== "" || visionLoading}>
             {loading === "review" ? "生成中..." : "AIレビュー生成"}
           </button>
-          <button onClick={() => runReview(true)} disabled={loading !== ""} title="キャッシュを無視して再生成（テンプレート変更後に使用）"
+          <button onClick={() => runReview(true)} disabled={loading !== "" || visionLoading}
+            title="キャッシュを無視して再生成（テンプレート変更後に使用）"
             style={{ fontSize: 12, opacity: 0.8 }}>
             {loading === "review" ? "生成中..." : "↺ 再生成"}
           </button>
-          <button onClick={runInsight} disabled={loading !== ""}>
+          <button
+            className="btn btn--primary"
+            onClick={runVisualReview}
+            disabled={loading !== "" || visionLoading || !review?.packs}
+            title="プレビューのスクリーンショットを撮り、GPT-4o Visionでデザインを視覚評価します"
+          >
+            {visionLoading
+              ? visionStatus === "capturing" ? "📷 キャプチャ中..." : "🔍 Vision分析中..."
+              : "📷 ビジュアルAIレビュー"}
+          </button>
+          <button onClick={runInsight} disabled={loading !== "" || visionLoading}>
             {loading === "insight" ? "生成中..." : "AI運用アシスタント生成"}
           </button>
         </div>
@@ -426,15 +495,28 @@ export default function ScenarioAiPage() {
 
       {/* Review result */}
       <div className="card" style={{ minWidth: 0 }}>
-        <div className="h2">実画面レビュー（AI Review + Pins）</div>
-        <div className="small" style={{ opacity: 0.75 }}>
-          プレビュー上に改善ポイントをピン表示します。
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+          <div>
+            <div className="h2" style={{ margin: 0 }}>実画面レビュー（AI REVIEW + PINS）</div>
+            <div className="small" style={{ opacity: 0.75, marginTop: 4 }}>
+              プレビュー上に改善ポイントをピン表示します。
+            </div>
+          </div>
+          {review?.used_vision && (
+            <span style={{ fontSize: 12, padding: "4px 10px", borderRadius: 999, background: "rgba(99,102,241,0.18)", color: "#a5b4fc", border: "1px solid rgba(99,102,241,0.35)", fontWeight: 700 }}>
+              👁 GPT-4o Vision
+            </span>
+          )}
         </div>
         {!review?.packs ? (
-          <div className="small" style={{ opacity: 0.8 }}>まだ生成してません。上の「AIレビュー生成」を押してね。</div>
+          <div className="small" style={{ opacity: 0.8, marginTop: 10 }}>まだ生成してません。上の「AIレビュー生成」を押してね。</div>
         ) : (
           <div style={{ marginTop: 12 }}>
-            <AdminPreviewWithPins packs={review.packs} initialVariantId={variantId || "na"} />
+            <AdminPreviewWithPins
+              packs={review.packs}
+              initialVariantId={variantId || "na"}
+              previewRef={previewRef}
+            />
           </div>
         )}
       </div>
