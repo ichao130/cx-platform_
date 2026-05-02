@@ -190,8 +190,10 @@ function readEffectiveWorkspaceId(uid?: string | null): string | null {
       const k2 = window.localStorage.getItem(`cx_admin_workspace_id:${uid}`);
       if (k2) return k2;
     } catch {}
+    // UID指定時は汎用キーへのフォールバックを行わない（他アカウントのデータ漏洩防止）
+    return null;
   }
-  // 汎用キーにフォールバック
+  // UID未指定時のみ汎用キーを参照
   return readSelectedWorkspaceId();
 }
 
@@ -1256,14 +1258,10 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     bindWorkspace(readEffectiveWorkspaceId(user.uid));
 
     const onStorage = (e: StorageEvent) => {
+      // UID固有キーの変化のみを監視（汎用キーは他アカウントが書き込む可能性があるため除外）
       if (
-        !e.key ||
-        [
-          "cx_admin_workspace_id",
-          "cx_admin_selected_workspace",
-          "selectedWorkspaceId",
-          workspaceKeyForUid(user.uid),
-        ].includes(e.key)
+        e.key === workspaceKeyForUid(user.uid) ||
+        e.key === `cx_admin_workspace_id:${user.uid}`
       ) {
         bindWorkspace(readEffectiveWorkspaceId(user.uid));
       }
