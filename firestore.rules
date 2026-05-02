@@ -28,7 +28,9 @@ service cloud.firestore {
 
     // ── ワークスペース ───────────────────────────────────────────
     match /workspaces/{workspaceId} {
-      allow read: if isSignedIn();
+      // メンバーのみ読み取り可（他アカウントへの漏洩を防ぐ）
+      allow read: if isSignedIn() &&
+        resource.data.members[request.auth.uid] != null;
       allow create: if isSignedIn() &&
         request.resource.data.members[request.auth.uid] == 'owner';
       allow update: if isOwnerOrAdmin(workspaceId);

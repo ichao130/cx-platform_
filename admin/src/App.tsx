@@ -1315,15 +1315,39 @@ function AuthGate({ children }: { children: React.ReactNode }) {
                 // 既にlocalStorageにワークスペースが保存されている場合は上書きしない（キー同期だけ行う）
                 const existingId = readEffectiveWorkspaceId(user.uid);
                 if (existingId) {
-                  // 両方のキーを同期（イベント不要、onAuthStateChangedで既に読み込み済み）
+                  // 保存されているワークスペースに現在のユーザーがメンバーかどうか確認する
+                  // （他アカウントの汎用キーが残っている場合の漏洩を防ぐ）
+                  let memberOfExisting = false;
                   try {
-                    window.localStorage.setItem("cx_admin_workspace_id", existingId);
-                    window.localStorage.setItem("cx_admin_selected_workspace", existingId);
-                    window.localStorage.setItem("selectedWorkspaceId", existingId);
-                    window.localStorage.setItem("cx_workspace_id", existingId);
-                    window.localStorage.setItem(`cx_workspace_id:${user.uid}`, existingId);
-                    window.localStorage.setItem(`cx_admin_workspace_id:${user.uid}`, existingId);
+                    const exSnap = await getDoc(doc(db, "workspaces", existingId));
+                    if (exSnap.exists()) {
+                      const exData = (exSnap.data() || {}) as any;
+                      memberOfExisting = !!readMemberRole(exData?.members?.[user.uid]);
+                    }
                   } catch {}
+
+                  if (memberOfExisting) {
+                    // メンバーである場合のみキーを同期
+                    try {
+                      window.localStorage.setItem("cx_admin_workspace_id", existingId);
+                      window.localStorage.setItem("cx_admin_selected_workspace", existingId);
+                      window.localStorage.setItem("selectedWorkspaceId", existingId);
+                      window.localStorage.setItem("cx_workspace_id", existingId);
+                      window.localStorage.setItem(`cx_workspace_id:${user.uid}`, existingId);
+                      window.localStorage.setItem(`cx_admin_workspace_id:${user.uid}`, existingId);
+                    } catch {}
+                    return;
+                  } else {
+                    // メンバーでない（他ユーザーのキーが残っている）→ クリアしてprimaryを使う
+                    try {
+                      window.localStorage.removeItem("cx_admin_workspace_id");
+                      window.localStorage.removeItem("cx_admin_selected_workspace");
+                      window.localStorage.removeItem("selectedWorkspaceId");
+                      window.localStorage.removeItem("cx_workspace_id");
+                    } catch {}
+                    writeSelectedWorkspaceId(primaryWorkspaceId, user.uid);
+                    return;
+                  }
                 } else {
                   // localStorageにワークスペースがない場合のみprimaryを設定してイベント発火
                   writeSelectedWorkspaceId(primaryWorkspaceId, user.uid);
@@ -1408,6 +1432,13 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   const logout = useCallback(async () => {
     setError("");
     try {
+      // ログアウト前にUID非依存の汎用キーを削除（次のユーザーが引き継がないように）
+      try {
+        window.localStorage.removeItem("cx_admin_workspace_id");
+        window.localStorage.removeItem("cx_admin_selected_workspace");
+        window.localStorage.removeItem("selectedWorkspaceId");
+        window.localStorage.removeItem("cx_workspace_id");
+      } catch {}
       await signOut(auth);
     } catch (e: any) {
       console.error(e);
