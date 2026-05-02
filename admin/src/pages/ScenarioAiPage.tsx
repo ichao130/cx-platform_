@@ -285,7 +285,7 @@ export default function ScenarioAiPage() {
     }
   }
 
-  async function runInsight() {
+  async function runInsight(forceRefresh = false) {
     if (!siteId || !scenarioId || !dayFrom || !dayTo) return;
     setErr("");
     setLoading("insight");
@@ -309,9 +309,12 @@ export default function ScenarioAiPage() {
         {
           site_id: siteId,
           day: dayTo,
+          day_from: dayFrom,
+          day_to: dayTo,
           scope: "scenario",
           scope_id: scenarioId,
           variant_id: variantId || "na",
+          force_refresh: forceRefresh,
           metrics: {
             impressions: sum?.counts?.impressions ?? 0,
             clicks: sum?.counts?.clicks ?? 0,
@@ -320,7 +323,6 @@ export default function ScenarioAiPage() {
           },
           context: {
             scenario_name: scenarioName,
-            url_hint: "https://branberyheag.jp/",
           },
         },
         { siteId }
@@ -435,8 +437,13 @@ export default function ScenarioAiPage() {
               ? visionStatus === "capturing" ? "📷 キャプチャ中..." : "🔍 Vision分析中..."
               : "📷 ビジュアルAIレビュー"}
           </button>
-          <button onClick={runInsight} disabled={loading !== "" || visionLoading}>
+          <button onClick={() => runInsight()} disabled={loading !== "" || visionLoading}>
             {loading === "insight" ? "生成中..." : "AI運用アシスタント生成"}
+          </button>
+          <button onClick={() => runInsight(true)} disabled={loading !== "" || visionLoading}
+            title="キャッシュを無視して再生成"
+            style={{ fontSize: 12, opacity: 0.8 }}>
+            {loading === "insight" ? "生成中..." : "↺ 再生成（アシスタント）"}
           </button>
         </div>
       </div>

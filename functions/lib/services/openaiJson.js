@@ -3,8 +3,42 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.callOpenAIVisionJson = callOpenAIVisionJson;
 exports.callOpenAIJson = callOpenAIJson;
 const openai_1 = __importDefault(require("openai"));
+/**
+ * Vision対応版: base64画像 + テキストプロンプトでGPT-4oを呼び出し、JSONを返す
+ */
+async function callOpenAIVisionJson(params) {
+    const apiKey = process.env.OPENAI_API_KEY || "";
+    if (!apiKey)
+        throw new Error("missing OPENAI_API_KEY");
+    const client = new openai_1.default({ apiKey });
+    // Vision には Chat Completions API を使用（Responses API は画像未対応）
+    const resp = await client.chat.completions.create({
+        model: params.model,
+        response_format: { type: "json_object" },
+        messages: [
+            { role: "system", content: params.systemPrompt },
+            {
+                role: "user",
+                content: [
+                    {
+                        type: "image_url",
+                        image_url: {
+                            url: `data:image/png;base64,${params.imageBase64}`,
+                            detail: "high",
+                        },
+                    },
+                    { type: "text", text: params.userText },
+                ],
+            },
+        ],
+    });
+    const text = resp.choices[0]?.message?.content || "{}";
+    const parsed = JSON.parse(text);
+    return params.schema.parse(parsed);
+}
 async function callOpenAIJson(params) {
     const apiKey = process.env.OPENAI_API_KEY || "";
     if (!apiKey)

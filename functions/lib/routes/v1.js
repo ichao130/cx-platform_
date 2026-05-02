@@ -59,6 +59,8 @@ const AiReviewReqSchema = zod_1.z.object({
     day_to: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     scenario_id: zod_1.z.string().min(1),
     variant_id: zod_1.z.string().optional().default("na"),
+    force_refresh: zod_1.z.boolean().optional().default(false), // キャッシュを無視して再生成
+    preview_image: zod_1.z.string().optional(), // base64 PNG（スクリーンショット）
 });
 const CopyReqSchema = zod_1.z.object({
     site_id: zod_1.z.string().min(1),
@@ -113,9 +115,12 @@ const LogReqSchema = zod_1.z.object({
 const AiInsightReqSchema = zod_1.z.object({
     site_id: zod_1.z.string().min(1),
     day: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/), // "2026-02-26"
+    day_from: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), // 集計期間開始
+    day_to: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), // 集計期間終了
     scope: zod_1.z.enum(["site", "scenario", "action"]),
     scope_id: zod_1.z.string().min(1), // siteなら "all" でもOK
     variant_id: zod_1.z.string().nullable().optional(), // null or "v1"
+    force_refresh: zod_1.z.boolean().optional().default(false), // キャッシュを無視して再生成
     metrics: zod_1.z.object({
         impressions: zod_1.z.number().nonnegative(),
         clicks: zod_1.z.number().nonnegative(),
@@ -132,7 +137,10 @@ const AiInsightReqSchema = zod_1.z.object({
 });
 const StatsSummaryReqSchema = zod_1.z.object({
     site_id: zod_1.z.string().min(1),
-    day: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/), // "2026-02-27"
+    // 単日指定 or 範囲指定のどちらも受け付ける
+    day: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), // 単日（後方互換）
+    day_from: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), // 範囲開始
+    day_to: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), // 範囲終了
     scope: zod_1.z.enum(["site", "scenario", "action"]),
     scope_id: zod_1.z.string().min(1), // site の場合は "all"
     variant_id: zod_1.z.string().nullable().optional(), // null or "A"/"B"/"na"
@@ -3340,10 +3348,17 @@ function registerV1Routes(app) {
             const db = (0, admin_1.adminDb)();
             // Normalize filters
             const variantFilter = body.variant_id; // null/undefined -> aggregate across all variants
+            // 日付フィルタ: day_from/day_to が指定されていればレンジ、なければ単日(day)
+            const useRange = body.day_from && body.day_to;
             let q = db
                 .collection("stats_daily")
-                .where("siteId", "==", body.site_id)
-                .where("day", "==", body.day);
+                .where("siteId", "==", body.site_id);
+            if (useRange) {
+                q = q.where("day", ">=", body.day_from).where("day", "<=", body.day_to);
+            }
+            else {
+                q = q.where("day", "==", body.day);
+            }
             if (variantFilter != null) {
                 const variantId = String(variantFilter || "na") || "na";
                 q = q.where("variantId", "==", variantId);
@@ -3562,36 +3577,70 @@ function registerV1Routes(app) {
             }
             const day = body.day;
             const variantId = body.variant_id ?? "na";
+            const forceRefreshInsight = body.force_refresh === true;
+            const periodLabel = body.day_from && body.day_to
+                ? `${body.day_from} 〜 ${body.day_to}`
+                : day;
             const docId = `${body.site_id}__${day}__${body.scope}__${body.scope_id}__${variantId}`;
             const db = (0, admin_1.adminDb)();
             const ref = db.collection("ai_insights_daily").doc(docId);
-            const snap = await ref.get();
-            if (snap.exists) {
-                return res.json({ ok: true, cached: true, ...snap.data() });
+            if (!forceRefreshInsight) {
+                const snap = await ref.get();
+                if (snap.exists) {
+                    return res.json({ ok: true, cached: true, ...snap.data() });
+                }
             }
+            // 数値を整理してAIに渡す
+            const imp = body.metrics.impressions;
+            const clk = body.metrics.clicks;
+            const cls = body.metrics.closes ?? 0;
+            const cv = body.metrics.conversions ?? 0;
+            const ctr = imp > 0 ? Number(((clk / imp) * 100).toFixed(2)) : 0;
+            const cvr = imp > 0 ? Number(((cv / imp) * 100).toFixed(2)) : 0;
+            // パフォーマンス判定をAIに明示
+            const perfLevel = cv > 0 && ctr >= 1 ? "良好（CVあり・CTR良好）" :
+                cv > 0 ? "まずまず（CVあり・CTRは低め）" :
+                    ctr >= 1 ? "改善余地あり（CTR良好だがCV未達）" :
+                        ctr > 0 ? "要改善（CTR低め・CVなし）" :
+                            "要改善（クリックなし）";
             const prompt = {
+                language: "必ず日本語で回答してください",
                 goal: "接客施策の改善アドバイス（自動適用はしない）",
                 scope: body.scope,
                 scope_id: body.scope_id,
                 variant_id: variantId,
+                period: periodLabel,
                 metrics: {
-                    impressions: body.metrics.impressions,
-                    clicks: body.metrics.clicks,
-                    ctr: rule.ctr,
-                    closes: body.metrics.closes ?? 0,
-                    conversions: body.metrics.conversions ?? 0,
+                    impressions: imp,
+                    clicks: clk,
+                    ctr_percent: ctr,
+                    closes: cls,
+                    conversions: cv,
+                    cvr_percent: cvr,
                 },
-                rule,
+                performance_judgment: perfLevel,
+                rule_grade: rule.grade, // good / ok / bad / need_data
                 context: body.context || {},
+                instructions: [
+                    "performance_judgment と rule_grade を必ず評価の基準にしてください。",
+                    "performance_judgment が '良好' の場合は summary でまず成果を肯定してから改善提案をしてください。",
+                    "CVやCTRの実数値を summary や bullets に具体的に引用してください（例: 'CTR X%', 'CV Y件'）。",
+                    "数値が良い場合は bullets のうち1〜2件を「良かった点」として記載してください。",
+                ],
                 constraints: {
                     tone: "短く・実務的・断定しすぎない",
                     format: "summary 1行 + bullets 3行 + next 1行",
-                    avoid: ["自動変更の指示", "誇大表現"],
+                    avoid: ["自動変更の指示", "誇大表現", "英語"],
                 },
             };
             const out = await (0, openaiJson_1.callOpenAIJson)({
                 model: "gpt-4.1-mini",
                 input: prompt,
+                systemPrompt: [
+                    "あなたはECサイト向けパーソナライゼーションツールのデータアナリストです。",
+                    "渡されたメトリクスの実数値を必ず参照し、performance_judgment を軸に評価してください。",
+                    "必ず日本語で回答し、JSON形式で返してください。",
+                ].join(" "),
                 schema: zod_1.z.object({
                     summary: zod_1.z.string(),
                     bullets: zod_1.z.array(zod_1.z.string()).min(3).max(3),
@@ -3661,14 +3710,18 @@ function registerV1Routes(app) {
             const dayTo = body.day_to;
             const scenarioId = body.scenario_id;
             const variantId = String(body.variant_id ?? "na") || "na";
+            const previewImage = body.preview_image || null; // base64 PNG（あればvisionモデルを使用）
             // ===============================
             // 1) キャッシュ（期間単位）
             // ===============================
+            const forceRefresh = body.force_refresh === true;
             const cacheId = `${siteId}__${scenarioId}__${variantId}__${dayFrom}__${dayTo}`;
             const cacheRef = db.collection("ai_reviews_daily").doc(cacheId);
-            const cacheSnap = await cacheRef.get();
-            if (cacheSnap.exists) {
-                return res.json({ ok: true, cached: true, ...cacheSnap.data() });
+            if (!forceRefresh) {
+                const cacheSnap = await cacheRef.get();
+                if (cacheSnap.exists) {
+                    return res.json({ ok: true, cached: true, ...cacheSnap.data() });
+                }
             }
             // ===============================
             // 2) scenario + actions
@@ -3687,14 +3740,70 @@ function registerV1Routes(app) {
                 return res.status(400).json({ ok: false, error: "no_actions" });
             }
             const actionSnaps = await Promise.all(enabledActionIds.map((id) => db.collection("actions").doc(id).get()));
+            // プラットフォームデフォルトテンプレートを取得（serve と同じ）
+            const platformTplSnapR = await db.collection("system_config").doc("platform_templates").get();
+            const platformTplsR = platformTplSnapR.exists
+                ? (platformTplSnapR.data() || {})
+                : {};
+            // テンプレートIDを収集して一括フェッチ
+            const templateIds = actionSnaps
+                .filter((snap) => snap.exists)
+                .map((snap) => String(snap.data()?.templateId || ""))
+                .filter(Boolean);
+            const uniqueTemplateIds = [...new Set(templateIds)];
+            const templateSnaps = await Promise.all(uniqueTemplateIds.map((tid) => db.collection("templates").doc(tid).get()));
+            const templateMap = {};
+            for (const tSnap of templateSnaps) {
+                if (tSnap.exists)
+                    templateMap[tSnap.id] = tSnap.data();
+            }
+            // HTML から表示テキストを抽出するヘルパー
+            function extractTextFromHtml(html) {
+                return html
+                    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+                    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+                    .replace(/<[^>]+>/g, " ")
+                    .replace(/\s+/g, " ")
+                    .trim()
+                    .slice(0, 600); // AIに渡すテキストは最大600文字
+            }
             const actions = actionSnaps
                 .filter((snap) => snap.exists)
                 .map((snap) => {
                 const d = (snap.data() || {});
+                const actionType = String(d.type || "modal");
+                // serve エンドポイントと同じ3段階フォールバック
+                // 1) インラインテンプレート
+                let tplHtml = d.template?.html ? String(d.template.html) : "";
+                let tplCss = d.template?.css ? String(d.template.css) : "";
+                let resolvedTemplateId = d.template?.template_id ? String(d.template.template_id) : "";
+                // 2) templateId → templates コレクション
+                if (!tplHtml && d.templateId) {
+                    const tplData = templateMap[String(d.templateId)];
+                    if (tplData?.html) {
+                        tplHtml = String(tplData.html);
+                        tplCss = String(tplData.css || "");
+                        resolvedTemplateId = String(d.templateId);
+                    }
+                }
+                // 3) プラットフォームデフォルトにフォールバック
+                if (!tplHtml) {
+                    const ptpl = platformTplsR[actionType];
+                    if (ptpl?.html) {
+                        tplHtml = String(ptpl.html);
+                        tplCss = String(ptpl.css || "");
+                        resolvedTemplateId = `platform_${actionType}`;
+                    }
+                }
+                const templateText = tplHtml ? extractTextFromHtml(tplHtml) : "";
                 return {
                     action_id: snap.id,
-                    type: (d.type || "modal"),
+                    type: actionType,
                     creative: d.creative || {},
+                    templateId: resolvedTemplateId || null,
+                    templateHtml: tplHtml || null,
+                    templateCss: tplCss || null,
+                    templateText: templateText || null,
                 };
             });
             // ===============================
@@ -3753,7 +3862,8 @@ function registerV1Routes(app) {
             // ===============================
             const totalImpressionsPre = Object.values(metricsMap).reduce((sum, m) => sum + (m.impressions || 0), 0);
             const totalClicksPre = Object.values(metricsMap).reduce((sum, m) => sum + (m.clicks || 0), 0);
-            const rule = ruleMark({ impressions: totalImpressionsPre, clicks: totalClicksPre, conversions: 0 });
+            const totalConversionsPre = Object.values(metricsMap).reduce((sum, m) => sum + (m.conversions || 0), 0);
+            const rule = ruleMark({ impressions: totalImpressionsPre, clicks: totalClicksPre, conversions: totalConversionsPre });
             if (rule.grade === "need_data") {
                 const pack = {
                     variantId,
@@ -3784,33 +3894,48 @@ function registerV1Routes(app) {
             // ===============================
             // 4) AI入力
             // ===============================
-            const aiInput = actions.map((a) => ({
-                action_id: a.action_id,
-                type: a.type,
-                title: String(a.creative?.title || ""),
-                body: String(a.creative?.body || ""),
-                cta_text: String(a.creative?.cta_text || ""),
-                cta_url: String(a.creative?.cta_url || ""),
-                metrics: metricsMap[a.action_id] || {
-                    impressions: 0,
-                    clicks: 0,
-                    click_links: 0,
-                    closes: 0,
-                    conversions: 0,
-                    ctr: 0,
-                    link_ctr: 0,
-                    close_rate: 0,
-                },
-            }));
+            const aiInput = actions.map((a) => {
+                const hasTemplate = Boolean(a.templateId && a.templateText);
+                return {
+                    action_id: a.action_id,
+                    type: a.type,
+                    // creative fields は常に渡す（テンプレートがある場合は参考程度）
+                    title: String(a.creative?.title || ""),
+                    body: String(a.creative?.body || ""),
+                    cta_text: String(a.creative?.cta_text || ""),
+                    cta_url: String(a.creative?.cta_url || ""),
+                    // カスタムテンプレートがある場合はそのテキストも渡す（こちらが実際に表示される内容）
+                    ...(hasTemplate ? { custom_template_text: a.templateText } : {}),
+                    uses_custom_template: hasTemplate,
+                    metrics: metricsMap[a.action_id] || {
+                        impressions: 0,
+                        clicks: 0,
+                        click_links: 0,
+                        closes: 0,
+                        conversions: 0,
+                        ctr: 0,
+                        link_ctr: 0,
+                        close_rate: 0,
+                    },
+                };
+            });
             const prompt = {
                 role: "ux_optimizer",
-                task: "以下の actions から改善優先度が高いものを最大3つ選び、短い見出し(label)と理由(reason)を返してください。必ず action_id は入力のものをそのまま返す。",
+                language: "日本語で回答してください",
+                task: [
+                    "以下の actions のメトリクス（impressions/clicks/ctr/conversions）をまず確認し、数値が良好な場合はseverityを'info'にしてください。",
+                    "CTR≥1%かつconversions>0 の場合は良好と判断し、肯定的なトーンで改善提案を行ってください。",
+                    "改善優先度が高いものを最大3つ選び、短い見出し(label)と理由(reason)を返してください（必ず日本語）。",
+                    "必ず action_id は入力のものをそのまま返す。",
+                    "uses_custom_template=true の action は、custom_template_text が実際にユーザーに表示されるコンテンツです。title/bodyフィールドより custom_template_text を優先して評価してください。",
+                    "custom_template_text が空でも title/body/cta_text を元に評価してください。",
+                ].join(" "),
                 severity_guide: {
-                    bad: "明確な問題（例: CTR/リンクCTRが極端に低い、close_rateが高い、文言が弱い/誤解を招く、CTAが不明瞭）",
-                    warn: "改善余地あり（例: 数字は悪くないが伸ばせる、CTA/本文が長い、価値が伝わりにくい）",
-                    info: "軽微な改善",
+                    bad: "明確な問題（例: CTRが0%、close_rateが高い、文言が弱い/誤解を招く、CTAが不明瞭）",
+                    warn: "改善余地あり（例: CTR低め・伸ばせる余地あり、CTA/本文が長い、価値が伝わりにくい）",
+                    info: "軽微な改善または良好（メトリクスが良好な場合はinfo推奨）",
                 },
-                output_rule: "JSON配列のみ。最大3件。",
+                output_rule: "JSON配列のみ。最大3件。label/reasonは必ず日本語。",
                 inputs: {
                     site_id: siteId,
                     day_from: dayFrom,
@@ -3822,30 +3947,65 @@ function registerV1Routes(app) {
             };
             // NOTE: Model sometimes wraps the array in an object (e.g. { highlights: [...] }).
             // Accept both shapes and normalize to Highlight[].
-            const highlightsRaw = await (0, openaiJson_1.callOpenAIJson)({
-                model: "gpt-4.1-mini",
-                input: {
-                    ...prompt,
-                    output_rule: "Return a JSON object with a single key 'highlights' containing an array. Example: {\"highlights\":[{\"action_id\":\"...\",\"label\":\"...\",\"reason\":\"...\",\"severity\":\"warn\"}]}. Max 3 items.",
-                },
-                // json_object format always returns an object, never a bare array.
-                // Accept any object shape and extract the first array value found.
-                schema: zod_1.z.record(zod_1.z.unknown()).transform((v) => {
-                    // Try well-known keys first, then fall back to first array value
-                    const raw = v;
-                    const arr = raw.highlights ?? raw.items ?? raw.result ?? raw.data ?? raw.reviews ??
-                        Object.values(raw).find((x) => Array.isArray(x)) ?? [];
-                    return (Array.isArray(arr) ? arr : [])
-                        .slice(0, 3)
-                        .map((item) => ({
-                        action_id: String(item?.action_id || ""),
-                        label: String(item?.label || ""),
-                        reason: String(item?.reason || ""),
-                        severity: (["bad", "warn", "info"].includes(item?.severity) ? item.severity : "info"),
-                    }))
-                        .filter((h) => h.action_id && h.label);
-                }),
+            const highlightSchema = zod_1.z.record(zod_1.z.unknown()).transform((v) => {
+                const raw = v;
+                const arr = raw.highlights ?? raw.items ?? raw.result ?? raw.data ?? raw.reviews ??
+                    Object.values(raw).find((x) => Array.isArray(x)) ?? [];
+                return (Array.isArray(arr) ? arr : [])
+                    .slice(0, 3)
+                    .map((item) => ({
+                    action_id: String(item?.action_id || ""),
+                    label: String(item?.label || ""),
+                    reason: String(item?.reason || ""),
+                    severity: (["bad", "warn", "info"].includes(item?.severity) ? item.severity : "info"),
+                }))
+                    .filter((h) => h.action_id && h.label);
             });
+            const outputRule = "Return a JSON object with a single key 'highlights' containing an array. Example: {\"highlights\":[{\"action_id\":\"...\",\"label\":\"...\",\"reason\":\"...\",\"severity\":\"warn\"}]}. Max 3 items.";
+            let highlightsRaw;
+            if (previewImage) {
+                // ===== スクリーンショットあり → GPT-4o Vision =====
+                const systemPrompt = [
+                    "あなたはWebサイトパーソナライゼーションツールのUX改善アドバイザーです。",
+                    "提供されたスクリーンショットを分析し、ビジュアルデザイン・文章の読みやすさ・CTAの目立ち具合・レイアウト・UXを評価してください。",
+                    "必ず日本語で回答してください。自動変更の提案は禁止です。JSONのみ返してください。",
+                ].join(" ");
+                // 総合メトリクスサマリーを構築
+                const totalConversions = Object.values(metricsMap).reduce((s, m) => s + (m.conversions || 0), 0);
+                const totalCtrForVision = totalImpressionsPre > 0
+                    ? Number(((totalClicksPre / totalImpressionsPre) * 100).toFixed(2)) : 0;
+                const metricsSummary = {
+                    impressions: totalImpressionsPre,
+                    clicks: totalClicksPre,
+                    ctr_percent: totalCtrForVision,
+                    conversions: totalConversions,
+                    period: `${dayFrom} 〜 ${dayTo}`,
+                };
+                const userText = [
+                    "添付のスクリーンショットはWebサイト上に実際に表示されているアクション（バナー/モーダル等）です。",
+                    "【重要】まず下記の実績メトリクスを確認し、数値が良好な場合（CTR≥1%かつ変換あり）はseverityを'info'にしてください。数値が悪い場合のみ'warn'/'bad'を使ってください。",
+                    `実績メトリクス: ${JSON.stringify(metricsSummary)}`,
+                    "ビジュアルデザイン・CTAの目立ち具合・文章の読みやすさ・メッセージの訴求力を評価し、改善優先度が高いものを最大3件返してください。",
+                    "メトリクスが良好な場合は『良好な成果が出ています。さらなる改善点として〜』のような肯定的なトーンにしてください。",
+                    `アクション詳細: ${JSON.stringify(aiInput.map((a) => ({ action_id: a.action_id, type: a.type, metrics: a.metrics })))}`,
+                    outputRule,
+                ].join("\n");
+                highlightsRaw = await (0, openaiJson_1.callOpenAIVisionJson)({
+                    model: "gpt-4o",
+                    systemPrompt,
+                    userText,
+                    imageBase64: previewImage,
+                    schema: highlightSchema,
+                });
+            }
+            else {
+                // ===== スクリーンショットなし → gpt-4.1-mini（テキストのみ）=====
+                highlightsRaw = await (0, openaiJson_1.callOpenAIJson)({
+                    model: "gpt-4.1-mini",
+                    input: { ...prompt, output_rule: outputRule },
+                    schema: highlightSchema,
+                });
+            }
             const highlights = Array.isArray(highlightsRaw) ? highlightsRaw : [];
             // ===============================
             // 5) packs
@@ -3870,6 +4030,7 @@ function registerV1Routes(app) {
                 day_from: dayFrom,
                 day_to: dayTo,
                 rule,
+                used_vision: Boolean(previewImage),
                 packs: [pack],
             };
             await cacheRef.set({

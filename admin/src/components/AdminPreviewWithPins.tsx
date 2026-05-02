@@ -9,7 +9,10 @@ type Action = {
     cta_text?: string;
     cta_url?: string;
     image_url?: string;
+    [key: string]: string | undefined;
   };
+  templateHtml?: string | null;
+  templateCss?: string | null;
   mount?: { selector?: string }; // Phase2では基本使わない
 };
 
@@ -27,6 +30,57 @@ type VariantPack = {
   metrics?: { impressions: number; clicks: number; ctr: number };
 };
 
+/** テンプレートHTMLにcreativeフィールドを埋め込んでsrcdocを生成 */
+function buildTemplateSrcdoc(html: string, css: string, creative: Record<string, string | undefined>): string {
+  // {{#if field}}...{{/if}} 条件ブロックを処理
+  let result = html.replace(/\{\{#if\s+(\w+)\}\}([\s\S]*?)\{\{\/if\}\}/g, (_: string, key: string, inner: string) => {
+    return creative[key] ? inner : "";
+  });
+  // {{variable}} プレースホルダーを置換
+  result = result.replace(/\{\{(\w+)\}\}/g, (_: string, key: string) => {
+    const val = creative[key];
+    return val != null ? val : "";
+  });
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:transparent;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}
+${css}
+</style></head><body>${result}</body></html>`;
+}
+
+/** iframeでテンプレートHTMLを描画し、コンテンツ高さに自動リサイズ */
+function TemplateRenderer({ html, css, creative }: {
+  html: string;
+  css: string;
+  creative: Record<string, string | undefined>;
+}) {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [height, setHeight] = useState(180);
+  const srcdoc = buildTemplateSrcdoc(html, css, creative);
+
+  const handleLoad = () => {
+    try {
+      const doc = iframeRef.current?.contentDocument;
+      if (doc?.body) {
+        const h = doc.body.scrollHeight || doc.documentElement.scrollHeight;
+        if (h > 0) setHeight(h + 16);
+      }
+    } catch { /* cross-origin: ignore */ }
+  };
+
+  return (
+    <iframe
+      ref={iframeRef}
+      srcDoc={srcdoc}
+      style={{ width: "100%", height, border: "none", display: "block", background: "transparent" }}
+      sandbox="allow-same-origin"
+      onLoad={handleLoad}
+      scrolling="no"
+      title="template-preview"
+    />
+  );
+}
+
 function severityColor(s: Highlight["severity"]) {
   if (s === "bad") return "#ef4444";
   if (s === "warn") return "#f59e0b";
@@ -40,6 +94,8 @@ function clamp(n: number, min: number, max: number) {
 /** ======== Action Renderer（直描画）======== */
 function ActionCard({ action, innerRef }: { action: Action; innerRef?: (el: HTMLDivElement | null) => void }) {
   const c = action.creative || {};
+  const hasTemplate = Boolean(action.templateHtml);
+
   return (
     <div
       ref={innerRef}
@@ -47,78 +103,94 @@ function ActionCard({ action, innerRef }: { action: Action; innerRef?: (el: HTML
       style={{
         border: "1px solid rgba(255,255,255,0.10)",
         borderRadius: 14,
-        padding: 14,
-        background: "rgba(255,255,255,0.04)",
+        overflow: "hidden",
+        background: hasTemplate ? "transparent" : "rgba(255,255,255,0.04)",
         boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
         marginBottom: 12,
       }}
     >
-      <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-        {c.image_url ? (
-          <img
-            src={c.image_url}
-            alt=""
-            style={{
-              width: 72,
-              height: 72,
-              objectFit: "cover",
-              borderRadius: 12,
-              border: "1px solid rgba(255,255,255,0.10)",
-              flex: "0 0 auto",
-            }}
-          />
-        ) : (
-          <div
-            style={{
-              width: 72,
-              height: 72,
-              borderRadius: 12,
-              background: "rgba(255,255,255,0.06)",
-              border: "1px dashed rgba(255,255,255,0.15)",
-              display: "grid",
-              placeItems: "center",
-              color: "rgba(255,255,255,0.5)",
-              fontSize: 12,
-              flex: "0 0 auto",
-            }}
-          >
-            no img
-          </div>
-        )}
+      {/* アクション種別バッジ */}
+      <div style={{ padding: "6px 12px", fontSize: 11, opacity: 0.6, background: "rgba(0,0,0,0.2)", display: "flex", gap: 8 }}>
+        <span>{action.type}</span>
+        <b>{action.action_id}</b>
+        {hasTemplate && <span style={{ color: "#a5b4fc" }}>カスタムテンプレート</span>}
+      </div>
 
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>
-            {action.type} / <b>{action.action_id}</b>
-          </div>
-          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6, lineHeight: 1.25 }}>
-            {c.title || "（タイトル未設定）"}
-          </div>
-          <div style={{ fontSize: 13, opacity: 0.85, lineHeight: 1.5, marginBottom: 10, whiteSpace: "pre-wrap" }}>
-            {c.body || "（本文未設定）"}
-          </div>
+      {hasTemplate ? (
+        /* カスタムテンプレートをiframeで描画 */
+        <TemplateRenderer
+          html={action.templateHtml!}
+          css={action.templateCss || ""}
+          creative={c as Record<string, string | undefined>}
+        />
+      ) : (
+        /* テンプレートなし: フォールバック表示 */
+        <div style={{ padding: 14 }}>
+          <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+            {c.image_url ? (
+              <img
+                src={c.image_url}
+                alt=""
+                style={{
+                  width: 72,
+                  height: 72,
+                  objectFit: "cover",
+                  borderRadius: 12,
+                  border: "1px solid rgba(255,255,255,0.10)",
+                  flex: "0 0 auto",
+                }}
+              />
+            ) : (
+              <div
+                style={{
+                  width: 72,
+                  height: 72,
+                  borderRadius: 12,
+                  background: "rgba(255,255,255,0.06)",
+                  border: "1px dashed rgba(255,255,255,0.15)",
+                  display: "grid",
+                  placeItems: "center",
+                  color: "rgba(255,255,255,0.5)",
+                  fontSize: 12,
+                  flex: "0 0 auto",
+                }}
+              >
+                no img
+              </div>
+            )}
 
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <button
-              type="button"
-              style={{
-                padding: "8px 12px",
-                borderRadius: 10,
-                border: "1px solid rgba(255,255,255,0.12)",
-                background: "rgba(255,255,255,0.08)",
-                color: "white",
-                cursor: "pointer",
-                fontWeight: 700,
-              }}
-              onClick={() => window.open(c.cta_url || "#", "_blank")}
-            >
-              {c.cta_text || "OK"}
-            </button>
-            <span style={{ fontSize: 12, opacity: 0.7, overflow: "hidden", textOverflow: "ellipsis" }}>
-              {c.cta_url || "（URL未設定）"}
-            </span>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6, lineHeight: 1.25 }}>
+                {c.title || "（タイトル未設定）"}
+              </div>
+              <div style={{ fontSize: 13, opacity: 0.85, lineHeight: 1.5, marginBottom: 10, whiteSpace: "pre-wrap" }}>
+                {c.body || "（本文未設定）"}
+              </div>
+
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  style={{
+                    padding: "8px 12px",
+                    borderRadius: 10,
+                    border: "1px solid rgba(255,255,255,0.12)",
+                    background: "rgba(255,255,255,0.08)",
+                    color: "white",
+                    cursor: "pointer",
+                    fontWeight: 700,
+                  }}
+                  onClick={() => window.open(c.cta_url || "#", "_blank")}
+                >
+                  {c.cta_text || "OK"}
+                </button>
+                <span style={{ fontSize: 12, opacity: 0.7, overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {c.cta_url || "（URL未設定）"}
+                </span>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

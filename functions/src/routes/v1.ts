@@ -96,9 +96,12 @@ const LogReqSchema = z.object({
 const AiInsightReqSchema = z.object({
   site_id: z.string().min(1),
   day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), // "2026-02-26"
+  day_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), // 集計期間開始
+  day_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),   // 集計期間終了
   scope: z.enum(["site", "scenario", "action"]),
   scope_id: z.string().min(1), // siteなら "all" でもOK
   variant_id: z.string().nullable().optional(), // null or "v1"
+  force_refresh: z.boolean().optional().default(false), // キャッシュを無視して再生成
   metrics: z.object({
     impressions: z.number().nonnegative(),
     clicks: z.number().nonnegative(),
@@ -4056,39 +4059,76 @@ export function registerV1Routes(app: Express) {
 
       const day = body.day;
       const variantId = body.variant_id ?? "na";
+      const forceRefreshInsight = body.force_refresh === true;
+      const periodLabel = body.day_from && body.day_to
+        ? `${body.day_from} 〜 ${body.day_to}`
+        : day;
       const docId = `${body.site_id}__${day}__${body.scope}__${body.scope_id}__${variantId}`;
 
       const db = adminDb();
       const ref = db.collection("ai_insights_daily").doc(docId);
-      const snap = await ref.get();
-      if (snap.exists) {
-        return res.json({ ok: true, cached: true, ...(snap.data() as any) });
+      if (!forceRefreshInsight) {
+        const snap = await ref.get();
+        if (snap.exists) {
+          return res.json({ ok: true, cached: true, ...(snap.data() as any) });
+        }
       }
 
+      // 数値を整理してAIに渡す
+      const imp = body.metrics.impressions;
+      const clk = body.metrics.clicks;
+      const cls = body.metrics.closes ?? 0;
+      const cv  = body.metrics.conversions ?? 0;
+      const ctr = imp > 0 ? Number(((clk / imp) * 100).toFixed(2)) : 0;
+      const cvr = imp > 0 ? Number(((cv  / imp) * 100).toFixed(2)) : 0;
+
+      // パフォーマンス判定をAIに明示
+      const perfLevel =
+        cv > 0 && ctr >= 1   ? "良好（CVあり・CTR良好）" :
+        cv > 0               ? "まずまず（CVあり・CTRは低め）" :
+        ctr >= 1             ? "改善余地あり（CTR良好だがCV未達）" :
+        ctr > 0              ? "要改善（CTR低め・CVなし）" :
+                               "要改善（クリックなし）";
+
       const prompt = {
+        language: "必ず日本語で回答してください",
         goal: "接客施策の改善アドバイス（自動適用はしない）",
         scope: body.scope,
         scope_id: body.scope_id,
         variant_id: variantId,
+        period: periodLabel,
         metrics: {
-          impressions: body.metrics.impressions,
-          clicks: body.metrics.clicks,
-          ctr: rule.ctr,
-          closes: body.metrics.closes ?? 0,
-          conversions: body.metrics.conversions ?? 0,
+          impressions: imp,
+          clicks: clk,
+          ctr_percent: ctr,
+          closes: cls,
+          conversions: cv,
+          cvr_percent: cvr,
         },
-        rule,
+        performance_judgment: perfLevel,
+        rule_grade: rule.grade, // good / ok / bad / need_data
         context: body.context || {},
+        instructions: [
+          "performance_judgment と rule_grade を必ず評価の基準にしてください。",
+          "performance_judgment が '良好' の場合は summary でまず成果を肯定してから改善提案をしてください。",
+          "CVやCTRの実数値を summary や bullets に具体的に引用してください（例: 'CTR X%', 'CV Y件'）。",
+          "数値が良い場合は bullets のうち1〜2件を「良かった点」として記載してください。",
+        ],
         constraints: {
           tone: "短く・実務的・断定しすぎない",
           format: "summary 1行 + bullets 3行 + next 1行",
-          avoid: ["自動変更の指示", "誇大表現"],
+          avoid: ["自動変更の指示", "誇大表現", "英語"],
         },
       };
 
       const out = await callOpenAIJson({
         model: "gpt-4.1-mini",
         input: prompt,
+        systemPrompt: [
+          "あなたはECサイト向けパーソナライゼーションツールのデータアナリストです。",
+          "渡されたメトリクスの実数値を必ず参照し、performance_judgment を軸に評価してください。",
+          "必ず日本語で回答し、JSON形式で返してください。",
+        ].join(" "),
         schema: z.object({
           summary: z.string(),
           bullets: z.array(z.string()).min(3).max(3),
@@ -4205,6 +4245,12 @@ export function registerV1Routes(app: Express) {
         enabledActionIds.map((id: string) => db.collection("actions").doc(id).get())
       );
 
+      // プラットフォームデフォルトテンプレートを取得（serve と同じ）
+      const platformTplSnapR = await db.collection("system_config").doc("platform_templates").get();
+      const platformTplsR = platformTplSnapR.exists
+        ? (platformTplSnapR.data() || {}) as Record<string, { html: string; css: string }>
+        : {};
+
       // テンプレートIDを収集して一括フェッチ
       const templateIds = actionSnaps
         .filter((snap) => snap.exists)
@@ -4234,14 +4280,42 @@ export function registerV1Routes(app: Express) {
         .filter((snap) => snap.exists)
         .map((snap) => {
           const d = (snap.data() || {}) as any;
-          const templateId = String(d.templateId || "");
-          const tplData = templateId ? templateMap[templateId] : null;
-          const templateText = tplData?.html ? extractTextFromHtml(String(tplData.html)) : "";
+          const actionType = String(d.type || "modal");
+
+          // serve エンドポイントと同じ3段階フォールバック
+          // 1) インラインテンプレート
+          let tplHtml = d.template?.html ? String(d.template.html) : "";
+          let tplCss  = d.template?.css  ? String(d.template.css)  : "";
+          let resolvedTemplateId = d.template?.template_id ? String(d.template.template_id) : "";
+
+          // 2) templateId → templates コレクション
+          if (!tplHtml && d.templateId) {
+            const tplData = templateMap[String(d.templateId)];
+            if (tplData?.html) {
+              tplHtml = String(tplData.html);
+              tplCss  = String(tplData.css || "");
+              resolvedTemplateId = String(d.templateId);
+            }
+          }
+
+          // 3) プラットフォームデフォルトにフォールバック
+          if (!tplHtml) {
+            const ptpl = platformTplsR[actionType];
+            if (ptpl?.html) {
+              tplHtml = String(ptpl.html);
+              tplCss  = String(ptpl.css || "");
+              resolvedTemplateId = `platform_${actionType}`;
+            }
+          }
+
+          const templateText = tplHtml ? extractTextFromHtml(tplHtml) : "";
           return {
             action_id: snap.id,
-            type: (d.type || "modal") as "modal" | "banner" | "toast",
+            type: actionType as "modal" | "banner" | "toast",
             creative: d.creative || {},
-            templateId: templateId || null,
+            templateId: resolvedTemplateId || null,
+            templateHtml: tplHtml || null,
+            templateCss: tplCss || null,
             templateText: templateText || null,
           };
         });
@@ -4382,18 +4456,21 @@ export function registerV1Routes(app: Express) {
 
       const prompt = {
         role: "ux_optimizer",
+        language: "日本語で回答してください",
         task: [
-          "以下の actions から改善優先度が高いものを最大3つ選び、短い見出し(label)と理由(reason)を返してください。",
+          "以下の actions のメトリクス（impressions/clicks/ctr/conversions）をまず確認し、数値が良好な場合はseverityを'info'にしてください。",
+          "CTR≥1%かつconversions>0 の場合は良好と判断し、肯定的なトーンで改善提案を行ってください。",
+          "改善優先度が高いものを最大3つ選び、短い見出し(label)と理由(reason)を返してください（必ず日本語）。",
           "必ず action_id は入力のものをそのまま返す。",
           "uses_custom_template=true の action は、custom_template_text が実際にユーザーに表示されるコンテンツです。title/bodyフィールドより custom_template_text を優先して評価してください。",
           "custom_template_text が空でも title/body/cta_text を元に評価してください。",
         ].join(" "),
         severity_guide: {
-          bad: "明確な問題（例: CTR/リンクCTRが極端に低い、close_rateが高い、文言が弱い/誤解を招く、CTAが不明瞭）",
-          warn: "改善余地あり（例: 数字は悪くないが伸ばせる、CTA/本文が長い、価値が伝わりにくい）",
-          info: "軽微な改善",
+          bad: "明確な問題（例: CTRが0%、close_rateが高い、文言が弱い/誤解を招く、CTAが不明瞭）",
+          warn: "改善余地あり（例: CTR低め・伸ばせる余地あり、CTA/本文が長い、価値が伝わりにくい）",
+          info: "軽微な改善または良好（メトリクスが良好な場合はinfo推奨）",
         },
-        output_rule: "JSON配列のみ。最大3件。",
+        output_rule: "JSON配列のみ。最大3件。label/reasonは必ず日本語。",
         inputs: {
           site_id: siteId,
           day_from: dayFrom,
@@ -4429,17 +4506,30 @@ export function registerV1Routes(app: Express) {
       if (previewImage) {
         // ===== スクリーンショットあり → GPT-4o Vision =====
         const systemPrompt = [
-          "You are a UX optimizer for a website personalization tool.",
-          "Analyze the provided screenshot of the actual action displayed on the website.",
-          "Evaluate visual design, text readability, CTA visibility, layout, and overall user experience.",
-          "Do NOT suggest automatic changes. Return JSON only.",
+          "あなたはWebサイトパーソナライゼーションツールのUX改善アドバイザーです。",
+          "提供されたスクリーンショットを分析し、ビジュアルデザイン・文章の読みやすさ・CTAの目立ち具合・レイアウト・UXを評価してください。",
+          "必ず日本語で回答してください。自動変更の提案は禁止です。JSONのみ返してください。",
         ].join(" ");
 
+        // 総合メトリクスサマリーを構築
+        const totalConversions = Object.values(metricsMap).reduce((s, m) => s + (m.conversions || 0), 0);
+        const totalCtrForVision = totalImpressionsPre > 0
+          ? Number(((totalClicksPre / totalImpressionsPre) * 100).toFixed(2)) : 0;
+        const metricsSummary = {
+          impressions: totalImpressionsPre,
+          clicks: totalClicksPre,
+          ctr_percent: totalCtrForVision,
+          conversions: totalConversions,
+          period: `${dayFrom} 〜 ${dayTo}`,
+        };
+
         const userText = [
-          "The attached screenshot shows the actual rendered action(s) on the website.",
-          "Based on the visual design AND the metrics below, identify up to 3 highest-priority improvements.",
-          "Focus on: visual clarity, CTA prominence, text readability, design/brand consistency, message impact.",
-          `Metrics & action data: ${JSON.stringify({ ...prompt.inputs, actions: aiInput })}`,
+          "添付のスクリーンショットはWebサイト上に実際に表示されているアクション（バナー/モーダル等）です。",
+          "【重要】まず下記の実績メトリクスを確認し、数値が良好な場合（CTR≥1%かつ変換あり）はseverityを'info'にしてください。数値が悪い場合のみ'warn'/'bad'を使ってください。",
+          `実績メトリクス: ${JSON.stringify(metricsSummary)}`,
+          "ビジュアルデザイン・CTAの目立ち具合・文章の読みやすさ・メッセージの訴求力を評価し、改善優先度が高いものを最大3件返してください。",
+          "メトリクスが良好な場合は『良好な成果が出ています。さらなる改善点として〜』のような肯定的なトーンにしてください。",
+          `アクション詳細: ${JSON.stringify(aiInput.map((a) => ({ action_id: a.action_id, type: a.type, metrics: a.metrics })))}`,
           outputRule,
         ].join("\n");
 
