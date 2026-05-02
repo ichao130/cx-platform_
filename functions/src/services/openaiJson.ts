@@ -9,7 +9,7 @@ export async function callOpenAIVisionJson<T extends z.ZodTypeAny>(params: {
   model: string;
   systemPrompt: string;
   userText: string;
-  imageBase64: string; // data:image/png;base64,... の base64部分のみ
+  imageBase64: string; // base64部分のみ（data:image/png;base64, プレフィックス不要）
   schema: T;
 }): Promise<z.infer<T>> {
   const apiKey = process.env.OPENAI_API_KEY || "";
@@ -17,29 +17,29 @@ export async function callOpenAIVisionJson<T extends z.ZodTypeAny>(params: {
 
   const client = new OpenAI({ apiKey });
 
-  const resp = await client.responses.create({
+  // Vision には Chat Completions API を使用（Responses API は画像未対応）
+  const resp = await client.chat.completions.create({
     model: params.model,
-    input: [
+    response_format: { type: "json_object" },
+    messages: [
       { role: "system", content: params.systemPrompt },
       {
         role: "user",
         content: [
           {
-            type: "input_image",
-            source: {
-              type: "base64",
-              media_type: "image/png",
-              data: params.imageBase64,
+            type: "image_url",
+            image_url: {
+              url: `data:image/png;base64,${params.imageBase64}`,
+              detail: "high",
             },
           },
-          { type: "input_text", text: params.userText },
+          { type: "text", text: params.userText },
         ] as any,
       },
     ],
-    text: { format: { type: "json_object" } },
   });
 
-  const text = resp.output_text || "{}";
+  const text = resp.choices[0]?.message?.content || "{}";
   const parsed = JSON.parse(text);
   return params.schema.parse(parsed);
 }
