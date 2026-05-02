@@ -417,6 +417,7 @@ export default function AnalyticsPage() {
   const [journeyFilterFrom, setJourneyFilterFrom] = useState<string>("");
   const [journeyFilterTo, setJourneyFilterTo] = useState<string>("");
   const [utmFilter, setUtmFilter] = useState<string>(""); // UTMフィルター（utm_source）
+  const [visitorDisplayLimit, setVisitorDisplayLimit] = useState<number>(100); // 表示件数
 
   // auth
   useEffect(() => {
@@ -490,12 +491,21 @@ export default function AnalyticsPage() {
   }, [siteId]);
 
   // ---- 訪問者ジャーニー用ログ（リアルタイム: onSnapshot） ----
+  // journeyFilterFrom/To が effectiveFrom/To より外側の場合も対応するため、
+  // クエリ範囲をジャーニーフィルターと上位日付範囲の和集合にする
   useEffect(() => {
     setJourneyLogs([]);
     if (!siteId) { return; }
     setJourneyLoading(true);
-    const since = effectiveFrom.toISOString();
-    const to = effectiveTo.toISOString();
+
+    // journeyFilter が設定されていれば、その範囲と effectiveFrom/To の広い方を使う
+    const jFrom = journeyFilterFrom ? new Date(journeyFilterFrom + "T00:00:00+09:00") : null;
+    const jTo   = journeyFilterTo   ? new Date(journeyFilterTo   + "T23:59:59+09:00") : null;
+    const queryFrom = jFrom && jFrom < effectiveFrom ? jFrom : effectiveFrom;
+    const queryTo   = jTo   && jTo   > effectiveTo   ? jTo   : effectiveTo;
+
+    const since = queryFrom.toISOString();
+    const to    = queryTo.toISOString();
     const unsub = onSnapshot(
       query(
         collection(db, "logs"),
@@ -511,15 +521,20 @@ export default function AnalyticsPage() {
       () => setJourneyLoading(false)
     );
     return unsub;
-  }, [siteId, effectiveFrom, effectiveTo]);
+  }, [siteId, effectiveFrom, effectiveTo, journeyFilterFrom, journeyFilterTo]);
 
   // ---- 購入ログ取得（リアルタイム） ----
   useEffect(() => {
     setPurchaseLogs([]); // siteId 変更時に即クリア（古データ混入防止）
     if (!siteId) { return; }
     setPurchaseLoading(true);
-    const since = effectiveFrom.toISOString();
-    const to = effectiveTo.toISOString();
+    // journeyFilter 範囲も含めるよう queryFrom/To を拡張
+    const jFrom = journeyFilterFrom ? new Date(journeyFilterFrom + "T00:00:00+09:00") : null;
+    const jTo   = journeyFilterTo   ? new Date(journeyFilterTo   + "T23:59:59+09:00") : null;
+    const queryFrom = jFrom && jFrom < effectiveFrom ? jFrom : effectiveFrom;
+    const queryTo   = jTo   && jTo   > effectiveTo   ? jTo   : effectiveTo;
+    const since = queryFrom.toISOString();
+    const to    = queryTo.toISOString();
     const unsub = onSnapshot(
       query(
         collection(db, "logs"),
@@ -538,7 +553,7 @@ export default function AnalyticsPage() {
       }
     );
     return unsub;
-  }, [siteId, effectiveFrom, effectiveTo]);
+  }, [siteId, effectiveFrom, effectiveTo, journeyFilterFrom, journeyFilterTo]);
 
   // ---- stats_daily ----
   useEffect(() => {
@@ -777,6 +792,7 @@ export default function AnalyticsPage() {
   }, [recentLogs]);
 
   // ---- computed: 訪問者リスト（vid別集計） ----
+  // ジャーニーフィルターが指定されていれば、その範囲内のログだけを集計対象にする
   const visitorList = useMemo(() => {
     const map = new Map<string, {
       vid: string; firstSeen: string; lastSeen: string;
@@ -792,20 +808,34 @@ export default function AnalyticsPage() {
     }>();
     // sid ごとにセッションを追跡
     const vidSids = new Map<string, Set<string>>();
+    // 訪問日（JST YYYY-MM-DD）をユニーク集計（spanDays の正確な計算に使用）
+    const vidDays = new Map<string, Set<string>>();
 
-    const sorted = [...journeyLogs].sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+    // ジャーニーフィルターが指定されていれば、その範囲のログだけを使う
+    const jFromMs = journeyFilterFrom ? new Date(journeyFilterFrom + "T00:00:00+09:00").getTime() : 0;
+    const jToMs   = journeyFilterTo   ? new Date(journeyFilterTo   + "T23:59:59+09:00").getTime() : Infinity;
+    const filterActive = !!(journeyFilterFrom || journeyFilterTo);
+    const sourceLogs = filterActive
+      ? journeyLogs.filter((l) => { const t = toMs(l.createdAt); return t >= jFromMs && t <= jToMs; })
+      : journeyLogs;
+
+    const sorted = [...sourceLogs].sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
     const nowMs = Date.now();
     for (const l of sorted) {
       const vid = l.vid || "unknown";
       if (!map.has(vid)) {
         map.set(vid, { vid, firstSeen: l.createdAt || "", lastSeen: l.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, pages: [], eventCount: 0, firstRef: "", isNew: null, utmSource: "", utmMedium: "", utmCampaign: "", sessionCount: 0, spanDays: 0, daysSinceLastVisit: 0 });
         vidSids.set(vid, new Set());
+        vidDays.set(vid, new Set());
       }
       const v = map.get(vid)!;
       v.lastSeen = l.createdAt || v.lastSeen;
       v.eventCount++;
       // sid 追跡
       if (l.sid) vidSids.get(vid)!.add(l.sid);
+      // 訪問日（JST）を追跡
+      const dayStr = utcIsoToJstDay(l.createdAt || "");
+      if (dayStr) vidDays.get(vid)!.add(dayStr);
       if (l.event === "pageview") {
         v.pvCount++;
         if (l.path && !v.pages.includes(l.path)) v.pages.push(l.path);
@@ -822,9 +852,20 @@ export default function AnalyticsPage() {
       if (l.event === "pageleave" && l.duration_sec) v.totalDuration += Number(l.duration_sec);
     }
     // 購入ログを紐付け（vid が明示されているものだけ紐付ける）
+    // hasPurchase は「ロード済み範囲内でいつでも購入あり」で判定する
+    // （日付フィルターは「その期間に来たか」の絞り込みに使い、購入有無はその人全体で見る）
     for (const p of purchaseLogs) {
       if (!p.vid) continue;
-      if (!map.has(p.vid)) continue;
+      // map にいない（フィルター期間に来ていない）訪問者でも、
+      // 購入だけはフィルター期間内なら map に追加して購入者として扱う
+      if (!map.has(p.vid)) {
+        if (filterActive) {
+          const t = toMs(p.createdAt);
+          if (t < jFromMs || t > jToMs) continue; // 期間外の購入は無視
+        }
+        map.set(p.vid, { vid: p.vid, firstSeen: p.createdAt || "", lastSeen: p.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, pages: [], eventCount: 0, firstRef: "", isNew: null, utmSource: "", utmMedium: "", utmCampaign: "", sessionCount: 1, spanDays: 0, daysSinceLastVisit: 0 });
+        vidSids.set(p.vid, new Set());
+      }
       const v = map.get(p.vid)!;
       v.hasPurchase = true;
       v.purchaseRevenue += typeof p.revenue === "number" ? p.revenue : 0;
@@ -834,15 +875,24 @@ export default function AnalyticsPage() {
     for (const [vid, v] of map) {
       const sids = vidSids.get(vid);
       v.sessionCount = sids && sids.size > 0 ? sids.size : 1;
-      const firstMs = v.firstSeen ? new Date(v.firstSeen).getTime() : nowMs;
-      const lastMs  = v.lastSeen  ? new Date(v.lastSeen).getTime()  : nowMs;
-      v.spanDays = Math.round((lastMs - firstMs) / 86400000);
+      // spanDays: ユニーク訪問日（JST）の最初と最後の差分で計算
+      // → 同日複数訪問が多くても正確にリターン間隔を反映できる
+      const days = vidDays.get(vid);
+      if (days && days.size >= 2) {
+        const sortedDays = [...days].sort();
+        const d1 = new Date(sortedDays[0] + "T00:00:00+09:00").getTime();
+        const d2 = new Date(sortedDays[sortedDays.length - 1] + "T00:00:00+09:00").getTime();
+        v.spanDays = Math.round((d2 - d1) / 86400000);
+      } else {
+        v.spanDays = 0;
+      }
+      const lastMs = v.lastSeen ? new Date(v.lastSeen).getTime() : nowMs;
       v.daysSinceLastVisit = Math.floor((nowMs - lastMs) / 86400000);
     }
     return Array.from(map.values())
       .sort((a, b) => b.lastSeen.localeCompare(a.lastSeen))
-      .slice(0, 500);
-  }, [journeyLogs, purchaseLogs]);
+      .slice(0, 1000);
+  }, [journeyLogs, purchaseLogs, journeyFilterFrom, journeyFilterTo]);
 
   // ---- computed: 新規/リピート 日別集計 ----
   // stats_daily の "new_vids" / "repeat_vids" ドキュメントを優先（limit制限なし）
@@ -877,26 +927,24 @@ export default function AnalyticsPage() {
     return buckets;
   }, [visitorList]);
 
-  // ---- computed: リターンスパン分布（2回以上訪問者の平均帰還間隔） ----
+  // ---- computed: リターンスパン分布（異なる日に2回以上来た訪問者の初回〜最終訪問日数） ----
   const returnSpanDist = useMemo(() => {
     const buckets = [
-      { label: "当日",    min: 0,  max: 0,   count: 0 },
       { label: "1〜3日",  min: 1,  max: 3,   count: 0 },
       { label: "4〜7日",  min: 4,  max: 7,   count: 0 },
       { label: "8〜14日", min: 8,  max: 14,  count: 0 },
       { label: "15〜30日",min: 15, max: 30,  count: 0 },
       { label: "31日以上",min: 31, max: Infinity, count: 0 },
     ];
-    // 2回以上訪問した人だけ対象。平均帰還間隔 = spanDays / (sessionCount - 1)
-    const returners = visitorList.filter((v) => v.sessionCount >= 2);
+    // 別の日に2回以上来た人だけ対象（spanDays > 0）
+    const returners = visitorList.filter((v) => v.spanDays > 0);
     for (const v of returners) {
-      const avgInterval = v.sessionCount > 1 ? Math.round(v.spanDays / (v.sessionCount - 1)) : v.spanDays;
-      const b = buckets.find((b) => avgInterval >= b.min && avgInterval <= b.max);
+      const b = buckets.find((b) => v.spanDays >= b.min && v.spanDays <= b.max);
       if (b) b.count++;
     }
-    // 平均リターン間隔（全リピーター平均）
+    // 平均リターンスパン（初回〜最終訪問日の平均）
     const avgReturnDays = returners.length > 0
-      ? Math.round(returners.reduce((s, v) => s + (v.sessionCount > 1 ? v.spanDays / (v.sessionCount - 1) : v.spanDays), 0) / returners.length)
+      ? Math.round(returners.reduce((s, v) => s + v.spanDays, 0) / returners.length)
       : null;
     return { buckets, returnerCount: returners.length, avgReturnDays };
   }, [visitorList]);
@@ -908,6 +956,8 @@ export default function AnalyticsPage() {
   }, [visitorList]);
 
   // ---- computed: フィルター済み訪問者リスト ----
+  // visitorList は既にジャーニーフィルター範囲で集計されているため、
+  // ここでは visitorFilter / utmFilter のみ適用
   const filteredVisitorList = useMemo(() => {
     let list = visitorList;
     if (visitorFilter === "purchase") list = list.filter((v) => v.hasPurchase);
@@ -915,20 +965,8 @@ export default function AnalyticsPage() {
     if (visitorFilter === "new") list = list.filter((v) => v.isNew === true);
     if (visitorFilter === "repeat") list = list.filter((v) => v.isNew === false);
     if (utmFilter) list = list.filter((v: any) => v.utmSource === utmFilter);
-    if (journeyFilterFrom || journeyFilterTo) {
-      // firstSeen/lastSeen ではなく実際のイベントが範囲内にあるかをミリ秒比較で判定
-      const fromMs = journeyFilterFrom ? new Date(journeyFilterFrom + "T00:00:00+09:00").getTime() : 0;
-      const toMs2 = journeyFilterTo ? new Date(journeyFilterTo + "T23:59:59+09:00").getTime() : Infinity;
-      const vidsInRange = new Set(
-        journeyLogs
-          .filter((l) => { const t = toMs(l.createdAt); return t >= fromMs && t <= toMs2; })
-          .map((l) => l.vid)
-          .filter(Boolean)
-      );
-      list = list.filter((v) => vidsInRange.has(v.vid));
-    }
-    return list.slice(0, 100);
-  }, [visitorList, visitorFilter, journeyFilterFrom, journeyFilterTo, utmFilter, journeyLogs]);
+    return list.slice(0, visitorDisplayLimit);
+  }, [visitorList, visitorFilter, utmFilter, visitorDisplayLimit]);
 
   // ---- computed: 選択中訪問者のイベント一覧（購入ログ含む） ----
   const selectedJourney = useMemo(() => {
@@ -1828,10 +1866,21 @@ export default function AnalyticsPage() {
                   )}
                 </div>
               )}
-              {/* 件数表示 */}
-              <div className="small" style={{ opacity: 0.55, marginLeft: "auto", flexShrink: 0, whiteSpace: "nowrap" }}>
-                {filteredVisitorList.length}人表示
-                {visitorFilter !== "all" || journeyFilterFrom || journeyFilterTo || utmFilter ? ` / ${visitorList.length}人中` : ""}
+              {/* 件数表示 + 表示件数プルダウン */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: "auto", flexShrink: 0 }}>
+                <div className="small" style={{ opacity: 0.55, whiteSpace: "nowrap" }}>
+                  {filteredVisitorList.length}人表示
+                  {visitorFilter !== "all" || journeyFilterFrom || journeyFilterTo || utmFilter ? ` / ${visitorList.length}人中` : ""}
+                </div>
+                <select
+                  value={visitorDisplayLimit}
+                  onChange={(e) => setVisitorDisplayLimit(Number(e.target.value))}
+                  style={{ fontSize: 11, padding: "3px 6px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 6, background: "#fff", cursor: "pointer" }}
+                >
+                  {[50, 100, 200, 500, 1000].map((n) => (
+                    <option key={n} value={n}>{n}人</option>
+                  ))}
+                </select>
               </div>
             </div>
 

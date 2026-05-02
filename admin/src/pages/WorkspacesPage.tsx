@@ -4,6 +4,8 @@ import { collection, doc, limit, onSnapshot, orderBy, query, setDoc, where } fro
 import { db, apiPostJson } from "../firebase";
 import { usePlanLimit } from "../hooks/usePlanLimit";
 import { uploadMediaToWorkspace } from "../lib/media";
+import RightDrawer from '../components/RightDrawer';
+import StickySaveBar from '../components/StickySaveBar';
 
 type RoleKey = 'owner' | 'admin' | 'member' | 'viewer';
 type AccessKey =
@@ -539,32 +541,17 @@ export default function WorkspacesPage() {
         </table>
       </div>
 
-      {isModalOpen ? (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(15,23,42,0.24)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 24,
-            zIndex: 50,
-          }}
-          onClick={() => {
-            setIsModalOpen(false);
-            setError('');
-          }}
-        >
-          <div
-            className="card"
-            style={{ width: 'min(980px, 100%)', maxHeight: '88vh', overflow: 'auto' }}
-            onClick={(e) => e.stopPropagation()}
-          >
+      <RightDrawer
+        open={isModalOpen}
+        width={980}
+        title={rows.some((r) => r.id === id) ? 'ワークスペースを編集' : 'ワークスペースを作成'}
+        description="ワークスペースの設定・メンバー・オプションを管理します。"
+        onClose={() => { setIsModalOpen(false); setError(''); }}
+      >
+          <div>
             <div className="page-header" style={{ marginBottom: 10 }}>
               <div className="page-header__meta">
                 <h2 className="h1" style={{ fontSize: 22 }}>{rows.some((r) => r.id === id) ? 'ワークスペースを編集' : 'ワークスペースを作成'}</h2>
-                <div className="small">新規登録・編集はモーダルで行います。内部IDや詳細設定は必要な時だけ確認してください。</div>
               </div>
               <div className="page-header__actions">
                 <button className="btn" onClick={() => { setIsModalOpen(false); setError(''); }}>閉じる</button>
@@ -797,8 +784,7 @@ export default function WorkspacesPage() {
               </div>
             </div>
           </div>
-        </div>
-      ) : null}
+      </RightDrawer>
 
       {isLogoPickerOpen ? (
         <div

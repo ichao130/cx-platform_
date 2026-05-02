@@ -277,10 +277,16 @@ export default function DashboardPage() {
     return days[days.length - 1] || "";
   }, [rows]);
 
+  // シナリオ選択でフィルターされた rows
+  const filteredRows = useMemo(() => {
+    if (!abScenarioId) return rows;
+    return rows.filter((r) => r.scenarioId === abScenarioId);
+  }, [rows, abScenarioId]);
+
   // ---- Computed: KPI summary ----
   const summary = useMemo(() => {
     let imp = 0, clkLink = 0, clk = 0, close = 0, cv = 0;
-    for (const r of rows) {
+    for (const r of filteredRows) {
       const c = safeNum(r.count);
       if (r.event === "impression") imp += c;
       if (r.event === "click_link") clkLink += c;
@@ -292,7 +298,7 @@ export default function DashboardPage() {
     const ctr = imp > 0 ? Math.round((clkLink / imp) * 10000) / 100 : 0;
     const closeRate = imp > 0 ? Math.round((close / imp) * 10000) / 100 : 0;
     return { imp, clkLink, clk, close, cv, cvr, ctr, closeRate };
-  }, [rows]);
+  }, [filteredRows]);
 
   // ---- Computed: 売上KPI ----
   const totalRevenue = useMemo(() => purchaseLogs.reduce((s, l) => s + (typeof l.revenue === "number" ? l.revenue : 0), 0), [purchaseLogs]);
@@ -316,7 +322,7 @@ export default function DashboardPage() {
   // ---- Computed: 日別トレンド（棒: impression、折れ線: CVR%）----
   const trendData = useMemo(() => {
     const map = new Map<string, any>();
-    for (const r of rows) {
+    for (const r of filteredRows) {
       const day = String(r.day || "");
       if (!day) continue;
       if (!map.has(day)) map.set(day, { day, impression: 0, cv: 0, cvr: 0 });
@@ -331,9 +337,9 @@ export default function DashboardPage() {
       d.label = d.day.slice(5).replace("-", "/");
     }
     return out;
-  }, [rows]);
+  }, [filteredRows]);
 
-  // ---- Computed: シナリオ別比較 ----
+  // ---- Computed: シナリオ別比較（常に全シナリオ表示） ----
   const scenarioStats = useMemo(() => {
     const map = new Map<string, { id: string; name: string; imp: number; cv: number; clk: number }>();
     for (const r of rows) {
@@ -360,7 +366,7 @@ export default function DashboardPage() {
   // ---- Computed: バリアント別テーブル ----
   const summaryTable = useMemo(() => {
     const map = new Map<string, { v: string; imp: number; clk: number; cv: number }>();
-    for (const r of rows) {
+    for (const r of filteredRows) {
       const v = String(r.variantId ?? "na");
       if (!map.has(v)) map.set(v, { v, imp: 0, clk: 0, cv: 0 });
       const obj = map.get(v)!;
@@ -370,7 +376,7 @@ export default function DashboardPage() {
       if (r.event === "conversion") obj.cv += c;
     }
     return Array.from(map.values()).sort((a, b) => b.imp - a.imp);
-  }, [rows]);
+  }, [filteredRows]);
 
   const selectedSite = useMemo(() => sites.find((s) => s.id === siteId), [sites, siteId]);
   const selectedSiteName = useMemo(() => siteLabel(selectedSite), [selectedSite]);

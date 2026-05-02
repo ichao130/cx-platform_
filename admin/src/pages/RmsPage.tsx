@@ -41,7 +41,7 @@ function writeSelectedSiteId(id: string) {
   } catch {}
 }
 
-type Tab = "settings" | "sales" | "orders" | "items";
+type Tab = "settings" | "sales" | "orders";
 type SiteRow = { id: string; name: string };
 
 type Props = {
@@ -96,6 +96,8 @@ export default function RmsPage(_props: Props) {
   const [syncStatus, setSyncStatus] = useState<any>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [debugResult, setDebugResult] = useState<any[] | null>(null);
+  const [debugging, setDebugging] = useState(false);
 
   // ---- データ ----
   const [orders, setOrders] = useState<any[]>([]);
@@ -182,6 +184,16 @@ export default function RmsPage(_props: Props) {
     setCredsSaving(false);
   }
 
+  async function handleDebug() {
+    setDebugging(true); setDebugResult(null);
+    try {
+      const r = await apiFetch("/v1/rms/debug", { method: "POST", body: JSON.stringify({ siteId }) });
+      const d = await r.json();
+      setDebugResult(d.results || []);
+    } catch { setDebugResult([]); }
+    setDebugging(false);
+  }
+
   async function handleDeleteCreds() {
     if (!confirm("RMS認証情報を削除しますか？")) return;
     await apiFetch(`/v1/rms/credentials?siteId=${siteId}`, { method: "DELETE" });
@@ -201,7 +213,14 @@ export default function RmsPage(_props: Props) {
       if (!r.ok) {
         setSyncMsg({ type: "error", text: d.message || "同期に失敗しました" });
       } else {
-        setSyncMsg({ type: "success", text: `同期完了！注文 ${d.orders}件 / 商品 ${d.items}件` });
+        const errDetail = [
+          d.orderSyncError ? `注文: ${d.orderSyncError}` : "",
+          // 商品APIは有料オプションのためスキップ
+        ].filter(Boolean).join(" / ");
+        setSyncMsg({
+          type: errDetail ? "error" : "success",
+          text: `同期完了！注文 ${d.orders}件 / 商品 ${d.items}件${errDetail ? `\n⚠️ ${errDetail}` : ""}`,
+        });
         const sr = await apiFetch(`/v1/rms/sync/status?siteId=${siteId}`);
         const sd = await sr.json();
         setSyncStatus(sd.exists ? sd : null);
@@ -230,7 +249,6 @@ export default function RmsPage(_props: Props) {
     { key: "settings", label: "⚙️ 設定" },
     { key: "sales", label: "📊 売上集計" },
     { key: "orders", label: "🧾 注文データ" },
-    { key: "items", label: "📦 商品データ" },
   ];
 
   return (

@@ -835,8 +835,35 @@ export default function SitesPage() {
                           💰 売上計測 — Shopify Web Pixel（推奨）
                         </div>
                         <div className="small" style={{ opacity: 0.75, marginBottom: 10 }}>
-                          購入完了時の売上をMOKKEDAに送信します。<br />
-                          Shopify管理画面 → <b>設定 → Customer events → カスタムピクセルを追加</b> に下のコードを貼り付けてください。
+                          購入完了時の売上・訪問者IDをMOKKEDAに送信します。<br />
+                          <b>設定 → Customer events → カスタムピクセルを追加</b> に <b>Step 2</b> のコードを貼り付けてください。
+                        </div>
+
+                        {/* Step 1: カート属性書き込み */}
+                        <div style={{ marginBottom: 12, padding: '10px 12px', background: 'rgba(255,255,255,.55)', borderRadius: 8, border: '1px solid rgba(34,197,94,.2)' }}>
+                          <div className="small" style={{ fontWeight: 700, marginBottom: 4 }}>
+                            ① テーマに追加（Online Store → Themes → Edit code → theme.liquid）
+                          </div>
+                          <div className="small" style={{ opacity: 0.7, marginBottom: 8 }}>
+                            Web Pixelはサンドボックス内で動くためCookieが不安定なことがあります。<br />
+                            カート属性に <code>_cx_vid</code> を書き込んでおくと、チェックアウトを通じて確実に訪問者IDを引き継げます。<br />
+                            <b>{'<head>'}</b> の閉じタグ直前（MOKKEDAスクリプトの直後）に追加してください。
+                          </div>
+                          <pre style={{
+                            margin: 0, padding: '12px', background: '#1a2a3a', color: '#e2f0f5',
+                            borderRadius: 8, fontSize: 11, lineHeight: 1.7, overflowX: 'auto',
+                            whiteSpace: 'pre', userSelect: 'all', cursor: 'text',
+                            border: '1px solid rgba(255,255,255,.06)',
+                          }}>
+                            {`<script>\nfunction writeCxVidToCart() {\n  var vid = null;\n  try {\n    var m = document.cookie.match(/cx_vid=([^;]+)/);\n    vid = m ? m[1] : localStorage.getItem("cx_vid");\n  } catch(e) {}\n  if (!vid) return;\n  fetch("/cart/update.js", {\n    method: "POST",\n    headers: { "Content-Type": "application/json" },\n    body: JSON.stringify({ attributes: { "_cx_vid": vid } }),\n  });\n}\n\n// SDK初期化後を待って実行（初回訪問対応）\nsetTimeout(writeCxVidToCart, 2000);\n\n// カート更新時にも実行\ndocument.addEventListener("cart:updated", writeCxVidToCart);\n</script>`}
+                          </pre>
+                        </div>
+
+                        {/* Step 2: Web Pixel */}
+                        <div style={{ marginBottom: 8, padding: '10px 12px', background: 'rgba(255,255,255,.55)', borderRadius: 8, border: '1px solid rgba(34,197,94,.2)' }}>
+                          <div className="small" style={{ fontWeight: 700, marginBottom: 4 }}>
+                            ② Web Pixel コード（設定 → Customer events → カスタムピクセルを追加）
+                          </div>
                         </div>
                         <pre style={{
                           margin: 0,

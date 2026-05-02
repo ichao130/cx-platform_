@@ -952,7 +952,6 @@ function AuthScreen({
   children?: React.ReactNode;
 }) {
   return (
-    <SelectedSiteContext.Provider value={selectedSiteId}>
     <div
       style={{
         minHeight: "100vh",
@@ -1033,7 +1032,6 @@ function AuthScreen({
         </div>
       </div>
     </div>
-    </SelectedSiteContext.Provider>
   );
 }
 
