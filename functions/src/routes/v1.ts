@@ -115,7 +115,10 @@ const AiInsightReqSchema = z.object({
 
 const StatsSummaryReqSchema = z.object({
   site_id: z.string().min(1),
-  day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), // "2026-02-27"
+  // 単日指定 or 範囲指定のどちらも受け付ける
+  day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), // 単日（後方互換）
+  day_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), // 範囲開始
+  day_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),   // 範囲終了
   scope: z.enum(["site", "scenario", "action"]),
   scope_id: z.string().min(1), // site の場合は "all"
   variant_id: z.string().nullable().optional(), // null or "A"/"B"/"na"
@@ -3794,10 +3797,16 @@ export function registerV1Routes(app: Express) {
       // Normalize filters
       const variantFilter = body.variant_id; // null/undefined -> aggregate across all variants
 
+      // 日付フィルタ: day_from/day_to が指定されていればレンジ、なければ単日(day)
+      const useRange = body.day_from && body.day_to;
       let q = db
         .collection("stats_daily")
-        .where("siteId", "==", body.site_id)
-        .where("day", "==", body.day);
+        .where("siteId", "==", body.site_id);
+      if (useRange) {
+        q = q.where("day", ">=", body.day_from!).where("day", "<=", body.day_to!);
+      } else {
+        q = q.where("day", "==", body.day!);
+      }
 
       if (variantFilter != null) {
         const variantId = String(variantFilter || "na") || "na";
@@ -4189,14 +4198,45 @@ export function registerV1Routes(app: Express) {
       const actionSnaps = await Promise.all(
         enabledActionIds.map((id: string) => db.collection("actions").doc(id).get())
       );
+
+      // テンプレートIDを収集して一括フェッチ
+      const templateIds = actionSnaps
+        .filter((snap) => snap.exists)
+        .map((snap) => String((snap.data() as any)?.templateId || ""))
+        .filter(Boolean);
+      const uniqueTemplateIds = [...new Set(templateIds)];
+      const templateSnaps = await Promise.all(
+        uniqueTemplateIds.map((tid) => db.collection("templates").doc(tid).get())
+      );
+      const templateMap: Record<string, any> = {};
+      for (const tSnap of templateSnaps) {
+        if (tSnap.exists) templateMap[tSnap.id] = tSnap.data();
+      }
+
+      // HTML から表示テキストを抽出するヘルパー
+      function extractTextFromHtml(html: string): string {
+        return html
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+          .replace(/<[^>]+>/g, " ")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 600); // AIに渡すテキストは最大600文字
+      }
+
       const actions = actionSnaps
         .filter((snap) => snap.exists)
         .map((snap) => {
           const d = (snap.data() || {}) as any;
+          const templateId = String(d.templateId || "");
+          const tplData = templateId ? templateMap[templateId] : null;
+          const templateText = tplData?.html ? extractTextFromHtml(String(tplData.html)) : "";
           return {
             action_id: snap.id,
             type: (d.type || "modal") as "modal" | "banner" | "toast",
             creative: d.creative || {},
+            templateId: templateId || null,
+            templateText: templateText || null,
           };
         });
 
@@ -4268,7 +4308,8 @@ export function registerV1Routes(app: Express) {
       // ===============================
       const totalImpressionsPre = Object.values(metricsMap).reduce((sum, m) => sum + (m.impressions || 0), 0);
       const totalClicksPre = Object.values(metricsMap).reduce((sum, m) => sum + (m.clicks || 0), 0);
-      const rule = ruleMark({ impressions: totalImpressionsPre, clicks: totalClicksPre, conversions: 0 });
+      const totalConversionsPre = Object.values(metricsMap).reduce((sum, m) => sum + (m.conversions || 0), 0);
+      const rule = ruleMark({ impressions: totalImpressionsPre, clicks: totalClicksPre, conversions: totalConversionsPre });
 
       if (rule.grade === "need_data") {
         const pack = {
@@ -4307,24 +4348,29 @@ export function registerV1Routes(app: Express) {
       // ===============================
       // 4) AI入力
       // ===============================
-      const aiInput = actions.map((a) => ({
-        action_id: a.action_id,
-        type: a.type,
-        title: String(a.creative?.title || ""),
-        body: String(a.creative?.body || ""),
-        cta_text: String(a.creative?.cta_text || ""),
-        cta_url: String(a.creative?.cta_url || ""),
-        metrics: metricsMap[a.action_id] || {
-          impressions: 0,
-          clicks: 0,
-          click_links: 0,
-          closes: 0,
-          conversions: 0,
-          ctr: 0,
-          link_ctr: 0,
-          close_rate: 0,
-        },
-      }));
+      const aiInput = actions.map((a) => {
+        const hasTemplate = Boolean(a.templateId && a.templateText);
+        return {
+          action_id: a.action_id,
+          type: a.type,
+          // テンプレートがある場合はテンプレートのテキストを優先、なければcreativeフィールドを使用
+          title: hasTemplate ? "(カスタムテンプレート)" : String(a.creative?.title || ""),
+          body: hasTemplate ? a.templateText : String(a.creative?.body || ""),
+          cta_text: String(a.creative?.cta_text || ""),
+          cta_url: String(a.creative?.cta_url || ""),
+          uses_custom_template: hasTemplate,
+          metrics: metricsMap[a.action_id] || {
+            impressions: 0,
+            clicks: 0,
+            click_links: 0,
+            closes: 0,
+            conversions: 0,
+            ctr: 0,
+            link_ctr: 0,
+            close_rate: 0,
+          },
+        };
+      });
 
       const prompt = {
         role: "ux_optimizer",
