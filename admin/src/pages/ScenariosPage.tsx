@@ -22,9 +22,9 @@ type ActionRef = {
 };
 
 type Goal =
-  | { type: "path_prefix"; value: string }
-  | { type: "path_exact"; value: string }
-  | { type: "url_contains"; value: string };
+  | { type: "path_prefix"; value: string; attribution?: "view" | "click" }
+  | { type: "path_exact"; value: string; attribution?: "view" | "click" }
+  | { type: "url_contains"; value: string; attribution?: "view" | "click" };
 
 type ExperimentVariant = {
   id: string;
@@ -306,6 +306,7 @@ export default function ScenariosPage() {
 
   // goal
   const [goalEnabled, setGoalEnabled] = useState(false);
+  const [goalAttribution, setGoalAttribution] = useState<"view" | "click">("view");
   const [goalType, setGoalType] = useState<(typeof GOAL_TYPES)[number]>(
     "path_prefix"
   );
@@ -569,8 +570,8 @@ export default function ScenariosPage() {
     if (!goalEnabled) return null;
     const v = String(goalValue || "").trim();
     if (!v) return null;
-    return { type: goalType, value: v } as any;
-  }, [goalEnabled, goalType, goalValue]);
+    return { type: goalType, value: v, attribution: goalAttribution } as any;
+  }, [goalEnabled, goalType, goalValue, goalAttribution]);
 
   const targeting: ScenarioTargeting | undefined = useMemo(() => {
     if (!targetingEnabled) return undefined;
@@ -975,6 +976,7 @@ export default function ScenariosPage() {
       setGoalEnabled(true);
       setGoalType((s.goal as any).type);
       setGoalValue(String((s.goal as any).value || ""));
+      setGoalAttribution((s.goal as any).attribution === "click" ? "click" : "view");
     } else {
       setGoalEnabled(false);
       setGoalType("path_prefix");
@@ -1974,6 +1976,19 @@ export default function ScenariosPage() {
                   </select>
                   <input className="input" style={{ flex: 1, minWidth: 180 }} disabled={!goalEnabled} value={goalValue} onChange={(e) => setGoalValue(e.target.value)} placeholder={goalType === "path_prefix" ? "例：/thanks" : goalType === "path_exact" ? "例：/order/complete" : "例：complete"} />
                 </div>
+                {goalEnabled && (
+                  <div className="row" style={{ gap: 8, marginTop: 8, alignItems: "center" }}>
+                    <div className="small" style={{ opacity: 0.8 }}>CV計測タイミング:</div>
+                    <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", fontSize: 13 }}>
+                      <input type="radio" name="goalAttribution" value="view" checked={goalAttribution === "view"} onChange={() => setGoalAttribution("view")} />
+                      <span>表示ベース <span style={{ opacity: 0.65 }}>— バナーを見た後にCVページへ遷移でCV計上</span></span>
+                    </label>
+                    <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", fontSize: 13 }}>
+                      <input type="radio" name="goalAttribution" value="click" checked={goalAttribution === "click"} onChange={() => setGoalAttribution("click")} />
+                      <span>クリックベース <span style={{ opacity: 0.65 }}>— バナーをクリックした後にCVページへ遷移でCV計上</span></span>
+                    </label>
+                  </div>
+                )}
                 <div className="small" style={{ marginTop: 6, opacity: 0.6 }}>
                   {goalType === "path_prefix" && "✅ 入力したパスで始まるURLにアクセスしたときにCV計測（例：/thanks → /thanks, /thanks/123 が対象）"}
                   {goalType === "path_exact" && "✅ 入力したパスと完全に一致するURLにアクセスしたときにCV計測"}

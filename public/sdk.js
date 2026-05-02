@@ -485,6 +485,12 @@
               vid: ctx.vid,
               sid: ctx.sid
             }, ctx.site_id, ctx.site_key);
+            // クリックベース: click_link 時にゴール登録
+            if (ctx.pending_click_goal) {
+              var pcg = ctx.pending_click_goal;
+              registerGoal(ctx.site_id, pcg.scenarioId, pcg.actionId, pcg.variantId, pcg.goal);
+              ctx.pending_click_goal = null;
+            }
           });
         }
       }
@@ -575,6 +581,11 @@
           vid: ctx.vid,
           sid: ctx.sid
         }, ctx.site_id, ctx.site_key);
+        if (ctx.pending_click_goal) {
+          var pcg = ctx.pending_click_goal;
+          registerGoal(ctx.site_id, pcg.scenarioId, pcg.actionId, pcg.variantId, pcg.goal);
+          ctx.pending_click_goal = null;
+        }
       });
       footer.appendChild(linkBtn);
     }
@@ -673,6 +684,11 @@
             event: "click_link",
             url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid
           }, ctx.site_id, ctx.site_key);
+          if (ctx.pending_click_goal) {
+            var pcg = ctx.pending_click_goal;
+            registerGoal(ctx.site_id, pcg.scenarioId, pcg.actionId, pcg.variantId, pcg.goal);
+            ctx.pending_click_goal = null;
+          }
         });
         right.appendChild(a);
       }
@@ -781,6 +797,11 @@
             event: "click_link",
             url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid
           }, ctx.site_id, ctx.site_key);
+          if (ctx.pending_click_goal) {
+            var pcg = ctx.pending_click_goal;
+            registerGoal(ctx.site_id, pcg.scenarioId, pcg.actionId, pcg.variantId, pcg.goal);
+            ctx.pending_click_goal = null;
+          }
         });
       }
     }
@@ -1249,7 +1270,18 @@
     // ゴール登録（コンバージョン計測用）
     if (s.goal && s.goal.type && s.goal.value) {
       var firstActionId = actions.length ? (actions[0].action_id || null) : null;
-      registerGoal(ctx.site_id, ctx.scenario_id, firstActionId, ctx.variant_id, s.goal);
+      if (s.goal.attribution === "click") {
+        // クリックベース: click_link 発火時に登録するため ctx に保持
+        ctx.pending_click_goal = {
+          scenarioId: ctx.scenario_id,
+          actionId: firstActionId,
+          variantId: ctx.variant_id,
+          goal: s.goal
+        };
+      } else {
+        // 表示ベース（デフォルト）: 即時登録
+        registerGoal(ctx.site_id, ctx.scenario_id, firstActionId, ctx.variant_id, s.goal);
+      }
     }
 
     function fire() {
