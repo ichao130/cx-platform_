@@ -285,6 +285,34 @@ export default function WorkspacesPage() {
     [rows, selectedWorkspaceId]
   );
 
+  // 現在選択中ワークスペースの「オーナーUID」を取得し、
+  // その人がオーナーであるワークスペースのみ一覧表示する
+  // （招待されているだけの自分のワークスペースは見えないようにするため）
+  const currentOwnerUid = useMemo(() => {
+    const current = rows.find((r) => r.id === selectedWorkspaceId);
+    if (!current) return '';
+    const members = ((current.data as any)?.members || {}) as Record<string, string>;
+    const ownerEntry = Object.entries(members).find(([, role]) => role === 'owner');
+    return ownerEntry ? ownerEntry[0] : '';
+  }, [rows, selectedWorkspaceId]);
+
+  const visibleRows = useMemo(() => {
+    if (!currentOwnerUid) {
+      // 選択中ワークスペースが特定できない場合は、自分がオーナーのワークスペースのみ表示
+      return rows.filter((r) => {
+        const members = ((r.data as any)?.members || {}) as Record<string, string>;
+        return members[currentUid] === 'owner';
+      });
+    }
+    return rows.filter((r) => {
+      const members = ((r.data as any)?.members || {}) as Record<string, string>;
+      return members[currentOwnerUid] === 'owner';
+    });
+  }, [rows, currentOwnerUid, currentUid]);
+
+  // 現在のユーザーが選択中ワークスペースのオーナーかどうか
+  const isOwnerOfCurrent = currentOwnerUid && currentOwnerUid === currentUid;
+
   function resetEditor() {
     setId(genId('ws'));
     setName('');
@@ -445,8 +473,14 @@ export default function WorkspacesPage() {
           <button
             className="btn btn--primary"
             onClick={openCreateModal}
-            disabled={workspaceLimit.loading || !workspaceLimit.allowed}
-            title={!workspaceLimit.allowed && !workspaceLimit.loading ? `プランの上限に達しています（${workspaceLimit.current}/${workspaceLimit.limit}）` : undefined}
+            disabled={workspaceLimit.loading || !workspaceLimit.allowed || !isOwnerOfCurrent}
+            title={
+              !isOwnerOfCurrent
+                ? "ワークスペースの新規作成はオーナーのみ可能です"
+                : !workspaceLimit.allowed && !workspaceLimit.loading
+                ? `プランの上限に達しています（${workspaceLimit.current}/${workspaceLimit.limit}）`
+                : undefined
+            }
           >
             {workspaceLimit.loading
               ? "確認中…"
@@ -463,7 +497,14 @@ export default function WorkspacesPage() {
             </div>
           </div>
           <div className="list-toolbar__actions">
-            <button className="btn" onClick={openCreateModal}>作成</button>
+            <button
+              className="btn"
+              onClick={openCreateModal}
+              disabled={!isOwnerOfCurrent}
+              title={!isOwnerOfCurrent ? "ワークスペースの新規作成はオーナーのみ可能です" : undefined}
+            >
+              作成
+            </button>
           </div>
         </div>
 
@@ -477,7 +518,7 @@ export default function WorkspacesPage() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => {
+            {visibleRows.map((r) => {
               const accessSummary = summarizeAccess(r.data.defaults?.access);
               const isSelected = selectedWorkspaceId === r.id;
               return (

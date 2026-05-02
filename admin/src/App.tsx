@@ -516,6 +516,31 @@ function AppShell({ children }: { children: React.ReactNode }) {
     return workspaceRows.find((r) => r.id === workspaceId) || null;
   }, [workspaceRows, workspaceId]);
 
+  // 現在選択中ワークスペースの「オーナーUID」
+  const currentOwnerUid = useMemo(() => {
+    if (!selectedWorkspaceRow) return "";
+    const members = ((selectedWorkspaceRow.data as any)?.members || {}) as Record<string, string>;
+    const ownerEntry = Object.entries(members).find(([, role]) => role === "owner");
+    return ownerEntry ? ownerEntry[0] : "";
+  }, [selectedWorkspaceRow]);
+
+  // サイドバーレールやワークスペース管理画面で表示するワークスペース一覧
+  // 「現在選択中ワークスペースのオーナー」と同じオーナーのワークスペースのみに絞る
+  // （招待されているだけの自分のワークスペースは見せない）
+  const visibleWorkspaceRows = useMemo(() => {
+    if (!currentOwnerUid) {
+      // オーナー特定不可なら、自分がオーナーのものだけ
+      return workspaceRows.filter((r) => {
+        const members = ((r.data as any)?.members || {}) as Record<string, string>;
+        return members[currentUid] === "owner";
+      });
+    }
+    return workspaceRows.filter((r) => {
+      const members = ((r.data as any)?.members || {}) as Record<string, string>;
+      return members[currentOwnerUid] === "owner";
+    });
+  }, [workspaceRows, currentOwnerUid, currentUid]);
+
   const workspaceSiteRows = useMemo(() => {
     return siteRows.filter((row) => String(row.data?.workspaceId || "") === String(workspaceId || ""));
   }, [siteRows, workspaceId]);
@@ -581,8 +606,8 @@ function AppShell({ children }: { children: React.ReactNode }) {
   });
 
   const sortedWorkspaceRows = useMemo(() => {
-    if (!railOrder.length) return workspaceRows;
-    return [...workspaceRows].sort((a, b) => {
+    if (!railOrder.length) return visibleWorkspaceRows;
+    return [...visibleWorkspaceRows].sort((a, b) => {
       const ai = railOrder.indexOf(a.id);
       const bi = railOrder.indexOf(b.id);
       if (ai === -1 && bi === -1) return 0;
@@ -590,7 +615,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
       if (bi === -1) return -1;
       return ai - bi;
     });
-  }, [workspaceRows, railOrder]);
+  }, [visibleWorkspaceRows, railOrder]);
 
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
@@ -624,7 +649,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
     setDragOverId(null);
   }
 
-  const showRail = workspaceRows.length > 1;
+  const showRail = visibleWorkspaceRows.length > 1;
 
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     try { return localStorage.getItem("cx_sidebar_open") !== "false"; } catch { return true; }
