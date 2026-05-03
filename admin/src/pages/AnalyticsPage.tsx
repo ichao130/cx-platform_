@@ -594,37 +594,32 @@ export default function AnalyticsPage() {
     return statRows.filter((r) => r.day === todayStr && r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
   }, [statRows, todayStr]);
 
-  // ---- computed: 売上 ----
-  const totalRevenue = useMemo(() => purchaseLogs.reduce((s, l) => s + (typeof l.revenue === "number" ? l.revenue : 0), 0), [purchaseLogs]);
-  const purchaseCount = useMemo(() => purchaseLogs.length, [purchaseLogs]);
+  // ---- computed: 売上（stats_daily から永続集計）----
+  // stats_daily の purchase ドキュメントは購入発生時に確定書き込みされるため、
+  // 期間変更・施策停止・journeyLogs のリミットに関係なく値が変わらない
+  const purchaseStatRows = useMemo(() => statRows.filter((r) => r.event === "purchase"), [statRows]);
+  const totalRevenue = useMemo(() => purchaseStatRows.reduce((s, r) => s + safeNum(r.revenue_total), 0), [purchaseStatRows]);
+  const purchaseCount = useMemo(() => purchaseStatRows.reduce((s, r) => s + safeNum(r.count), 0), [purchaseStatRows]);
   const avgOrderValue = useMemo(() => purchaseCount > 0 ? totalRevenue / purchaseCount : 0, [totalRevenue, purchaseCount]);
 
-  // シナリオ別売上（purchase ログの scenario_id 優先 → フォールバックで journeyLogs ラストタッチ）
+  // シナリオ別売上（stats_daily から確定帰属）
+  // 購入イベント受信時にサーバー側で scenario_id ごとに revenue_total を加算済み
+  // → 時間が経っても・施策を止めても数字は変わらない
   const revenueByScenario = useMemo(() => {
-    if (!purchaseLogs.length) return [];
-    // フォールバック用: vid → 最後に見たシナリオIDを特定（journeyLogs から）
-    const vidToScenario = new Map<string, string>();
-    const sorted = [...journeyLogs]
-      .filter((l) => l.event === "impression" && l.scenario_id)
-      .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
-    for (const l of sorted) {
-      if (l.vid) vidToScenario.set(l.vid, l.scenario_id);
-    }
+    if (!purchaseStatRows.length) return [];
     const map = new Map<string, { id: string | null; name: string; revenue: number; count: number }>();
-    for (const purchase of purchaseLogs) {
-      // purchase ログに scenario_id が保存されていれば優先使用（確定帰属）
-      // なければ journeyLogs の last-touch にフォールバック
-      const scenarioId = purchase.scenario_id || vidToScenario.get(purchase.vid || "") || null;
+    for (const row of purchaseStatRows) {
+      const scenarioId = row.scenarioId || null;
       const key = scenarioId || "__none__";
       const sc = scenarios.find((s) => s.id === scenarioId);
       const name = sc ? String(sc.data?.name || sc.id) : "（施策なし）";
       if (!map.has(key)) map.set(key, { id: scenarioId, name, revenue: 0, count: 0 });
       const entry = map.get(key)!;
-      entry.revenue += typeof purchase.revenue === "number" ? purchase.revenue : 0;
-      entry.count++;
+      entry.revenue += safeNum(row.revenue_total);
+      entry.count += safeNum(row.count);
     }
     return Array.from(map.values()).sort((a, b) => b.revenue - a.revenue);
-  }, [purchaseLogs, journeyLogs, scenarios]);
+  }, [purchaseStatRows, scenarios]);
 
   // ---- computed: 商品別売上（施策帰属付き） ----
   const revenueByProduct = useMemo(() => {
