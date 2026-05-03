@@ -163,10 +163,12 @@ function FunnelStep({
 
 // ---- StatCard ----
 function StatCard({ label, value, sub, accent }: { label: string; value: string | number; sub?: string; accent?: string }) {
+  const str = String(value);
+  const fontSize = str.length > 10 ? 18 : str.length > 8 ? 22 : str.length > 6 ? 26 : 30;
   return (
     <div className="card" style={{ padding: 18, background: "#fff", border: "1px solid rgba(15,23,42,.08)", minWidth: 0 }}>
       <div className="small" style={{ opacity: 0.68 }}>{label}</div>
-      <div style={{ fontSize: 30, fontWeight: 800, lineHeight: 1.1, marginTop: 6, letterSpacing: "-.03em", color: accent || "inherit" }}>
+      <div style={{ fontSize, fontWeight: 800, lineHeight: 1.2, marginTop: 6, letterSpacing: "-.02em", color: accent || "inherit", wordBreak: "break-all" }}>
         {value}
       </div>
       {sub && <div className="small" style={{ opacity: 0.6, marginTop: 6 }}>{sub}</div>}
