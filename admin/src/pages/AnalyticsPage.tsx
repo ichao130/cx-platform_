@@ -1595,8 +1595,17 @@ export default function AnalyticsPage() {
 
             {/* 施策別CVトレンド（シナリオがある場合） */}
             {!journeyLoading && scenarios.length > 0 && (
+              <>
+                <TabBar
+                  tabs={[{ key: "active", label: "アクティブ" }, { key: "archive", label: "アーカイブ" }]}
+                  active={scenarioTab}
+                  onChange={(k) => setScenarioTab(k as "active" | "archive")}
+                />
+                {scenarioTab === "archive" && (
+                  <div className="small" style={{ opacity: 0.6, marginBottom: 10 }}>一時停止中の施策の過去データを表示しています</div>
+                )}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
-                {scenarios.slice(0, 4).map((sc) => {
+                {(scenarioTab === "active" ? activeScenarios : archivedScenarios).slice(0, 4).map((sc) => {
                   const scTrend = dailyTrend.map((d) => {
                     const scRows = statRows.filter((r) => r.scenarioId === sc.id && r.day === d.day);
                     const imp = scRows.filter((r) => r.event === "impression").reduce((s, r) => s + safeNum(r.count), 0);
@@ -1637,6 +1646,7 @@ export default function AnalyticsPage() {
                   );
                 })}
               </div>
+              </>
             )}
           </div>
 
