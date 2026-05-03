@@ -344,6 +344,19 @@ function RecentEventRow({ ev }: { ev: any }) {
   );
 }
 
+// タブUI
+function TabBar({ tabs, active, onChange }: { tabs: { key: string; label: string }[]; active: string; onChange: (k: string) => void }) {
+  return (
+    <div style={{ display: "flex", gap: 4, background: "rgba(15,23,42,.05)", borderRadius: 10, padding: 3, width: "fit-content", marginBottom: 14 }}>
+      {tabs.map((t) => (
+        <button key={t.key} onClick={() => onChange(t.key)} style={{ border: 0, borderRadius: 8, padding: "5px 14px", fontSize: 13, fontWeight: active === t.key ? 700 : 400, background: active === t.key ? "#fff" : "transparent", color: active === t.key ? "#0f172a" : "#64748b", cursor: "pointer", boxShadow: active === t.key ? "0 1px 3px rgba(0,0,0,.1)" : "none", transition: "all .15s" }}>
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function AnalyticsPage() {
   const [uid, setUid] = useState<string>("");
   const [workspaceId, setWorkspaceId] = useState<string>("");
@@ -395,6 +408,9 @@ export default function AnalyticsPage() {
     const t = customTo.replace(/-/g, "/");
     return f === t ? f : `${f}〜${t}`;
   }, [dateRange, customFrom, customTo]);
+
+  const [scenarioTab, setScenarioTab] = useState<"active" | "archive">("active");
+  const [realtimeTab, setRealtimeTab] = useState<"events" | "sessions">("events");
 
   // ---- リアルタイムログ ----
   const [recentLogs, setRecentLogs] = useState<any[]>([]);
@@ -740,6 +756,14 @@ export default function AnalyticsPage() {
 
   // ---- computed: 施策比較テーブル ----
   const comparisonData = useMemo(() => [...funnelData], [funnelData]);
+
+  // active / archived シナリオ分離
+  const activeScenarios = useMemo(() => scenarios.filter((s) => s.data?.status === "active"), [scenarios]);
+  const archivedScenarios = useMemo(() => scenarios.filter((s) => s.data?.status === "paused"), [scenarios]);
+
+  // 施策ファネル: active用 / archive用
+  const activeFunnelData = useMemo(() => funnelData.filter((f) => activeScenarios.some((s) => s.id === f.id)), [funnelData, activeScenarios]);
+  const archiveFunnelData = useMemo(() => funnelData.filter((f) => archivedScenarios.some((s) => s.id === f.id)), [funnelData, archivedScenarios]);
 
   // ---- computed: 日別トレンド ----
   const dailyTrend = useMemo<TrendPoint[]>(() => {
@@ -1246,24 +1270,81 @@ export default function AnalyticsPage() {
               <StatCard label="今日の施策表示" value={fmtInt(todayImpCount)} sub="インプレッション" accent="#2563eb" />
               <StatCard label="今日のCV" value={fmtInt(todayCvCount)} sub="コンバージョン" accent="#f59e0b" />
             </div>
-            {/* 直近のイベントフィード */}
-            <div className="card" style={{ padding: 18, background: "#fff" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <div className="small" style={{ fontWeight: 700 }}>直近のイベント</div>
-                <div className="small" style={{ opacity: 0.5 }}>{recentLogs.length} 件</div>
+            {/* タブ: 直近のイベント / セッション行動 */}
+            <TabBar
+              tabs={[{ key: "events", label: "直近のイベント" }, { key: "sessions", label: "セッション行動" }]}
+              active={realtimeTab}
+              onChange={(k) => setRealtimeTab(k as "events" | "sessions")}
+            />
+            {realtimeTab === "events" && (
+              <div className="card" style={{ padding: 18, background: "#fff" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                  <div className="small" style={{ fontWeight: 700 }}>直近のイベント</div>
+                  <div className="small" style={{ opacity: 0.5 }}>{recentLogs.length} 件</div>
+                </div>
+                {recentLogs.length === 0 ? (
+                  <div className="small" style={{ opacity: 0.55, textAlign: "center", padding: "12px 0" }}>
+                    直近30分のイベントはありません
+                  </div>
+                ) : (
+                  <div style={{ maxHeight: 260, overflowY: "auto" }}>
+                    {recentLogs.slice(0, 30).map((ev) => (
+                      <RecentEventRow key={ev.id} ev={ev} />
+                    ))}
+                  </div>
+                )}
               </div>
-              {recentLogs.length === 0 ? (
-                <div className="small" style={{ opacity: 0.55, textAlign: "center", padding: "12px 0" }}>
-                  直近30分のイベントはありません
-                </div>
-              ) : (
-                <div style={{ maxHeight: 260, overflowY: "auto" }}>
-                  {recentLogs.slice(0, 30).map((ev) => (
-                    <RecentEventRow key={ev.id} ev={ev} />
-                  ))}
-                </div>
-              )}
-            </div>
+            )}
+            {realtimeTab === "sessions" && (
+              <>
+                {sessionData.length === 0 ? (
+                  <div className="card" style={{ padding: 20, opacity: 0.7 }}>
+                    <div className="small">直近30分のセッションデータがありません</div>
+                  </div>
+                ) : (
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {sessionData.map((s) => {
+                      const hasConversion = s.events.includes("conversion");
+                      const hasImpression = s.events.includes("impression");
+                      return (
+                        <div key={s.sid} className="card" style={{ padding: 14, background: "#fff", display: "flex", alignItems: "flex-start", gap: 14 }}>
+                          <div style={{ flex: "0 0 auto" }}>
+                            <div style={{ width: 36, height: 36, borderRadius: 99, background: hasConversion ? "rgba(22,163,74,.12)" : hasImpression ? "rgba(37,99,235,.1)" : "rgba(15,23,42,.06)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>
+                              {hasConversion ? "✅" : hasImpression ? "👤" : "👁"}
+                            </div>
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
+                              {hasConversion && <span className="badge" style={{ background: "rgba(22,163,74,.12)", color: "#16a34a" }}>CV済み</span>}
+                              {hasImpression && !hasConversion && <span className="badge" style={{ background: "rgba(37,99,235,.08)", color: "#2563eb" }}>施策表示</span>}
+                              <span className="badge">{s.events.filter((e) => e === "pageview").length} PV</span>
+                              <span className="small" style={{ opacity: 0.5, alignSelf: "center" }}>
+                                {s.last ? new Date(s.last).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }) : ""}
+                              </span>
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                              {s.pages.map((p, i) => (
+                                <React.Fragment key={i}>
+                                  <span className="small" style={{ background: "rgba(15,23,42,.05)", borderRadius: 6, padding: "2px 8px", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={p}>
+                                    {p}
+                                  </span>
+                                  {i < s.pages.length - 1 && <span style={{ opacity: 0.35, fontSize: 11 }}>→</span>}
+                                </React.Fragment>
+                              ))}
+                            </div>
+                            {s.ref && (
+                              <div className="small" style={{ opacity: 0.5, marginTop: 5 }}>
+                                🔗 流入元: <span style={{ fontWeight: 600 }}>{formatRef(s.ref)}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           {/* ===== Section 1.5: 売上計測 ===== */}
@@ -1302,54 +1383,24 @@ export default function AnalyticsPage() {
                       )}
                     </div>
                   </details>
-                  {revenueByScenario.length > 0 && (
-                    <div className="card" style={{ padding: 18, background: "#fff" }}>
-                      <div className="small" style={{ fontWeight: 700, marginBottom: 12 }}>施策別売上（ラストタッチ帰属）</div>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                        {revenueByScenario.map((r) => {
-                          const pct = totalRevenue > 0 ? (r.revenue / totalRevenue) * 100 : 0;
-                          return (
-                            <div key={r.name} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                              <div style={{ minWidth: 140, fontSize: 13, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</div>
-                              <div style={{ flex: 1, height: 8, background: "rgba(15,23,42,.07)", borderRadius: 99, overflow: "hidden" }}>
-                                <div style={{ height: "100%", width: `${pct}%`, background: r.name === "（施策なし）" ? "#94a3b8" : "#22c55e", borderRadius: 99, transition: "width .4s ease" }} />
-                              </div>
-                              <div style={{ minWidth: 100, fontSize: 13, fontWeight: 600, textAlign: "right" }}>¥{Math.round(r.revenue).toLocaleString()}</div>
-                              <div style={{ minWidth: 40, fontSize: 12, color: "#94a3b8", textAlign: "right" }}>{r.count}件</div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
                   {revenueByProduct.length > 0 && (
                     <div className="card" style={{ padding: 18, background: "#fff", marginTop: 12 }}>
                       <div className="small" style={{ fontWeight: 700, marginBottom: 12 }}>🛍️ 商品別売上</div>
                       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                         {revenueByProduct.map((r) => {
                           const maxRev = revenueByProduct[0]?.revenue || 1;
-                          const pct = (r.revenue / maxRev) * 100;
+                          const barPct = (r.revenue / maxRev) * 100;
                           const attrPct = r.qty > 0 ? Math.round((r.qtyAttributed / r.qty) * 100) : 0;
                           return (
-                            <div key={r.title}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-                                <div style={{ minWidth: 180, fontSize: 13, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.title}</div>
-                                <div style={{ flex: 1, height: 8, background: "rgba(15,23,42,.07)", borderRadius: 99, overflow: "hidden" }}>
-                                  <div style={{ height: "100%", width: `${pct}%`, background: "#f59e0b", borderRadius: 99, transition: "width .4s ease" }} />
-                                </div>
-                                <div style={{ minWidth: 100, fontSize: 13, fontWeight: 600, textAlign: "right" }}>¥{Math.round(r.revenue).toLocaleString()}</div>
-                                <div style={{ minWidth: 50, fontSize: 12, color: "#94a3b8", textAlign: "right" }}>{r.qty}個</div>
+                            <div key={r.title} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                              <div style={{ minWidth: 180, fontSize: 13, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.title}</div>
+                              <div style={{ flex: 1, height: 8, background: "rgba(15,23,42,.07)", borderRadius: 99, overflow: "hidden" }}>
+                                <div style={{ height: "100%", width: `${barPct}%`, background: "#f59e0b", borderRadius: 99, transition: "width .4s ease" }} />
                               </div>
+                              <div style={{ minWidth: 100, fontSize: 13, fontWeight: 600, textAlign: "right" }}>¥{Math.round(r.revenue).toLocaleString()}</div>
+                              <div style={{ minWidth: 50, fontSize: 12, color: "#94a3b8", textAlign: "right" }}>{r.qty}個</div>
                               {r.qtyAttributed > 0 && (
-                                <div style={{ marginLeft: 180, display: "flex", flexWrap: "wrap", gap: 8, fontSize: 11 }}>
-                                  <span style={{ color: "#22c55e", fontWeight: 600 }}>施策経由 {r.qtyAttributed}個 (¥{Math.round(r.revenueAttributed).toLocaleString()})</span>
-                                  {Array.from(r.scenarioIds).map((scId) => {
-                                    const scName = scenarios.find((s) => s.id === scId)?.data?.name || scId;
-                                    return <span key={scId} style={{ background: "#dcfce7", color: "#15803d", borderRadius: 4, padding: "1px 6px", fontWeight: 600 }}>📢 {scName}</span>;
-                                  })}
-                                  {r.qty - r.qtyAttributed > 0 && <span style={{ color: "#94a3b8" }}>直接 {r.qty - r.qtyAttributed}個</span>}
-                                  <span style={{ color: "#94a3b8" }}>施策貢献率 {attrPct}%</span>
-                                </div>
+                                <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: "#dcfce7", color: "#15803d", whiteSpace: "nowrap" }}>施策貢献 {attrPct}%</span>
                               )}
                             </div>
                           );
@@ -1677,143 +1728,193 @@ export default function AnalyticsPage() {
             <div className="h2" style={{ marginBottom: 14 }}>
               施策ファネル <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel}）</span>
             </div>
-            {funnelData.length === 0 ? (
-              <div className="card" style={{ padding: 20, opacity: 0.7 }}>
-                <div className="small">シナリオがないか、まだデータがありません</div>
-              </div>
-            ) : (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
-                {funnelData.slice(0, 6).map((sc) => {
-                  const scRev = revenueByScenario.find((r) => r.id === sc.id);
-                  return (
-                  <div key={sc.id} className="card" style={{ padding: 18, background: "#fff" }}>
-                    <div style={{ fontWeight: 700, marginBottom: scRev && scRev.revenue > 0 ? 8 : 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={sc.name}>
-                      {sc.name}
-                    </div>
-                    {scRev && scRev.count > 0 && (
-                      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-                        <div style={{ background: "#f0fdf4", borderRadius: 6, padding: "4px 10px", fontSize: 12 }}>
-                          <span style={{ color: "#15803d", fontWeight: 700 }}>¥{Math.round(scRev.revenue).toLocaleString()}</span>
-                          <span style={{ color: "#86efac", fontSize: 11, marginLeft: 4 }}>売上</span>
+            <TabBar
+              tabs={[{ key: "active", label: "アクティブ" }, { key: "archive", label: "アーカイブ" }]}
+              active={scenarioTab}
+              onChange={(k) => setScenarioTab(k as "active" | "archive")}
+            />
+            {scenarioTab === "active" && (
+              <>
+                {activeFunnelData.length === 0 ? (
+                  <div className="card" style={{ padding: 20, opacity: 0.7 }}>
+                    <div className="small">シナリオがないか、まだデータがありません</div>
+                  </div>
+                ) : (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14, marginBottom: 16 }}>
+                    {activeFunnelData.slice(0, 6).map((sc) => {
+                      const scRev = revenueByScenario.find((r) => r.id === sc.id);
+                      return (
+                        <div key={sc.id} className="card" style={{ padding: 18, background: "#fff" }}>
+                          <div style={{ fontWeight: 700, marginBottom: scRev && scRev.revenue > 0 ? 8 : 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={sc.name}>
+                            {sc.name}
+                          </div>
+                          {scRev && scRev.count > 0 && (
+                            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                              <div style={{ background: "#f0fdf4", borderRadius: 6, padding: "4px 10px", fontSize: 12 }}>
+                                <span style={{ color: "#15803d", fontWeight: 700 }}>¥{Math.round(scRev.revenue).toLocaleString()}</span>
+                                <span style={{ color: "#86efac", fontSize: 11, marginLeft: 4 }}>売上</span>
+                              </div>
+                              <div style={{ background: "#eff6ff", borderRadius: 6, padding: "4px 10px", fontSize: 12 }}>
+                                <span style={{ color: "#1d4ed8", fontWeight: 700 }}>{scRev.count}件</span>
+                                <span style={{ color: "#93c5fd", fontSize: 11, marginLeft: 4 }}>購入</span>
+                              </div>
+                            </div>
+                          )}
+                          <FunnelStep label="表示（インプレッション）" count={sc.imp} total={sc.imp} color="#2563eb" />
+                          <FunnelStep label="クリック" count={sc.clk} total={sc.imp} color="#f59e0b" />
+                          <FunnelStep label="コンバージョン" count={sc.cv} total={sc.imp} color="#16a34a" />
+                          <div style={{ marginTop: 10, display: "flex", gap: 6 }}>
+                            <span className="badge" style={{ background: "rgba(22,163,74,.1)", color: "#16a34a", fontWeight: 700 }}>
+                              CVR {sc.cvr}%
+                            </span>
+                            <span className="badge" style={{ background: "rgba(37,99,235,.08)", color: "#2563eb" }}>
+                              CTR {pct(sc.clk, sc.imp)}
+                            </span>
+                          </div>
                         </div>
-                        <div style={{ background: "#eff6ff", borderRadius: 6, padding: "4px 10px", fontSize: 12 }}>
-                          <span style={{ color: "#1d4ed8", fontWeight: 700 }}>{scRev.count}件</span>
-                          <span style={{ color: "#93c5fd", fontSize: 11, marginLeft: 4 }}>購入</span>
-                        </div>
-                      </div>
-                    )}
-                    <FunnelStep label="表示（インプレッション）" count={sc.imp} total={sc.imp} color="#2563eb" />
-                    <FunnelStep label="クリック" count={sc.clk} total={sc.imp} color="#f59e0b" />
-                    <FunnelStep label="コンバージョン" count={sc.cv} total={sc.imp} color="#16a34a" />
-                    <div style={{ marginTop: 10, display: "flex", gap: 6 }}>
-                      <span className="badge" style={{ background: "rgba(22,163,74,.1)", color: "#16a34a", fontWeight: 700 }}>
-                        CVR {sc.cvr}%
-                      </span>
-                      <span className="badge" style={{ background: "rgba(37,99,235,.08)", color: "#2563eb" }}>
-                        CTR {pct(sc.clk, sc.imp)}
-                      </span>
+                      );
+                    })}
+                  </div>
+                )}
+                {/* 施策別売上（アクティブタブ内） */}
+                {revenueByScenario.length > 0 && (
+                  <div className="card" style={{ padding: 18, background: "#fff", marginBottom: 16 }}>
+                    <div className="small" style={{ fontWeight: 700, marginBottom: 12 }}>施策別売上（ラストタッチ帰属）</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      {revenueByScenario.map((r) => {
+                        const revPct = totalRevenue > 0 ? (r.revenue / totalRevenue) * 100 : 0;
+                        return (
+                          <div key={r.name} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                            <div style={{ minWidth: 140, fontSize: 13, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</div>
+                            <div style={{ flex: 1, height: 8, background: "rgba(15,23,42,.07)", borderRadius: 99, overflow: "hidden" }}>
+                              <div style={{ height: "100%", width: `${revPct}%`, background: r.name === "（施策なし）" ? "#94a3b8" : "#22c55e", borderRadius: 99, transition: "width .4s ease" }} />
+                            </div>
+                            <div style={{ minWidth: 100, fontSize: 13, fontWeight: 600, textAlign: "right" }}>¥{Math.round(r.revenue).toLocaleString()}</div>
+                            <div style={{ minWidth: 40, fontSize: 12, color: "#94a3b8", textAlign: "right" }}>{r.count}件</div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* ===== Section 4: 施策比較テーブル ===== */}
-          <div style={{ marginBottom: 32 }}>
-            <div className="h2" style={{ marginBottom: 14 }}>
-              施策比較 <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>CVR順</span>
-            </div>
-            <div className="card" style={{ padding: 0, overflow: "hidden", background: "#fff" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                <thead>
-                  <tr style={{ borderBottom: "1px solid rgba(15,23,42,.08)", background: "rgba(15,23,42,.02)" }}>
-                    <th style={{ padding: "10px 16px", textAlign: "left", fontWeight: 700, opacity: 0.7 }}>施策名</th>
-                    <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>表示</th>
-                    <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>クリック</th>
-                    <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CV</th>
-                    <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CVR</th>
-                    <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CTR</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {comparisonData.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} style={{ padding: "20px 16px", textAlign: "center", opacity: 0.55 }}>データなし</td>
-                    </tr>
-                  ) : (
-                    comparisonData.map((sc, i) => (
-                      <tr key={sc.id} style={{ borderBottom: "1px solid rgba(15,23,42,.05)", background: i === 0 && sc.cvr > 0 ? "rgba(22,163,74,.03)" : undefined }}>
-                        <td style={{ padding: "10px 16px", fontWeight: 600 }}>
-                          {i === 0 && sc.cvr > 0 && <span style={{ marginRight: 6, fontSize: 12 }}>🏆</span>}
-                          {sc.name}
-                        </td>
-                        <td style={{ padding: "10px 16px", textAlign: "right" }}>{fmtInt(sc.imp)}</td>
-                        <td style={{ padding: "10px 16px", textAlign: "right" }}>{fmtInt(sc.clk)}</td>
-                        <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: sc.cv > 0 ? "#16a34a" : undefined }}>{fmtInt(sc.cv)}</td>
-                        <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: sc.cvr > 0 ? "#16a34a" : undefined }}>{sc.cvr}%</td>
-                        <td style={{ padding: "10px 16px", textAlign: "right" }}>{pct(sc.clk, sc.imp)}</td>
+                )}
+                {/* 施策比較テーブル（アクティブ） */}
+                <div className="card" style={{ padding: 0, overflow: "hidden", background: "#fff" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid rgba(15,23,42,.08)", background: "rgba(15,23,42,.02)" }}>
+                        <th style={{ padding: "10px 16px", textAlign: "left", fontWeight: 700, opacity: 0.7 }}>施策名</th>
+                        <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>表示</th>
+                        <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>クリック</th>
+                        <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CV</th>
+                        <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CVR</th>
+                        <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CTR</th>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* ===== Section 5: セッション行動 ===== */}
-          <div style={{ marginBottom: 32 }}>
-            <div className="h2" style={{ marginBottom: 14 }}>
-              セッション行動 <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（過去30分・最新8セッション）</span>
-            </div>
-            {sessionData.length === 0 ? (
-              <div className="card" style={{ padding: 20, opacity: 0.7 }}>
-                <div className="small">直近30分のセッションデータがありません</div>
-              </div>
-            ) : (
-              <div style={{ display: "grid", gap: 10 }}>
-                {sessionData.map((s) => {
-                  const hasConversion = s.events.includes("conversion");
-                  const hasImpression = s.events.includes("impression");
-                  return (
-                    <div key={s.sid} className="card" style={{ padding: 14, background: "#fff", display: "flex", alignItems: "flex-start", gap: 14 }}>
-                      <div style={{ flex: "0 0 auto" }}>
-                        <div style={{ width: 36, height: 36, borderRadius: 99, background: hasConversion ? "rgba(22,163,74,.12)" : hasImpression ? "rgba(37,99,235,.1)" : "rgba(15,23,42,.06)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>
-                          {hasConversion ? "✅" : hasImpression ? "👤" : "👁"}
-                        </div>
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
-                          {hasConversion && <span className="badge" style={{ background: "rgba(22,163,74,.12)", color: "#16a34a" }}>CV済み</span>}
-                          {hasImpression && !hasConversion && <span className="badge" style={{ background: "rgba(37,99,235,.08)", color: "#2563eb" }}>施策表示</span>}
-                          <span className="badge">{s.events.filter((e) => e === "pageview").length} PV</span>
-                          <span className="small" style={{ opacity: 0.5, alignSelf: "center" }}>
-                            {s.last ? new Date(s.last).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }) : ""}
-                          </span>
-                        </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
-                          {s.pages.map((p, i) => (
-                            <React.Fragment key={i}>
-                              <span className="small" style={{ background: "rgba(15,23,42,.05)", borderRadius: 6, padding: "2px 8px", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={p}>
-                                {p}
+                    </thead>
+                    <tbody>
+                      {activeFunnelData.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} style={{ padding: "20px 16px", textAlign: "center", opacity: 0.55 }}>データなし</td>
+                        </tr>
+                      ) : (
+                        activeFunnelData.map((sc, i) => (
+                          <tr key={sc.id} style={{ borderBottom: "1px solid rgba(15,23,42,.05)", background: i === 0 && sc.cvr > 0 ? "rgba(22,163,74,.03)" : undefined }}>
+                            <td style={{ padding: "10px 16px", fontWeight: 600 }}>
+                              {i === 0 && sc.cvr > 0 && <span style={{ marginRight: 6, fontSize: 12 }}>🏆</span>}
+                              {sc.name}
+                            </td>
+                            <td style={{ padding: "10px 16px", textAlign: "right" }}>{fmtInt(sc.imp)}</td>
+                            <td style={{ padding: "10px 16px", textAlign: "right" }}>{fmtInt(sc.clk)}</td>
+                            <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: sc.cv > 0 ? "#16a34a" : undefined }}>{fmtInt(sc.cv)}</td>
+                            <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: sc.cvr > 0 ? "#16a34a" : undefined }}>{sc.cvr}%</td>
+                            <td style={{ padding: "10px 16px", textAlign: "right" }}>{pct(sc.clk, sc.imp)}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+            {scenarioTab === "archive" && (
+              <>
+                <div className="small" style={{ opacity: 0.6, marginBottom: 12 }}>一時停止中の施策の過去データを表示しています</div>
+                {archiveFunnelData.length === 0 ? (
+                  <div className="card" style={{ padding: 20, opacity: 0.7 }}>
+                    <div className="small">一時停止中の施策はありません</div>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14, marginBottom: 16 }}>
+                      {archiveFunnelData.slice(0, 6).map((sc) => {
+                        const scRev = revenueByScenario.find((r) => r.id === sc.id);
+                        return (
+                          <div key={sc.id} className="card" style={{ padding: 18, background: "#fff" }}>
+                            <div style={{ fontWeight: 700, marginBottom: scRev && scRev.revenue > 0 ? 8 : 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={sc.name}>
+                              {sc.name}
+                            </div>
+                            {scRev && scRev.count > 0 && (
+                              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                                <div style={{ background: "#f0fdf4", borderRadius: 6, padding: "4px 10px", fontSize: 12 }}>
+                                  <span style={{ color: "#15803d", fontWeight: 700 }}>¥{Math.round(scRev.revenue).toLocaleString()}</span>
+                                  <span style={{ color: "#86efac", fontSize: 11, marginLeft: 4 }}>売上</span>
+                                </div>
+                                <div style={{ background: "#eff6ff", borderRadius: 6, padding: "4px 10px", fontSize: 12 }}>
+                                  <span style={{ color: "#1d4ed8", fontWeight: 700 }}>{scRev.count}件</span>
+                                  <span style={{ color: "#93c5fd", fontSize: 11, marginLeft: 4 }}>購入</span>
+                                </div>
+                              </div>
+                            )}
+                            <FunnelStep label="表示（インプレッション）" count={sc.imp} total={sc.imp} color="#2563eb" />
+                            <FunnelStep label="クリック" count={sc.clk} total={sc.imp} color="#f59e0b" />
+                            <FunnelStep label="コンバージョン" count={sc.cv} total={sc.imp} color="#16a34a" />
+                            <div style={{ marginTop: 10, display: "flex", gap: 6 }}>
+                              <span className="badge" style={{ background: "rgba(22,163,74,.1)", color: "#16a34a", fontWeight: 700 }}>
+                                CVR {sc.cvr}%
                               </span>
-                              {i < s.pages.length - 1 && <span style={{ opacity: 0.35, fontSize: 11 }}>→</span>}
-                            </React.Fragment>
-                          ))}
-                        </div>
-                        {s.ref && (
-                          <div className="small" style={{ opacity: 0.5, marginTop: 5 }}>
-                            🔗 流入元: <span style={{ fontWeight: 600 }}>{formatRef(s.ref)}</span>
+                              <span className="badge" style={{ background: "rgba(37,99,235,.08)", color: "#2563eb" }}>
+                                CTR {pct(sc.clk, sc.imp)}
+                              </span>
+                            </div>
                           </div>
-                        )}
-                      </div>
+                        );
+                      })}
                     </div>
-                  );
-                })}
-              </div>
+                    {/* 施策比較テーブル（アーカイブ） */}
+                    <div className="card" style={{ padding: 0, overflow: "hidden", background: "#fff" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                        <thead>
+                          <tr style={{ borderBottom: "1px solid rgba(15,23,42,.08)", background: "rgba(15,23,42,.02)" }}>
+                            <th style={{ padding: "10px 16px", textAlign: "left", fontWeight: 700, opacity: 0.7 }}>施策名</th>
+                            <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>表示</th>
+                            <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>クリック</th>
+                            <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CV</th>
+                            <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CVR</th>
+                            <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CTR</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {archiveFunnelData.map((sc, i) => (
+                            <tr key={sc.id} style={{ borderBottom: "1px solid rgba(15,23,42,.05)", background: i === 0 && sc.cvr > 0 ? "rgba(22,163,74,.03)" : undefined }}>
+                              <td style={{ padding: "10px 16px", fontWeight: 600 }}>
+                                {i === 0 && sc.cvr > 0 && <span style={{ marginRight: 6, fontSize: 12 }}>🏆</span>}
+                                {sc.name}
+                              </td>
+                              <td style={{ padding: "10px 16px", textAlign: "right" }}>{fmtInt(sc.imp)}</td>
+                              <td style={{ padding: "10px 16px", textAlign: "right" }}>{fmtInt(sc.clk)}</td>
+                              <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: sc.cv > 0 ? "#16a34a" : undefined }}>{fmtInt(sc.cv)}</td>
+                              <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: sc.cvr > 0 ? "#16a34a" : undefined }}>{sc.cvr}%</td>
+                              <td style={{ padding: "10px 16px", textAlign: "right" }}>{pct(sc.clk, sc.imp)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </>
             )}
           </div>
+
           {/* ===== Section 6: 訪問者ジャーニー ===== */}
           <div style={{ marginBottom: 32 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
