@@ -924,6 +924,39 @@ export default function SitesPage() {
                       </pre>
                     </div>
                   )}
+
+                  {/* ── テストモード説明 ── */}
+                  <div style={{
+                    marginTop: 20,
+                    padding: '14px 16px',
+                    background: 'rgba(124,58,237,.12)',
+                    borderRadius: 12,
+                    border: '1px solid rgba(124,58,237,.3)',
+                  }}>
+                    <div style={{ fontWeight: 700, marginBottom: 6, fontSize: 13 }}>🧪 テストモード</div>
+                    <div className="small" style={{ opacity: 0.85, marginBottom: 10, lineHeight: 1.7 }}>
+                      URLの末尾に <code style={{ background: 'rgba(255,255,255,.15)', padding: '1px 6px', borderRadius: 4 }}>#mokkeda-test</code> を付けるとテストモードで動作します。<br />
+                      頻度制限・ターゲティング条件・スケジュールをすべて無視してシナリオが表示され、ログ送信もスキップされます（計測データに影響なし）。
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <div className="small" style={{ opacity: 0.7 }}>全シナリオをテスト：</div>
+                      <pre style={{
+                        margin: 0, padding: '8px 12px',
+                        background: '#1a2a3a', color: '#e2f0f5',
+                        borderRadius: 8, fontSize: 12, overflowX: 'auto', whiteSpace: 'pre',
+                      }}>{`https://your-store.com/products/xxx#mokkeda-test`}</pre>
+                      <div className="small" style={{ opacity: 0.7, marginTop: 4 }}>特定シナリオだけテスト：</div>
+                      <pre style={{
+                        margin: 0, padding: '8px 12px',
+                        background: '#1a2a3a', color: '#e2f0f5',
+                        borderRadius: 8, fontSize: 12, overflowX: 'auto', whiteSpace: 'pre',
+                      }}>{`https://your-store.com/products/xxx#mokkeda-test=<scenario_id>`}</pre>
+                      <div className="small" style={{ opacity: 0.6, marginTop: 2 }}>
+                        ※ <code style={{ background: 'rgba(255,255,255,.1)', padding: '1px 4px', borderRadius: 3 }}>xxx</code> の部分はテストしたいページのパスに置き換えてください。シナリオIDは施策一覧から確認できます。
+                      </div>
+                    </div>
+                  </div>
+
                 </div>
             </div>
         </div>
