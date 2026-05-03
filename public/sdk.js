@@ -2,6 +2,13 @@
 (function () {
   "use strict";
 
+  // ─── テストモード ─────────────────────────────────────────────────
+  // URL に #mokkeda-test を含む場合にテストモードが有効になる
+  // 特定シナリオのみテスト: #mokkeda-test=<scenario_id>
+  var _testMode = false;
+  var _testScenarioId = ""; // 空 = 全シナリオ対象
+  // ──────────────────────────────────────────────────────────────────
+
   var SCRIPT_ATTR = "data-site-id";
 
   function log() {
@@ -111,6 +118,11 @@
   }
 
   function postLog(apiBase, payload, siteId, siteKey) {
+    // テストモード: ログ送信スキップ（計測データを汚さない）
+    if (_testMode) {
+      log("[cx:test] ログ送信スキップ →", payload.event, payload);
+      return;
+    }
     var base = logEndpointFromServe(apiBase);
     if (!base) return;
     // OPTIONSプリフライトでも site_id を参照できるよう query param に付与
@@ -1194,6 +1206,14 @@
   // ──────────────────────────────────────────────────────────────────
 
   function shouldRunScenario(s, ctx) {
+    // テストモード: ステータス・頻度制限・スケジュール・ターゲティングをすべてスキップ
+    if (_testMode) {
+      if (!s) return false;
+      // 特定シナリオ指定の場合はそれ以外をスキップ
+      if (_testScenarioId && (s.scenario_id || s.id) !== _testScenarioId) return false;
+      return true;
+    }
+
     if (!s || s.status !== "active") return false;
     var er = s.entry_rules || {};
 
@@ -1284,6 +1304,18 @@
       }
     }
 
+    // テストモード: バッジを「発火」状態に更新
+    if (_testMode) {
+      try {
+        var badge = document.getElementById("cx-test-badge");
+        if (badge) {
+          badge.style.background = "#059669";
+          var nameLabel = s.name ? s.name : (s.scenario_id || s.id || "");
+          badge.querySelector("span").textContent = "テストモード 🎯 " + nameLabel + " 発火";
+        }
+      } catch(e) {}
+    }
+
     // Shopify カート属性に最後に表示したシナリオIDを保存
     // → Web Pixel の checkout_completed で scenario_id を取得し purchase ログに確定帰属させる
     try {
@@ -1357,6 +1389,29 @@
       log("[cx] missing data-site-id or could not resolve api base");
       return;
     }
+
+    // ─── テストモード検出 ──────────────────────────────────────────────
+    try {
+      var hashStr = window.location.hash || "";
+      if (hashStr.indexOf("mokkeda-test") >= 0) {
+        _testMode = true;
+        var hm = hashStr.match(/mokkeda-test=([^&#]+)/);
+        if (hm) _testScenarioId = decodeURIComponent(hm[1]);
+        log("[cx] 🧪 テストモード有効", _testScenarioId ? "対象シナリオ: " + _testScenarioId : "全シナリオ対象");
+
+        // テストモードバッジを画面左下に表示
+        var testBadge = document.createElement("div");
+        testBadge.id = "cx-test-badge";
+        testBadge.style.cssText = "position:fixed;bottom:16px;left:16px;background:#7c3aed;color:#fff;" +
+          "font-family:system-ui,-apple-system,sans-serif;font-size:12px;font-weight:700;" +
+          "padding:8px 16px;border-radius:100px;z-index:2147483647;" +
+          "box-shadow:0 4px 16px rgba(124,58,237,.4);display:flex;align-items:center;gap:6px;";
+        testBadge.innerHTML = "🧪 <span>テストモード" +
+          (_testScenarioId ? ": " + _testScenarioId : "") + " — 読み込み中…</span>";
+        document.body.appendChild(testBadge);
+      }
+    } catch(e) {}
+    // ──────────────────────────────────────────────────────────────────
 
     // 管理者除外: URLパラメータ cx_exclude=1/0 でlocalStorageフラグをセット
     try {
@@ -1436,18 +1491,21 @@
       variant_id: null
     };
 
-    // コンバージョン計測: 前ページのシナリオゴールと現在のURLを照合してCV送信
-    checkPendingConversions(apiBase, ctx);
+    // テストモード: CV計測・カート属性更新はスキップ
+    if (!_testMode) {
+      // コンバージョン計測: 前ページのシナリオゴールと現在のURLを照合してCV送信
+      checkPendingConversions(apiBase, ctx);
 
-    // Shopify カート属性に cx_vid を同期（チェックアウトドメインが異なる場合でも Web Pixel から取得できるよう）
-    try {
-      fetch("/cart/update.js", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ attributes: { _cx_vid: ctx.vid, _cx_sid: ctx.sid } }),
-        credentials: "same-origin"
-      }).catch(function () {});
-    } catch (e) {}
+      // Shopify カート属性に cx_vid を同期（チェックアウトドメインが異なる場合でも Web Pixel から取得できるよう）
+      try {
+        fetch("/cart/update.js", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ attributes: { _cx_vid: ctx.vid, _cx_sid: ctx.sid } }),
+          credentials: "same-origin"
+        }).catch(function () {});
+      } catch (e) {}
+    }
 
     // カゴ落ち追跡: cx:cart:add イベントでフラグをセット
     var cartKey = "cx_cart_" + siteId;
@@ -1540,21 +1598,23 @@
       }
     }
 
-    // キャッシュから即時実行
+    // キャッシュから即時実行（テストモード時はキャッシュをスキップ）
     var ranFromCache = false;
-    try {
-      var raw = sessionStorage.getItem(cacheKey);
-      if (raw) {
-        var cached = JSON.parse(raw);
-        if (cached && cached.ts && (Date.now() - cached.ts < CACHE_TTL)) {
-          log("[cx] serve cache hit", window.location.pathname);
-          runScenarios(cached.scenarios);
-          ranFromCache = true;
+    if (!_testMode) {
+      try {
+        var raw = sessionStorage.getItem(cacheKey);
+        if (raw) {
+          var cached = JSON.parse(raw);
+          if (cached && cached.ts && (Date.now() - cached.ts < CACHE_TTL)) {
+            log("[cx] serve cache hit", window.location.pathname);
+            runScenarios(cached.scenarios);
+            ranFromCache = true;
+          }
         }
-      }
-    } catch (e) {}
+      } catch (e) {}
+    }
 
-    // バックグラウンドでAPIを叩いてキャッシュを更新
+    // APIを叩いて最新シナリオを取得（テストモード時は常に実行）
     fetch(apiBase + (apiBase.indexOf("?") >= 0 ? "&" : "?") + qs(ctx), {
       headers: {
         "X-Site-Id": siteId,
@@ -1564,15 +1624,50 @@
       .then(function (r) { return r.json(); })
       .then(function (data) {
         var scenarios = (data && data.scenarios) || [];
-        try {
-          sessionStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), scenarios: scenarios }));
-        } catch (e) {}
+        if (!_testMode) {
+          try {
+            sessionStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), scenarios: scenarios }));
+          } catch (e) {}
+        }
         if (!ranFromCache) {
           runScenarios(scenarios);
+          // テストモード: 発火するシナリオがなかった場合にバッジで通知
+          if (_testMode) {
+            var hasFirable = scenarios.some(function(s) {
+              if (_testScenarioId) return (s.scenario_id || s.id) === _testScenarioId;
+              return true; // 1件でもあれば対象
+            });
+            if (!hasFirable || !scenarios.length) {
+              try {
+                var b = document.getElementById("cx-test-badge");
+                if (b) {
+                  b.style.background = "#dc2626";
+                  b.querySelector("span").textContent = "テストモード — 対象シナリオなし";
+                }
+              } catch(e) {}
+            } else {
+              // runScenarios が全部スキップした場合（shouldRunScenario=false にはならないはずだが念のため）
+              setTimeout(function() {
+                try {
+                  var b2 = document.getElementById("cx-test-badge");
+                  if (b2 && b2.querySelector("span").textContent.indexOf("読み込み中") >= 0) {
+                    b2.style.background = "#dc2626";
+                    b2.querySelector("span").textContent = "テストモード — 発火なし";
+                  }
+                } catch(e) {}
+              }, 200);
+            }
+          }
         }
       })
       .catch(function (e) {
         console.error("[cx] serve failed", e);
+        if (_testMode) {
+          try {
+            var b3 = document.getElementById("cx-test-badge");
+            if (b3) { b3.style.background = "#dc2626"; b3.querySelector("span").textContent = "テストモード — API取得失敗"; }
+          } catch(e2) {}
+        }
       });
   }
 
