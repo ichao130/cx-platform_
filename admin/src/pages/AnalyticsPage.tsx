@@ -863,10 +863,8 @@ export default function AnalyticsPage() {
       // map にいない（フィルター期間に来ていない）訪問者でも、
       // 購入だけはフィルター期間内なら map に追加して購入者として扱う
       if (!map.has(p.vid)) {
-        if (filterActive) {
-          const t = toMs(p.createdAt);
-          if (t < jFromMs || t > jToMs) continue; // 期間外の購入は無視
-        }
+        const t = toMs(p.createdAt);
+        if (t < jFromMs || t > jToMs) continue; // 期間外の購入は無視
         map.set(p.vid, { vid: p.vid, firstSeen: p.createdAt || "", lastSeen: p.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, pages: [], eventCount: 0, firstRef: "", isNew: null, utmSource: "", utmMedium: "", utmCampaign: "", sessionCount: 1, spanDays: 0, daysSinceLastVisit: 0 });
         vidSids.set(p.vid, new Set());
       }
