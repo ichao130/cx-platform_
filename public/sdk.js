@@ -1284,6 +1284,17 @@
       }
     }
 
+    // Shopify カート属性に最後に表示したシナリオIDを保存
+    // → Web Pixel の checkout_completed で scenario_id を取得し purchase ログに確定帰属させる
+    try {
+      fetch("/cart/update.js", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ attributes: { _cx_scenario_id: ctx.scenario_id } }),
+        credentials: "same-origin"
+      }).catch(function () {});
+    } catch (e) {}
+
     function fire() {
       runActions(actions, apiBase, ctx);
     }

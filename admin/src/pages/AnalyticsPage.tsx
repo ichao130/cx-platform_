@@ -558,20 +558,14 @@ export default function AnalyticsPage() {
   // ---- stats_daily ----
   useEffect(() => {
     if (!siteId) { setStatRows([]); return; }
-    const days: string[] = [];
-    const cur = new Date(effectiveFrom);
-    cur.setHours(0, 0, 0, 0);
-    const end = new Date(effectiveTo);
-    end.setHours(0, 0, 0, 0);
-    while (cur <= end && days.length < 30) {
-      days.push(isoDay(cur));
-      cur.setDate(cur.getDate() + 1);
-    }
-    if (!days.length) return;
+    const fromStr = isoDay(new Date(effectiveFrom));
+    const toStr   = isoDay(new Date(effectiveTo));
+    if (!fromStr || !toStr) return;
     const q = query(
       collection(db, "stats_daily"),
       where("siteId", "==", siteId),
-      where("day", "in", days)
+      where("day", ">=", fromStr),
+      where("day", "<=", toStr)
     );
     return onSnapshot(q, (snap) => {
       setStatRows(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
@@ -603,10 +597,10 @@ export default function AnalyticsPage() {
   const purchaseCount = useMemo(() => purchaseLogs.length, [purchaseLogs]);
   const avgOrderValue = useMemo(() => purchaseCount > 0 ? totalRevenue / purchaseCount : 0, [totalRevenue, purchaseCount]);
 
-  // シナリオ別売上（vid紐付けによるラストタッチ帰属）
+  // シナリオ別売上（purchase ログの scenario_id 優先 → フォールバックで journeyLogs ラストタッチ）
   const revenueByScenario = useMemo(() => {
-    if (!purchaseLogs.length || !journeyLogs.length) return [];
-    // vid → 最後に見たシナリオIDを特定
+    if (!purchaseLogs.length) return [];
+    // フォールバック用: vid → 最後に見たシナリオIDを特定（journeyLogs から）
     const vidToScenario = new Map<string, string>();
     const sorted = [...journeyLogs]
       .filter((l) => l.event === "impression" && l.scenario_id)
@@ -616,7 +610,9 @@ export default function AnalyticsPage() {
     }
     const map = new Map<string, { id: string | null; name: string; revenue: number; count: number }>();
     for (const purchase of purchaseLogs) {
-      const scenarioId = vidToScenario.get(purchase.vid || "") || null;
+      // purchase ログに scenario_id が保存されていれば優先使用（確定帰属）
+      // なければ journeyLogs の last-touch にフォールバック
+      const scenarioId = purchase.scenario_id || vidToScenario.get(purchase.vid || "") || null;
       const key = scenarioId || "__none__";
       const sc = scenarios.find((s) => s.id === scenarioId);
       const name = sc ? String(sc.data?.name || sc.id) : "（施策なし）";
@@ -630,7 +626,7 @@ export default function AnalyticsPage() {
 
   // ---- computed: 商品別売上（施策帰属付き） ----
   const revenueByProduct = useMemo(() => {
-    // vid → 最後に接触した施策ID
+    // フォールバック用: vid → 最後に接触した施策ID（journeyLogs から）
     const vidToScenario = new Map<string, string>();
     const sorted = [...journeyLogs].sort((a, b) => (a.createdAt || "") < (b.createdAt || "") ? -1 : 1);
     for (const l of sorted) {
@@ -640,7 +636,8 @@ export default function AnalyticsPage() {
     const map = new Map<string, { title: string; qty: number; revenue: number; qtyAttributed: number; revenueAttributed: number; scenarioIds: Set<string> }>();
     for (const log of purchaseLogs) {
       if (!Array.isArray(log.items)) continue;
-      const scenarioId = vidToScenario.get(log.vid || "") || null;
+      // purchase ログの scenario_id 優先、なければ journeyLogs フォールバック
+      const scenarioId = log.scenario_id || vidToScenario.get(log.vid || "") || null;
       for (const item of log.items) {
         const title = String(item.title || "（不明）");
         if (!map.has(title)) map.set(title, { title, qty: 0, revenue: 0, qtyAttributed: 0, revenueAttributed: 0, scenarioIds: new Set() });
