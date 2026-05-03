@@ -1615,7 +1615,8 @@
     }
 
     // APIを叩いて最新シナリオを取得（テストモード時は常に実行）
-    fetch(apiBase + (apiBase.indexOf("?") >= 0 ? "&" : "?") + qs(ctx), {
+    var serveParams = _testMode ? Object.assign({}, ctx, { cx_test: "1" }) : ctx;
+    fetch(apiBase + (apiBase.indexOf("?") >= 0 ? "&" : "?") + qs(serveParams), {
       headers: {
         "X-Site-Id": siteId,
         "X-Site-Key": siteKey

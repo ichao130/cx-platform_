@@ -3489,12 +3489,12 @@ export function registerV1Routes(app: Express) {
       const platformTplSnap = await db.collection("system_config").doc("platform_templates").get();
       const platformTpls = platformTplSnap.exists ? (platformTplSnap.data() || {}) as Record<string, { html: string; css: string }> : {};
 
-      // 1. active scenarios for this site
-      const scenarioSnap = await db
-        .collection("scenarios")
-        .where("siteId", "==", site_id)
-        .where("status", "==", "active")
-        .get();
+      // 1. active scenarios for this site（テストモード時は paused も含む）
+      const isTestMode = String(req.query.cx_test || "") === "1";
+      const scenarioQuery = isTestMode
+        ? db.collection("scenarios").where("siteId", "==", site_id).where("status", "in", ["active", "paused"])
+        : db.collection("scenarios").where("siteId", "==", site_id).where("status", "==", "active");
+      const scenarioSnap = await scenarioQuery.get();
 
       const scenarios: any[] = [];
 
