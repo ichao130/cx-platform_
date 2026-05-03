@@ -594,32 +594,37 @@ export default function AnalyticsPage() {
     return statRows.filter((r) => r.day === todayStr && r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
   }, [statRows, todayStr]);
 
-  // ---- computed: 売上（stats_daily から永続集計）----
-  // stats_daily の purchase ドキュメントは購入発生時に確定書き込みされるため、
-  // 期間変更・施策停止・journeyLogs のリミットに関係なく値が変わらない
-  const purchaseStatRows = useMemo(() => statRows.filter((r) => r.event === "purchase"), [statRows]);
-  const totalRevenue = useMemo(() => purchaseStatRows.reduce((s, r) => s + safeNum(r.revenue_total), 0), [purchaseStatRows]);
-  const purchaseCount = useMemo(() => purchaseStatRows.reduce((s, r) => s + safeNum(r.count), 0), [purchaseStatRows]);
+  // ---- computed: 売上 ----
+  // 合計・件数・AOV は purchaseLogs ベース（raw データで正確に集計）
+  const totalRevenue = useMemo(() => purchaseLogs.reduce((s, l) => s + (typeof l.revenue === "number" ? l.revenue : 0), 0), [purchaseLogs]);
+  const purchaseCount = useMemo(() => purchaseLogs.length, [purchaseLogs]);
   const avgOrderValue = useMemo(() => purchaseCount > 0 ? totalRevenue / purchaseCount : 0, [totalRevenue, purchaseCount]);
 
-  // シナリオ別売上（stats_daily から確定帰属）
-  // 購入イベント受信時にサーバー側で scenario_id ごとに revenue_total を加算済み
-  // → 時間が経っても・施策を止めても数字は変わらない
+  // シナリオ別売上
+  // ① purchase ログに scenario_id が直接保存されていれば確定帰属（Web Pixel 更新後の購入）
+  // ② なければ journeyLogs のラストタッチで推定帰属（旧データの best-effort）
   const revenueByScenario = useMemo(() => {
-    if (!purchaseStatRows.length) return [];
+    if (!purchaseLogs.length) return [];
+    const vidToScenario = new Map<string, string>();
+    const sorted = [...journeyLogs]
+      .filter((l) => l.event === "impression" && l.scenario_id)
+      .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+    for (const l of sorted) {
+      if (l.vid) vidToScenario.set(l.vid, l.scenario_id);
+    }
     const map = new Map<string, { id: string | null; name: string; revenue: number; count: number }>();
-    for (const row of purchaseStatRows) {
-      const scenarioId = row.scenarioId || null;
+    for (const purchase of purchaseLogs) {
+      const scenarioId = purchase.scenario_id || vidToScenario.get(purchase.vid || "") || null;
       const key = scenarioId || "__none__";
       const sc = scenarios.find((s) => s.id === scenarioId);
       const name = sc ? String(sc.data?.name || sc.id) : "（施策なし）";
       if (!map.has(key)) map.set(key, { id: scenarioId, name, revenue: 0, count: 0 });
       const entry = map.get(key)!;
-      entry.revenue += safeNum(row.revenue_total);
-      entry.count += safeNum(row.count);
+      entry.revenue += typeof purchase.revenue === "number" ? purchase.revenue : 0;
+      entry.count++;
     }
     return Array.from(map.values()).sort((a, b) => b.revenue - a.revenue);
-  }, [purchaseStatRows, scenarios]);
+  }, [purchaseLogs, journeyLogs, scenarios]);
 
   // ---- computed: 商品別売上（施策帰属付き） ----
   const revenueByProduct = useMemo(() => {
