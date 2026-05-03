@@ -503,6 +503,18 @@
               registerGoal(ctx.site_id, pcg.scenarioId, pcg.actionId, pcg.variantId, pcg.goal);
               ctx.pending_click_goal = null;
             }
+            // クリックベース: click_link 時にカート属性を保存
+            if (ctx.pending_click_cart_sync) {
+              try {
+                fetch("/cart/update.js", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ attributes: { _cx_scenario_id: ctx.pending_click_cart_sync } }),
+                  credentials: "same-origin"
+                }).catch(function () {});
+              } catch (e) {}
+              ctx.pending_click_cart_sync = null;
+            }
           });
         }
       }
@@ -597,6 +609,17 @@
           var pcg = ctx.pending_click_goal;
           registerGoal(ctx.site_id, pcg.scenarioId, pcg.actionId, pcg.variantId, pcg.goal);
           ctx.pending_click_goal = null;
+        }
+        if (ctx.pending_click_cart_sync) {
+          try {
+            fetch("/cart/update.js", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ attributes: { _cx_scenario_id: ctx.pending_click_cart_sync } }),
+              credentials: "same-origin"
+            }).catch(function () {});
+          } catch (e) {}
+          ctx.pending_click_cart_sync = null;
         }
       });
       footer.appendChild(linkBtn);
@@ -700,6 +723,17 @@
             var pcg = ctx.pending_click_goal;
             registerGoal(ctx.site_id, pcg.scenarioId, pcg.actionId, pcg.variantId, pcg.goal);
             ctx.pending_click_goal = null;
+          }
+          if (ctx.pending_click_cart_sync) {
+            try {
+              fetch("/cart/update.js", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ attributes: { _cx_scenario_id: ctx.pending_click_cart_sync } }),
+                credentials: "same-origin"
+              }).catch(function () {});
+            } catch (e) {}
+            ctx.pending_click_cart_sync = null;
           }
         });
         right.appendChild(a);
@@ -813,6 +847,17 @@
             var pcg = ctx.pending_click_goal;
             registerGoal(ctx.site_id, pcg.scenarioId, pcg.actionId, pcg.variantId, pcg.goal);
             ctx.pending_click_goal = null;
+          }
+          if (ctx.pending_click_cart_sync) {
+            try {
+              fetch("/cart/update.js", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ attributes: { _cx_scenario_id: ctx.pending_click_cart_sync } }),
+                credentials: "same-origin"
+              }).catch(function () {});
+            } catch (e) {}
+            ctx.pending_click_cart_sync = null;
           }
         });
       }
@@ -1316,16 +1361,20 @@
       } catch(e) {}
     }
 
-    // Shopify カート属性に最後に表示したシナリオIDを保存
-    // → Web Pixel の checkout_completed で scenario_id を取得し purchase ログに確定帰属させる
-    try {
-      fetch("/cart/update.js", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ attributes: { _cx_scenario_id: ctx.scenario_id } }),
-        credentials: "same-origin"
-      }).catch(function () {});
-    } catch (e) {}
+    // Shopify カート属性にシナリオIDを保存 → Web Pixel の checkout_completed で確定帰属
+    // 表示ベース: 即時保存 / クリックベース: click_link 時に保存
+    if (s.goal && s.goal.attribution === "click") {
+      ctx.pending_click_cart_sync = ctx.scenario_id;
+    } else {
+      try {
+        fetch("/cart/update.js", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ attributes: { _cx_scenario_id: ctx.scenario_id } }),
+          credentials: "same-origin"
+        }).catch(function () {});
+      } catch (e) {}
+    }
 
     function fire() {
       runActions(actions, apiBase, ctx);

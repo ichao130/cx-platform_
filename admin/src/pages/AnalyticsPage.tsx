@@ -603,18 +603,42 @@ export default function AnalyticsPage() {
   // シナリオ別売上
   // ① purchase ログに scenario_id が直接保存されていれば確定帰属（Web Pixel 更新後の購入）
   // ② なければ journeyLogs のラストタッチで推定帰属（旧データの best-effort）
+  //    - シナリオの CV計測タイミングが "click" → click/click_link イベントで帰属
+  //    - "view"（デフォルト）→ impression イベントで帰属
   const revenueByScenario = useMemo(() => {
     if (!purchaseLogs.length) return [];
-    const vidToScenario = new Map<string, string>();
-    const sorted = [...journeyLogs]
+    // 表示ベース: vid → 最後に impression したシナリオ
+    const vidToImpScenario = new Map<string, string>();
+    const sortedImp = [...journeyLogs]
       .filter((l) => l.event === "impression" && l.scenario_id)
       .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
-    for (const l of sorted) {
-      if (l.vid) vidToScenario.set(l.vid, l.scenario_id);
+    for (const l of sortedImp) {
+      if (l.vid) vidToImpScenario.set(l.vid, l.scenario_id);
+    }
+    // クリックベース: vid → 最後に click/click_link したシナリオ
+    const vidToClickScenario = new Map<string, string>();
+    const sortedClick = [...journeyLogs]
+      .filter((l) => (l.event === "click" || l.event === "click_link") && l.scenario_id)
+      .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+    for (const l of sortedClick) {
+      if (l.vid) vidToClickScenario.set(l.vid, l.scenario_id);
     }
     const map = new Map<string, { id: string | null; name: string; revenue: number; count: number }>();
     for (const purchase of purchaseLogs) {
-      const scenarioId = purchase.scenario_id || vidToScenario.get(purchase.vid || "") || null;
+      let scenarioId: string | null = purchase.scenario_id || null;
+      if (!scenarioId && purchase.vid) {
+        // クリックベース帰属のシナリオを優先
+        const clickScId = vidToClickScenario.get(purchase.vid) || null;
+        const impScId = vidToImpScenario.get(purchase.vid) || null;
+        if (clickScId) {
+          const clickSc = scenarios.find((s) => s.id === clickScId);
+          if ((clickSc?.data?.goal as any)?.attribution === "click") scenarioId = clickScId;
+        }
+        if (!scenarioId && impScId) {
+          const impSc = scenarios.find((s) => s.id === impScId);
+          if ((impSc?.data?.goal as any)?.attribution !== "click") scenarioId = impScId;
+        }
+      }
       const key = scenarioId || "__none__";
       const sc = scenarios.find((s) => s.id === scenarioId);
       const name = sc ? String(sc.data?.name || sc.id) : "（施策なし）";
@@ -628,18 +652,40 @@ export default function AnalyticsPage() {
 
   // ---- computed: 商品別売上（施策帰属付き） ----
   const revenueByProduct = useMemo(() => {
-    // フォールバック用: vid → 最後に接触した施策ID（journeyLogs から）
-    const vidToScenario = new Map<string, string>();
-    const sorted = [...journeyLogs].sort((a, b) => (a.createdAt || "") < (b.createdAt || "") ? -1 : 1);
-    for (const l of sorted) {
-      if (l.vid && l.scenario_id) vidToScenario.set(l.vid, l.scenario_id);
+    // 表示ベース: vid → 最後に impression したシナリオ
+    const vidToImpScenario = new Map<string, string>();
+    const sortedImp = [...journeyLogs]
+      .filter((l) => l.event === "impression" && l.scenario_id)
+      .sort((a, b) => (a.createdAt || "") < (b.createdAt || "") ? -1 : 1);
+    for (const l of sortedImp) {
+      if (l.vid && l.scenario_id) vidToImpScenario.set(l.vid, l.scenario_id);
+    }
+    // クリックベース: vid → 最後に click/click_link したシナリオ
+    const vidToClickScenario = new Map<string, string>();
+    const sortedClick = [...journeyLogs]
+      .filter((l) => (l.event === "click" || l.event === "click_link") && l.scenario_id)
+      .sort((a, b) => (a.createdAt || "") < (b.createdAt || "") ? -1 : 1);
+    for (const l of sortedClick) {
+      if (l.vid && l.scenario_id) vidToClickScenario.set(l.vid, l.scenario_id);
     }
 
     const map = new Map<string, { title: string; qty: number; revenue: number; qtyAttributed: number; revenueAttributed: number; scenarioIds: Set<string> }>();
     for (const log of purchaseLogs) {
       if (!Array.isArray(log.items)) continue;
-      // purchase ログの scenario_id 優先、なければ journeyLogs フォールバック
-      const scenarioId = log.scenario_id || vidToScenario.get(log.vid || "") || null;
+      // purchase ログの scenario_id 優先、なければ attribution 設定に基づくフォールバック
+      let scenarioId: string | null = log.scenario_id || null;
+      if (!scenarioId && log.vid) {
+        const clickScId = vidToClickScenario.get(log.vid) || null;
+        const impScId = vidToImpScenario.get(log.vid) || null;
+        if (clickScId) {
+          const clickSc = scenarios.find((s) => s.id === clickScId);
+          if ((clickSc?.data?.goal as any)?.attribution === "click") scenarioId = clickScId;
+        }
+        if (!scenarioId && impScId) {
+          const impSc = scenarios.find((s) => s.id === impScId);
+          if ((impSc?.data?.goal as any)?.attribution !== "click") scenarioId = impScId;
+        }
+      }
       for (const item of log.items) {
         const title = String(item.title || "（不明）");
         if (!map.has(title)) map.set(title, { title, qty: 0, revenue: 0, qtyAttributed: 0, revenueAttributed: 0, scenarioIds: new Set() });
@@ -655,7 +701,7 @@ export default function AnalyticsPage() {
       }
     }
     return Array.from(map.values()).sort((a, b) => b.revenue - a.revenue);
-  }, [purchaseLogs, journeyLogs]);
+  }, [purchaseLogs, journeyLogs, scenarios]);
 
   // ---- computed: 流入元（utm_source or ref） ----
   const referrerData = useMemo(() => {
