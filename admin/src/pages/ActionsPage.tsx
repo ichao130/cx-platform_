@@ -1215,6 +1215,18 @@ export default function ActionsPage() {
                       </button>
                       <span style={{ width: 8, display: 'inline-block' }} />
                       <button
+                        className="btn"
+                        onClick={async () => {
+                          const newId = `act_${Math.random().toString(36).slice(2, 10)}`;
+                          const copy = { ...r.data, creative: { ...(r.data?.creative || {}), title: `${r.data?.creative?.title || r.id} のコピー` } };
+                          await setDoc(doc(db, "actions", newId), copy);
+                          showToast("アクションを複製しました");
+                        }}
+                      >
+                        複製
+                      </button>
+                      <span style={{ width: 8, display: 'inline-block' }} />
+                      <button
                         className="btn btn--danger"
                         onClick={() => {
                           const used = actionUsageMap[r.id] || [];

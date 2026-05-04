@@ -503,6 +503,17 @@ export default function TemplatesPage() {
                   <td>
                     <button className="btn" onClick={() => openEditModal(r)}>編集</button>
                     <span style={{ width: 8, display: 'inline-block' }} />
+                    <button
+                      className="btn"
+                      onClick={async () => {
+                        const newId = `${r.id}_copy_${Math.random().toString(36).slice(2, 6)}`;
+                        await setDoc(doc(db, 'templates', newId), { ...r.data, name: `${r.data?.name || r.id} のコピー` });
+                        alert("テンプレートを複製しました");
+                      }}
+                    >
+                      複製
+                    </button>
+                    <span style={{ width: 8, display: 'inline-block' }} />
                     <button className="btn btn--danger" onClick={() => deleteDoc(doc(db, 'templates', r.id))}>削除</button>
                   </td>
                 </tr>

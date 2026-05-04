@@ -1221,6 +1221,18 @@ export default function ScenariosPage() {
                       </button>
                       <span style={{ width: 8, display: "inline-block" }} />
                       <button
+                        className="btn"
+                        onClick={async () => {
+                          const newId = genId("scn");
+                          const copy = { ...r.data, name: `${r.data?.name || r.id} のコピー`, status: "paused", createdAt: new Date().toISOString() };
+                          await setDoc(doc(db, "scenarios", newId), copy);
+                          showToast("シナリオを複製しました");
+                        }}
+                      >
+                        複製
+                      </button>
+                      <span style={{ width: 8, display: "inline-block" }} />
+                      <button
                         className="btn btn--danger"
                         onClick={() => setDeleteTarget({ id: r.id, name: String(r.data?.name || r.id) })}
                       >
