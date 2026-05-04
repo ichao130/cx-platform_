@@ -1448,6 +1448,9 @@
         if (hm) _testScenarioId = decodeURIComponent(hm[1]);
         log("[cx] 🧪 テストモード有効", _testScenarioId ? "対象シナリオ: " + _testScenarioId : "全シナリオ対象");
 
+        // テストモード中は自分の訪問を自動除外（計測汚染を防ぐ）
+        try { localStorage.setItem("cx_no_track", "1"); } catch(e) {}
+
         // テストモードバッジを画面左下に表示
         var testBadge = document.createElement("div");
         testBadge.id = "cx-test-badge";
