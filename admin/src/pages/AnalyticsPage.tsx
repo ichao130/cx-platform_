@@ -430,6 +430,9 @@ export default function AnalyticsPage() {
   const [purchaseLoading, setPurchaseLoading] = useState(false);
   const [selectedVid, setSelectedVid] = useState<string | null>(null);
 
+  // ---- 商品別売上アコーディオン ----
+  const [expandedProducts, setExpandedProducts] = useState<Set<string>>(new Set());
+
   // ---- 訪問者ジャーニーフィルター ----
   const [visitorFilter, setVisitorFilter] = useState<"all" | "purchase" | "cv" | "new" | "repeat">("all");
   // journeyFilterFrom/To は削除 → 上部の期間指定（effectiveFrom/To）に統一
@@ -669,7 +672,7 @@ export default function AnalyticsPage() {
       if (l.vid && l.scenario_id) vidToClickScenario.set(l.vid, l.scenario_id);
     }
 
-    const map = new Map<string, { title: string; qty: number; revenue: number; qtyAttributed: number; revenueAttributed: number; scenarioIds: Set<string> }>();
+    const map = new Map<string, { title: string; qty: number; revenue: number; qtyAttributed: number; revenueAttributed: number; scenarioBreakdown: Map<string, { qty: number; revenue: number }> }>();
     for (const log of purchaseLogs) {
       if (!Array.isArray(log.items)) continue;
       // purchase ログの scenario_id 優先、なければ attribution 設定に基づくフォールバック
@@ -688,7 +691,7 @@ export default function AnalyticsPage() {
       }
       for (const item of log.items) {
         const title = String(item.title || "（不明）");
-        if (!map.has(title)) map.set(title, { title, qty: 0, revenue: 0, qtyAttributed: 0, revenueAttributed: 0, scenarioIds: new Set() });
+        if (!map.has(title)) map.set(title, { title, qty: 0, revenue: 0, qtyAttributed: 0, revenueAttributed: 0, scenarioBreakdown: new Map() });
         const entry = map.get(title)!;
         const itemRevenue = (Number(item.qty) || 0) * (Number(item.price) || 0);
         entry.qty += Number(item.qty) || 0;
@@ -696,11 +699,20 @@ export default function AnalyticsPage() {
         if (scenarioId) {
           entry.qtyAttributed += Number(item.qty) || 0;
           entry.revenueAttributed += itemRevenue;
-          entry.scenarioIds.add(scenarioId);
+          const bd = entry.scenarioBreakdown;
+          const cur = bd.get(scenarioId) || { qty: 0, revenue: 0 };
+          bd.set(scenarioId, { qty: cur.qty + (Number(item.qty) || 0), revenue: cur.revenue + itemRevenue });
         }
       }
     }
-    return Array.from(map.values()).sort((a, b) => b.revenue - a.revenue);
+    return Array.from(map.values())
+      .map((r) => ({
+        ...r,
+        scenarioBreakdown: Array.from(r.scenarioBreakdown.entries())
+          .map(([id, v]) => ({ id, ...v }))
+          .sort((a, b) => b.revenue - a.revenue),
+      }))
+      .sort((a, b) => b.revenue - a.revenue);
   }, [purchaseLogs, journeyLogs, scenarios]);
 
   // ---- computed: 流入元（utm_source or ref） ----
@@ -1410,21 +1422,59 @@ export default function AnalyticsPage() {
                   {revenueByProduct.length > 0 && (
                     <div className="card" style={{ padding: 18, background: "#fff", marginTop: 12 }}>
                       <div className="small" style={{ fontWeight: 700, marginBottom: 12 }}>🛍️ 商品別売上</div>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                         {revenueByProduct.map((r) => {
                           const maxRev = revenueByProduct[0]?.revenue || 1;
                           const barPct = (r.revenue / maxRev) * 100;
                           const attrPct = r.qty > 0 ? Math.round((r.qtyAttributed / r.qty) * 100) : 0;
+                          const isExpanded = expandedProducts.has(r.title);
+                          const hasBreakdown = r.scenarioBreakdown.length > 0;
                           return (
-                            <div key={r.title} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                              <div style={{ minWidth: 180, fontSize: 13, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.title}</div>
-                              <div style={{ flex: 1, height: 8, background: "rgba(15,23,42,.07)", borderRadius: 99, overflow: "hidden" }}>
-                                <div style={{ height: "100%", width: `${barPct}%`, background: "#f59e0b", borderRadius: 99, transition: "width .4s ease" }} />
+                            <div key={r.title} style={{ borderRadius: 10, overflow: "hidden", border: isExpanded ? "1px solid #e2e8f0" : "1px solid transparent", marginBottom: 6 }}>
+                              {/* メイン行 */}
+                              <div
+                                style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", cursor: hasBreakdown ? "pointer" : "default", background: isExpanded ? "#f8fafc" : "transparent", borderRadius: isExpanded ? "10px 10px 0 0" : 10 }}
+                                onClick={() => {
+                                  if (!hasBreakdown) return;
+                                  setExpandedProducts((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(r.title)) next.delete(r.title); else next.add(r.title);
+                                    return next;
+                                  });
+                                }}
+                              >
+                                {hasBreakdown && (
+                                  <span style={{ fontSize: 11, color: "#94a3b8", userSelect: "none", transition: "transform .2s", display: "inline-block", transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
+                                )}
+                                <div style={{ minWidth: 160, fontSize: 13, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: "0 0 160px" }}>{r.title}</div>
+                                <div style={{ flex: 1, height: 8, background: "rgba(15,23,42,.07)", borderRadius: 99, overflow: "hidden" }}>
+                                  <div style={{ height: "100%", width: `${barPct}%`, background: "#f59e0b", borderRadius: 99, transition: "width .4s ease" }} />
+                                </div>
+                                <div style={{ minWidth: 100, fontSize: 13, fontWeight: 600, textAlign: "right" }}>¥{Math.round(r.revenue).toLocaleString()}</div>
+                                <div style={{ minWidth: 50, fontSize: 12, color: "#94a3b8", textAlign: "right" }}>{r.qty}個</div>
+                                {r.qtyAttributed > 0 && (
+                                  <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: "#dcfce7", color: "#15803d", whiteSpace: "nowrap" }}>施策貢献 {attrPct}%</span>
+                                )}
                               </div>
-                              <div style={{ minWidth: 100, fontSize: 13, fontWeight: 600, textAlign: "right" }}>¥{Math.round(r.revenue).toLocaleString()}</div>
-                              <div style={{ minWidth: 50, fontSize: 12, color: "#94a3b8", textAlign: "right" }}>{r.qty}個</div>
-                              {r.qtyAttributed > 0 && (
-                                <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: "#dcfce7", color: "#15803d", whiteSpace: "nowrap" }}>施策貢献 {attrPct}%</span>
+                              {/* アコーディオン: シナリオ別内訳 */}
+                              {isExpanded && (
+                                <div style={{ background: "#f8fafc", borderTop: "1px solid #e2e8f0", padding: "10px 16px 12px 32px", display: "flex", flexDirection: "column", gap: 7 }}>
+                                  <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, marginBottom: 2 }}>施策別内訳</div>
+                                  {r.scenarioBreakdown.map((bd) => {
+                                    const sc = scenarios.find((s) => s.id === bd.id);
+                                    const scName = sc ? String(sc.data?.name || sc.id) : bd.id;
+                                    const bdPct = r.qtyAttributed > 0 ? Math.round((bd.qty / r.qtyAttributed) * 100) : 0;
+                                    return (
+                                      <div key={bd.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                        <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#6366f1", flexShrink: 0 }} />
+                                        <div style={{ flex: 1, fontSize: 12, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{scName}</div>
+                                        <div style={{ fontSize: 12, color: "#64748b", whiteSpace: "nowrap" }}>{bd.qty}個</div>
+                                        <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", whiteSpace: "nowrap", minWidth: 80, textAlign: "right" }}>¥{Math.round(bd.revenue).toLocaleString()}</div>
+                                        <span style={{ fontSize: 11, padding: "1px 6px", borderRadius: 20, background: "#ede9fe", color: "#6d28d9", whiteSpace: "nowrap" }}>{bdPct}%</span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               )}
                             </div>
                           );
