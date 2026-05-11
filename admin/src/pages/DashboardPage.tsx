@@ -229,7 +229,7 @@ export default function DashboardPage() {
   // Scenarios
   useEffect(() => {
     if (!siteId) { setScenarios([]); setAbScenarioId(""); return; }
-    const q = query(collection(db, "scenarios"), where("siteId", "==", siteId), orderBy("__name__"));
+    const q = query(collection(db, "scenarios"), where("siteId", "==", siteId), where("status", "==", "active"), orderBy("__name__"));
     return onSnapshot(q, (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, data: d.data() }));
       setScenarios(list);

@@ -267,6 +267,7 @@ export default function ScenariosPage() {
   const [sites, setSites] = useState<SiteRow[]>([]);
   const [actions, setActions] = useState<ActionRow[]>([]);
   const [rows, setRows] = useState<Array<{ id: string; data: Scenario }>>([]);
+  const [scenarioListTab, setScenarioListTab] = useState<"active" | "archive">("active");
 
   // -------------------------
   // Form state
@@ -1150,6 +1151,23 @@ export default function ScenariosPage() {
           </div>
         </div>
 
+        {/* 稼働中 / アーカイブ タブ */}
+        <div style={{ display: "flex", gap: 4, marginBottom: 14 }}>
+          {(["active", "archive"] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setScenarioListTab(tab)}
+              style={{
+                padding: "5px 16px", borderRadius: 20, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer",
+                background: scenarioListTab === tab ? "#0f172a" : "rgba(15,23,42,.07)",
+                color: scenarioListTab === tab ? "#fff" : "#64748b",
+              }}
+            >
+              {tab === "active" ? `稼働中 (${rows.filter(r => r.data.status === "active").length})` : `アーカイブ (${rows.filter(r => r.data.status === "paused").length})`}
+            </button>
+          ))}
+        </div>
+
         <div className="small" style={{ opacity: 0.74, marginBottom: 10 }}>
           A/B、コンバージョン、アクション数、AIレビュー導線を一覧で確認できます。
         </div>
@@ -1169,7 +1187,7 @@ export default function ScenariosPage() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => {
+            {rows.filter((r) => scenarioListTab === "active" ? r.data.status === "active" : r.data.status === "paused").map((r) => {
               const ab = !!(r.data.experiment && (r.data.experiment as any).enabled);
               const g = r.data.goal as any;
               const goalLabel = g?.type ? `${g.type}:${String(g.value || "")}` : "-";

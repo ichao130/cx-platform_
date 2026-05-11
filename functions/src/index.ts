@@ -434,3 +434,36 @@ export const syncRmsDailyAll = onSchedule(
     console.log(`[syncRmsDailyAll] done: success=${success} failed=${failed}`);
   }
 );
+
+/**
+ * ==========================
+ * autoExpireScenarios
+ * 毎時0分: schedule.endAt を過ぎた active シナリオを自動的に paused に変更
+ * ==========================
+ */
+export const autoExpireScenarios = onSchedule(
+  { region: "asia-northeast1", schedule: "0 * * * *", timeZone: "UTC", timeoutSeconds: 120 },
+  async () => {
+    const db = adminDb();
+    const now = new Date().toISOString();
+
+    // active なシナリオを全取得して endAt < now のものを抽出
+    const snap = await db.collection("scenarios").where("status", "==", "active").get();
+    const expired = snap.docs.filter((d) => {
+      const endAt = d.data()?.schedule?.endAt;
+      return endAt && endAt < now;
+    });
+
+    if (expired.length === 0) {
+      console.log("[autoExpireScenarios] 期限切れシナリオなし");
+      return;
+    }
+
+    const batch = db.batch();
+    for (const d of expired) {
+      batch.update(d.ref, { status: "paused" });
+    }
+    await batch.commit();
+    console.log(`[autoExpireScenarios] ${expired.length}件を paused に変更:`, expired.map((d) => d.id));
+  }
+);
