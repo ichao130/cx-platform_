@@ -2365,6 +2365,47 @@ export function registerV1Routes(app: Express) {
   });
 
   /* -----------------------------
+     /v1/sites/updateAiContext  ★管理画面専用（ADMIN_ORIGINS）
+     - サイトのAIコンテキスト情報を更新（何を売っているか・ターゲット・ブランド方針など）
+  ------------------------------ */
+  app.post("/v1/sites/updateAiContext", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      const body = z.object({
+        site_id: z.string(),
+        aiContext: z.object({
+          sells: z.string().optional(),
+          target: z.string().optional(),
+          brandDo: z.string().optional(),
+          brandDont: z.string().optional(),
+          campaign: z.string().optional(),
+        }),
+      }).parse(req.body);
+
+      await requireWorkspaceAccessBySiteId(req, body.site_id, "sites", ["owner", "admin", "member"]);
+      const db = adminDb();
+      await db.collection("sites").doc(body.site_id).set(
+        { aiContext: body.aiContext, updatedAt: FieldValue.serverTimestamp() },
+        { merge: true }
+      );
+      return res.json({ ok: true });
+    } catch (e: any) {
+      console.error("[/v1/sites/updateAiContext] error:", e);
+      return res.status(e?.message?.startsWith("workspace_access_denied:") ? 403 : 400)
+        .json({ ok: false, error: "update_ai_context_failed", message: e?.message || String(e) });
+    }
+  });
+
+  app.options("/v1/sites/updateAiContext", (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+      res.status(204).send("");
+    } catch (e: any) { return res.status(403).send(e?.message || "forbidden"); }
+  });
+
+  /* -----------------------------
      /v1/sites/members/add  ★管理画面専用（ADMIN_ORIGINS）
      - site の memberUids に uid を追加（owner/admin のみ）
   ------------------------------ */
@@ -4074,6 +4115,71 @@ export function registerV1Routes(app: Express) {
         }
       }
 
+      // ---- ① サイトAIコンテキスト取得 ----
+      const siteDoc = await db.collection("sites").doc(body.site_id).get();
+      const aiContext = (siteDoc.data()?.aiContext || {}) as {
+        sells?: string; target?: string; brandDo?: string; brandDont?: string; campaign?: string;
+      };
+
+      // ---- ② 過去30日の施策パフォーマンス履歴 ----
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      const dayFrom30 = thirtyDaysAgo.toISOString().slice(0, 10);
+      const statsSnap = await db.collection("stats_daily")
+        .where("siteId", "==", body.site_id)
+        .where("day", ">=", dayFrom30)
+        .get();
+
+      // シナリオ別に集計
+      const scenarioStatsMap = new Map<string, { imp: number; clk: number; cv: number }>();
+      for (const d of statsSnap.docs) {
+        const sd = d.data();
+        const sid = String(sd.scenarioId || "");
+        if (!sid || sid === body.scope_id) continue; // 現在の施策は除外
+        const cur = scenarioStatsMap.get(sid) || { imp: 0, clk: 0, cv: 0 };
+        if (sd.event === "impression") cur.imp += Number(sd.count || 0);
+        else if (sd.event === "click" || sd.event === "click_link") cur.clk += Number(sd.count || 0);
+        else if (sd.event === "cv" || sd.event === "conversion") cur.cv += Number(sd.count || 0);
+        scenarioStatsMap.set(sid, cur);
+      }
+
+      // シナリオ名を取得
+      const scenarioIds = Array.from(scenarioStatsMap.keys()).slice(0, 10);
+      const scenarioNameMap = new Map<string, string>();
+      if (scenarioIds.length > 0) {
+        for (let i = 0; i < scenarioIds.length; i += 10) {
+          const chunk = scenarioIds.slice(i, i + 10);
+          const scSnap = await db.collection("scenarios").where("__name__", "in", chunk).get();
+          scSnap.docs.forEach((d) => scenarioNameMap.set(d.id, String(d.data().name || d.id)));
+        }
+      }
+
+      const pastScenarios = Array.from(scenarioStatsMap.entries())
+        .map(([sid, s]) => ({
+          name: scenarioNameMap.get(sid) || sid,
+          impressions: s.imp,
+          ctr: s.imp > 0 ? Number(((s.clk / s.imp) * 100).toFixed(1)) : 0,
+          cvr: s.imp > 0 ? Number(((s.cv  / s.imp) * 100).toFixed(1)) : 0,
+        }))
+        .sort((a, b) => b.impressions - a.impressions)
+        .slice(0, 5);
+
+      // ---- ③ ページ別詰まり箇所（PV上位 × CV率が低いページ） ----
+      const pvMap = new Map<string, number>();
+      const cvMap = new Map<string, number>();
+      for (const d of statsSnap.docs) {
+        const sd = d.data();
+        const path = String(sd.path || "");
+        if (!path) continue;
+        if (sd.event === "pageview") pvMap.set(path, (pvMap.get(path) || 0) + Number(sd.count || 0));
+        if (sd.event === "cv" || sd.event === "conversion") cvMap.set(path, (cvMap.get(path) || 0) + Number(sd.count || 0));
+      }
+      const frictionPages = Array.from(pvMap.entries())
+        .filter(([, pv]) => pv >= 10)
+        .map(([path, pv]) => ({ path, pv, cv: cvMap.get(path) || 0, cvr: Number(((cvMap.get(path) || 0) / pv * 100).toFixed(1)) }))
+        .sort((a, b) => a.cvr - b.cvr || b.pv - a.pv)
+        .slice(0, 5);
+
       // 数値を整理してAIに渡す
       const imp = body.metrics.impressions;
       const clk = body.metrics.clicks;
@@ -4106,13 +4212,28 @@ export function registerV1Routes(app: Express) {
           cvr_percent: cvr,
         },
         performance_judgment: perfLevel,
-        rule_grade: rule.grade, // good / ok / bad / need_data
+        rule_grade: rule.grade,
+        // ① サイトコンテキスト
+        site_context: {
+          sells: aiContext.sells || "不明",
+          target: aiContext.target || "不明",
+          brand_do: aiContext.brandDo || "特になし",
+          brand_dont: aiContext.brandDont || "特になし",
+          current_campaign: aiContext.campaign || "特になし",
+        },
+        // ② 過去施策実績
+        past_scenarios: pastScenarios.length > 0 ? pastScenarios : "データなし",
+        // ③ ページ詰まり箇所
+        friction_pages: frictionPages.length > 0 ? frictionPages : "データなし",
         context: body.context || {},
         instructions: [
           "performance_judgment と rule_grade を必ず評価の基準にしてください。",
           "performance_judgment が '良好' の場合は summary でまず成果を肯定してから改善提案をしてください。",
           "CVやCTRの実数値を summary や bullets に具体的に引用してください（例: 'CTR X%', 'CV Y件'）。",
           "数値が良い場合は bullets のうち1〜2件を「良かった点」として記載してください。",
+          "site_context の情報（何を売っているか・ターゲット・ブランド方針）を踏まえた具体的な提案をしてください。",
+          "past_scenarios がある場合は、過去の施策との比較や改善点を提案に含めてください。",
+          "friction_pages がある場合は、CVR が低いページへのアプローチを提案に含めてください。",
         ],
         constraints: {
           tone: "短く・実務的・断定しすぎない",
@@ -5967,5 +6088,119 @@ export function registerV1Routes(app: Express) {
     }
   });
   app.options("/v1/ops/misoca/trigger", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /* --- /v1/ops/backfill-purchase-attribution ---
+   * 過去の purchase ログに scenario_id を遡及付与するバックフィル
+   * - scenario_id がない purchase ログを全件取得
+   * - vid → impression ログから購入直前の最終シナリオを特定
+   * - purchase ログに scenario_id を書き込む（_backfilled: true フラグ付き）
+   * - 冪等（何度実行しても OK）
+   */
+  app.post("/v1/ops/backfill-purchase-attribution", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      await requirePlatformAdmin(req);
+
+      const db = adminDb();
+      const targetSiteId = String(req.body.siteId || "").trim();
+
+      // 1. 対象サイト一覧を取得
+      const siteIds: string[] = [];
+      if (targetSiteId) {
+        siteIds.push(targetSiteId);
+      } else {
+        const sitesSnap = await db.collection("sites").get();
+        sitesSnap.docs.forEach((d) => siteIds.push(d.id));
+      }
+
+      let totalPurchases = 0;
+      let alreadyAttributed = 0;
+      let newlyAttributed = 0;
+      let notFound = 0;
+
+      for (const siteId of siteIds) {
+        // 2. purchase ログを全件取得
+        const purchaseSnap = await db.collection("logs")
+          .where("site_id", "==", siteId)
+          .where("event", "==", "purchase")
+          .get();
+
+        const purchases = purchaseSnap.docs
+          .map((d) => ({ docId: d.id, ...(d.data() as any) }))
+          .filter((p) => !p._backfilled); // 処理済みはスキップ
+
+        totalPurchases += purchases.length;
+
+        // scenario_id が既にある購入はカウントのみ
+        const needAttribution = purchases.filter((p) => !p.scenario_id && p.vid);
+        const hasAttribution = purchases.filter((p) => !!p.scenario_id);
+        alreadyAttributed += hasAttribution.length;
+
+        if (needAttribution.length === 0) continue;
+
+        // 3. 対象 vid 一覧を取得
+        const vids = [...new Set(needAttribution.map((p) => p.vid as string))];
+
+        // 4. vid ごとに impression ログを取得（Firestore `in` は 10 件上限）
+        const vidToImpressions = new Map<string, { scenario_id: string; createdAt: string }[]>();
+        for (let i = 0; i < vids.length; i += 10) {
+          const chunk = vids.slice(i, i + 10);
+          const impSnap = await db.collection("logs")
+            .where("site_id", "==", siteId)
+            .where("event", "==", "impression")
+            .where("vid", "in", chunk)
+            .get();
+          for (const doc of impSnap.docs) {
+            const d = doc.data() as any;
+            if (!d.scenario_id || !d.vid || !d.createdAt) continue;
+            if (!vidToImpressions.has(d.vid)) vidToImpressions.set(d.vid, []);
+            vidToImpressions.get(d.vid)!.push({ scenario_id: d.scenario_id, createdAt: d.createdAt });
+          }
+        }
+
+        // 5. 各 purchase に対して購入直前の最終 impression からシナリオを特定 → バッチ更新
+        let batch = db.batch();
+        let batchCount = 0;
+
+        for (const purchase of needAttribution) {
+          const impressions = (vidToImpressions.get(purchase.vid) || [])
+            .filter((i) => i.createdAt <= purchase.createdAt)
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+          if (impressions.length === 0) {
+            notFound++;
+            continue;
+          }
+
+          const scenarioId = impressions[0].scenario_id;
+          const ref = db.collection("logs").doc(purchase.docId);
+          batch.update(ref, { scenario_id: scenarioId, _backfilled: true });
+          batchCount++;
+          newlyAttributed++;
+
+          if (batchCount >= 400) {
+            await batch.commit();
+            batch = db.batch();
+            batchCount = 0;
+          }
+        }
+
+        if (batchCount > 0) await batch.commit();
+      }
+
+      return res.json({
+        ok: true,
+        sites: siteIds.length,
+        totalPurchases,
+        alreadyAttributed,
+        newlyAttributed,
+        notFound,
+      });
+    } catch (e: any) {
+      console.error("[/v1/ops/backfill-purchase-attribution] error:", e);
+      return res.status(opsErrStatus(e)).json({ ok: false, error: e?.message });
+    }
+  });
+  app.options("/v1/ops/backfill-purchase-attribution", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
 
 }

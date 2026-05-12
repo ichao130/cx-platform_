@@ -120,6 +120,15 @@ export default function SitesPage() {
   const [domainsText, setDomainsText] = useState('');
   const [publicKey, setPublicKey] = useState('');
 
+  // AI コンテキスト
+  const [aiSells, setAiSells] = useState('');
+  const [aiTarget, setAiTarget] = useState('');
+  const [aiBrandDo, setAiBrandDo] = useState('');
+  const [aiBrandDont, setAiBrandDont] = useState('');
+  const [aiCampaign, setAiCampaign] = useState('');
+  const [aiContextSaving, setAiContextSaving] = useState(false);
+  const [aiContextSaved, setAiContextSaved] = useState('');
+
   const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([]);
   const [rows, setRows] = useState<Array<{ id: string; data: Site }>>([]);
   const [error, setError] = useState('');
@@ -298,6 +307,8 @@ export default function SitesPage() {
     setCopyMessage('');
     setCopyPixelMessage('');
     setTagMode('direct');
+    setAiSells(''); setAiTarget(''); setAiBrandDo(''); setAiBrandDont(''); setAiCampaign('');
+    setAiContextSaved('');
   }
 
   function applyEditorState(next: EditorSnapshot) {
@@ -311,6 +322,14 @@ export default function SitesPage() {
     setCopyMessage('');
     setCopyPixelMessage('');
     setTagMode('direct');
+    // AI コンテキストを復元
+    const ctx = (next as any).aiContext || {};
+    setAiSells(ctx.sells || '');
+    setAiTarget(ctx.target || '');
+    setAiBrandDo(ctx.brandDo || '');
+    setAiBrandDont(ctx.brandDont || '');
+    setAiCampaign(ctx.campaign || '');
+    setAiContextSaved('');
   }
 
   function openCreateModal() {
@@ -333,7 +352,8 @@ export default function SitesPage() {
       workspaceId: nextWorkspaceId,
       domainsText: (row.data.domains || []).join('\n'),
       publicKey: row.data.publicKey || '',
-    });
+      aiContext: (row.data as any).aiContext || {},
+    } as any);
     writeSelectedWorkspaceId(row.data.workspaceId || '', currentUid);
     setIsModalOpen(true);
   }
@@ -922,6 +942,54 @@ export default function SitesPage() {
                         <span style={{ color: '#94a3b8' }}>{'  };'}</span>{'\n'}
                         <span style={{ color: '#94a3b8' }}>{'});'}</span>
                       </pre>
+                    </div>
+                  )}
+
+                  {/* ── AI コンテキスト設定 ── */}
+                  {isEditing && (
+                    <div style={{ marginTop: 24, padding: 16, background: 'rgba(99,102,241,.06)', borderRadius: 12, border: '1px solid rgba(99,102,241,.18)' }}>
+                      <div style={{ fontWeight: 700, marginBottom: 4, fontSize: 13, color: '#4338ca' }}>🤖 AIインサイト コンテキスト設定</div>
+                      <div className="small" style={{ opacity: 0.72, marginBottom: 12 }}>AIがより的確な改善提案をするために、サイトの基本情報を入力してください。</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        {[
+                          { label: '何を売っているか', value: aiSells, set: setAiSells, placeholder: '例: オーガニックコスメ・スキンケア商品' },
+                          { label: '誰に売っているか（ターゲット）', value: aiTarget, set: setAiTarget, placeholder: '例: 30〜40代の美容意識の高い女性' },
+                          { label: 'やっていい訴求・ブランドらしさ', value: aiBrandDo, set: setAiBrandDo, placeholder: '例: 自然由来・サステナブル・丁寧な暮らし' },
+                          { label: 'やりたくない訴求・NGワード', value: aiBrandDont, set: setAiBrandDont, placeholder: '例: 過激な割引表現・競合比較・急かす言い方' },
+                          { label: '現在進行中のキャンペーン', value: aiCampaign, set: setAiCampaign, placeholder: '例: 母の日ギフト特集（〜5/11）' },
+                        ].map(({ label, value, set, placeholder }) => (
+                          <div key={label}>
+                            <div className="small" style={{ marginBottom: 3, fontWeight: 600, opacity: 0.8 }}>{label}</div>
+                            <input className="input" value={value} onChange={(e) => set(e.target.value)} placeholder={placeholder} style={{ width: '100%' }} />
+                          </div>
+                        ))}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4 }}>
+                          <button
+                            className="btn btn--primary"
+                            style={{ fontSize: 12 }}
+                            disabled={aiContextSaving}
+                            onClick={async () => {
+                              setAiContextSaving(true);
+                              setAiContextSaved('');
+                              try {
+                                const j = await apiPostJson('/v1/sites/updateAiContext', {
+                                  site_id: id,
+                                  aiContext: { sells: aiSells, target: aiTarget, brandDo: aiBrandDo, brandDont: aiBrandDont, campaign: aiCampaign },
+                                });
+                                if (!j.ok) throw new Error(j.message || 'failed');
+                                setAiContextSaved('保存しました ✅');
+                              } catch (e: any) {
+                                setAiContextSaved(`保存失敗: ${e?.message || String(e)}`);
+                              } finally {
+                                setAiContextSaving(false);
+                              }
+                            }}
+                          >
+                            {aiContextSaving ? '保存中…' : 'AIコンテキストを保存'}
+                          </button>
+                          {aiContextSaved && <span className="small" style={{ opacity: 0.8 }}>{aiContextSaved}</span>}
+                        </div>
+                      </div>
                     </div>
                   )}
 
