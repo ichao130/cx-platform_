@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
   limit,
@@ -642,16 +642,33 @@ export default function AnalyticsPage() {
           if ((impSc?.data?.goal as any)?.attribution !== "click") scenarioId = impScId;
         }
       }
-      const key = scenarioId || "__none__";
-      const sc = scenarios.find((s) => s.id === scenarioId);
+      // 施策が選択期間内に稼働していない場合は「施策なし」扱い
+      const inPeriod = isScenarioInPeriod(scenarioId);
+      const effectiveScenarioId = inPeriod ? scenarioId : null;
+      const key = effectiveScenarioId || "__none__";
+      const sc = scenarios.find((s) => s.id === effectiveScenarioId);
       const name = sc ? String(sc.data?.name || sc.id) : "（施策なし）";
-      if (!map.has(key)) map.set(key, { id: scenarioId, name, revenue: 0, count: 0 });
+      if (!map.has(key)) map.set(key, { id: effectiveScenarioId, name, revenue: 0, count: 0 });
       const entry = map.get(key)!;
       entry.revenue += typeof purchase.revenue === "number" ? purchase.revenue : 0;
       entry.count++;
     }
     return Array.from(map.values()).sort((a, b) => b.revenue - a.revenue);
-  }, [purchaseLogs, journeyLogs, scenarios]);
+  }, [purchaseLogs, journeyLogs, scenarios, isScenarioInPeriod]);
+
+  // シナリオが選択期間内に稼働していたか判定
+  // スケジュールなし → 常時稼働 → true
+  // スケジュールあり → 選択期間と重なる場合のみ true
+  const isScenarioInPeriod = useCallback((scenarioId: string | null): boolean => {
+    if (!scenarioId) return false;
+    const sc = scenarios.find((s) => s.id === scenarioId);
+    if (!sc) return false;
+    const schedule = (sc.data as any)?.schedule;
+    if (!schedule || (!schedule.startAt && !schedule.endAt)) return true;
+    const startMs = schedule.startAt ? new Date(schedule.startAt).getTime() : -Infinity;
+    const endMs   = schedule.endAt   ? new Date(schedule.endAt).getTime()   : Infinity;
+    return startMs <= effectiveTo.getTime() && endMs >= effectiveFrom.getTime();
+  }, [scenarios, effectiveFrom, effectiveTo]);
 
   // ---- computed: 商品別売上（施策帰属付き） ----
   const revenueByProduct = useMemo(() => {
@@ -696,7 +713,8 @@ export default function AnalyticsPage() {
         const itemRevenue = (Number(item.qty) || 0) * (Number(item.price) || 0);
         entry.qty += Number(item.qty) || 0;
         entry.revenue += itemRevenue;
-        if (scenarioId) {
+        // 施策が選択期間内に稼働していた場合のみ貢献カウント
+        if (scenarioId && isScenarioInPeriod(scenarioId)) {
           entry.qtyAttributed += Number(item.qty) || 0;
           entry.revenueAttributed += itemRevenue;
           const bd = entry.scenarioBreakdown;
@@ -713,7 +731,7 @@ export default function AnalyticsPage() {
           .sort((a, b) => b.revenue - a.revenue),
       }))
       .sort((a, b) => b.revenue - a.revenue);
-  }, [purchaseLogs, journeyLogs, scenarios]);
+  }, [purchaseLogs, journeyLogs, scenarios, isScenarioInPeriod]);
 
   // ---- computed: 流入元（utm_source or ref） ----
   const referrerData = useMemo(() => {
