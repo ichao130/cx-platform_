@@ -603,6 +603,20 @@ export default function AnalyticsPage() {
   const purchaseCount = useMemo(() => purchaseLogs.length, [purchaseLogs]);
   const avgOrderValue = useMemo(() => purchaseCount > 0 ? totalRevenue / purchaseCount : 0, [totalRevenue, purchaseCount]);
 
+  // シナリオが選択期間内に稼働していたか判定
+  // スケジュールなし → 常時稼働 → true
+  // スケジュールあり → 選択期間と重なる場合のみ true
+  const isScenarioInPeriod = useCallback((scenarioId: string | null): boolean => {
+    if (!scenarioId) return false;
+    const sc = scenarios.find((s) => s.id === scenarioId);
+    if (!sc) return false;
+    const schedule = (sc.data as any)?.schedule;
+    if (!schedule || (!schedule.startAt && !schedule.endAt)) return true;
+    const startMs = schedule.startAt ? new Date(schedule.startAt).getTime() : -Infinity;
+    const endMs   = schedule.endAt   ? new Date(schedule.endAt).getTime()   : Infinity;
+    return startMs <= effectiveTo.getTime() && endMs >= effectiveFrom.getTime();
+  }, [scenarios, effectiveFrom, effectiveTo]);
+
   // シナリオ別売上
   // ① purchase ログに scenario_id が直接保存されていれば確定帰属（Web Pixel 更新後の購入）
   // ② なければ journeyLogs のラストタッチで推定帰属（旧データの best-effort）
@@ -655,20 +669,6 @@ export default function AnalyticsPage() {
     }
     return Array.from(map.values()).sort((a, b) => b.revenue - a.revenue);
   }, [purchaseLogs, journeyLogs, scenarios, isScenarioInPeriod]);
-
-  // シナリオが選択期間内に稼働していたか判定
-  // スケジュールなし → 常時稼働 → true
-  // スケジュールあり → 選択期間と重なる場合のみ true
-  const isScenarioInPeriod = useCallback((scenarioId: string | null): boolean => {
-    if (!scenarioId) return false;
-    const sc = scenarios.find((s) => s.id === scenarioId);
-    if (!sc) return false;
-    const schedule = (sc.data as any)?.schedule;
-    if (!schedule || (!schedule.startAt && !schedule.endAt)) return true;
-    const startMs = schedule.startAt ? new Date(schedule.startAt).getTime() : -Infinity;
-    const endMs   = schedule.endAt   ? new Date(schedule.endAt).getTime()   : Infinity;
-    return startMs <= effectiveTo.getTime() && endMs >= effectiveFrom.getTime();
-  }, [scenarios, effectiveFrom, effectiveTo]);
 
   // ---- computed: 商品別売上（施策帰属付き） ----
   const revenueByProduct = useMemo(() => {
