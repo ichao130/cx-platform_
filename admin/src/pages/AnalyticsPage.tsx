@@ -411,7 +411,7 @@ export default function AnalyticsPage() {
     return f === t ? f : `${f}〜${t}`;
   }, [dateRange, customFrom, customTo]);
 
-  const [scenarioTab, setScenarioTab] = useState<"active" | "archive">("active");
+  // scenarioTab 廃止 → isScenarioInPeriod で期間内シナリオを自動表示
   const [realtimeTab, setRealtimeTab] = useState<"events" | "sessions">("events");
 
   // ---- リアルタイムログ ----
@@ -819,13 +819,11 @@ export default function AnalyticsPage() {
   // ---- computed: 施策比較テーブル ----
   const comparisonData = useMemo(() => [...funnelData], [funnelData]);
 
-  // active / archived シナリオ分離
-  const activeScenarios = useMemo(() => scenarios.filter((s) => s.data?.status === "active"), [scenarios]);
-  const archivedScenarios = useMemo(() => scenarios.filter((s) => s.data?.status === "paused"), [scenarios]);
+  // 期間内に稼働していたシナリオのみ表示
+  const inPeriodScenarios = useMemo(() => scenarios.filter((s) => isScenarioInPeriod(s.id)), [scenarios, isScenarioInPeriod]);
 
-  // 施策ファネル: active用 / archive用
-  const activeFunnelData = useMemo(() => funnelData.filter((f) => activeScenarios.some((s) => s.id === f.id)), [funnelData, activeScenarios]);
-  const archiveFunnelData = useMemo(() => funnelData.filter((f) => archivedScenarios.some((s) => s.id === f.id)), [funnelData, archivedScenarios]);
+  // 施策ファネル: 期間内シナリオのみ
+  const inPeriodFunnelData = useMemo(() => funnelData.filter((f) => inPeriodScenarios.some((s) => s.id === f.id)), [funnelData, inPeriodScenarios]);
 
   // ---- computed: 日別トレンド ----
   const dailyTrend = useMemo<TrendPoint[]>(() => {
@@ -1685,19 +1683,11 @@ export default function AnalyticsPage() {
               </div>
             )}
 
-            {/* 施策別CVトレンド（シナリオがある場合） */}
-            {!journeyLoading && scenarios.length > 0 && (
+            {/* 施策別CVトレンド（期間内に稼働していたシナリオのみ） */}
+            {!journeyLoading && inPeriodScenarios.length > 0 && (
               <>
-                <TabBar
-                  tabs={[{ key: "active", label: "アクティブ" }, { key: "archive", label: "アーカイブ" }]}
-                  active={scenarioTab}
-                  onChange={(k) => setScenarioTab(k as "active" | "archive")}
-                />
-                {scenarioTab === "archive" && (
-                  <div className="small" style={{ opacity: 0.6, marginBottom: 10 }}>一時停止中の施策の過去データを表示しています</div>
-                )}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
-                {(scenarioTab === "active" ? activeScenarios : archivedScenarios).slice(0, 4).map((sc) => {
+                {inPeriodScenarios.slice(0, 4).map((sc) => {
                   const scTrend = dailyTrend.map((d) => {
                     const scRows = statRows.filter((r) => r.scenarioId === sc.id && r.day === d.day);
                     const imp = scRows.filter((r) => r.event === "impression").reduce((s, r) => s + safeNum(r.count), 0);
@@ -1830,55 +1820,48 @@ export default function AnalyticsPage() {
             <div className="h2" style={{ marginBottom: 14 }}>
               施策ファネル <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel}）</span>
             </div>
-            <TabBar
-              tabs={[{ key: "active", label: "アクティブ" }, { key: "archive", label: "アーカイブ" }]}
-              active={scenarioTab}
-              onChange={(k) => setScenarioTab(k as "active" | "archive")}
-            />
-            {scenarioTab === "active" && (
+            {inPeriodFunnelData.length === 0 ? (
+              <div className="card" style={{ padding: 20, opacity: 0.7 }}>
+                <div className="small">選択期間に稼働していた施策のデータがありません</div>
+              </div>
+            ) : (
               <>
-                {activeFunnelData.length === 0 ? (
-                  <div className="card" style={{ padding: 20, opacity: 0.7 }}>
-                    <div className="small">シナリオがないか、まだデータがありません</div>
-                  </div>
-                ) : (
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14, marginBottom: 16 }}>
-                    {activeFunnelData.slice(0, 6).map((sc) => {
-                      const scRev = revenueByScenario.find((r) => r.id === sc.id);
-                      return (
-                        <div key={sc.id} className="card" style={{ padding: 18, background: "#fff" }}>
-                          <div style={{ fontWeight: 700, marginBottom: scRev && scRev.revenue > 0 ? 8 : 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={sc.name}>
-                            {sc.name}
-                          </div>
-                          {scRev && scRev.count > 0 && (
-                            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-                              <div style={{ background: "#f0fdf4", borderRadius: 6, padding: "4px 10px", fontSize: 12 }}>
-                                <span style={{ color: "#15803d", fontWeight: 700 }}>¥{Math.round(scRev.revenue).toLocaleString()}</span>
-                                <span style={{ color: "#86efac", fontSize: 11, marginLeft: 4 }}>売上</span>
-                              </div>
-                              <div style={{ background: "#eff6ff", borderRadius: 6, padding: "4px 10px", fontSize: 12 }}>
-                                <span style={{ color: "#1d4ed8", fontWeight: 700 }}>{scRev.count}件</span>
-                                <span style={{ color: "#93c5fd", fontSize: 11, marginLeft: 4 }}>購入</span>
-                              </div>
-                            </div>
-                          )}
-                          <FunnelStep label="表示（インプレッション）" count={sc.imp} total={sc.imp} color="#2563eb" />
-                          <FunnelStep label="クリック" count={sc.clk} total={sc.imp} color="#f59e0b" />
-                          <FunnelStep label="コンバージョン" count={sc.cv} total={sc.imp} color="#16a34a" />
-                          <div style={{ marginTop: 10, display: "flex", gap: 6 }}>
-                            <span className="badge" style={{ background: "rgba(22,163,74,.1)", color: "#16a34a", fontWeight: 700 }}>
-                              CVR {sc.cvr}%
-                            </span>
-                            <span className="badge" style={{ background: "rgba(37,99,235,.08)", color: "#2563eb" }}>
-                              CTR {pct(sc.clk, sc.imp)}
-                            </span>
-                          </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14, marginBottom: 16 }}>
+                  {inPeriodFunnelData.slice(0, 6).map((sc) => {
+                    const scRev = revenueByScenario.find((r) => r.id === sc.id);
+                    return (
+                      <div key={sc.id} className="card" style={{ padding: 18, background: "#fff" }}>
+                        <div style={{ fontWeight: 700, marginBottom: scRev && scRev.revenue > 0 ? 8 : 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={sc.name}>
+                          {sc.name}
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
-                {/* 施策別売上（アクティブタブ内） */}
+                        {scRev && scRev.count > 0 && (
+                          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                            <div style={{ background: "#f0fdf4", borderRadius: 6, padding: "4px 10px", fontSize: 12 }}>
+                              <span style={{ color: "#15803d", fontWeight: 700 }}>¥{Math.round(scRev.revenue).toLocaleString()}</span>
+                              <span style={{ color: "#86efac", fontSize: 11, marginLeft: 4 }}>売上</span>
+                            </div>
+                            <div style={{ background: "#eff6ff", borderRadius: 6, padding: "4px 10px", fontSize: 12 }}>
+                              <span style={{ color: "#1d4ed8", fontWeight: 700 }}>{scRev.count}件</span>
+                              <span style={{ color: "#93c5fd", fontSize: 11, marginLeft: 4 }}>購入</span>
+                            </div>
+                          </div>
+                        )}
+                        <FunnelStep label="表示（インプレッション）" count={sc.imp} total={sc.imp} color="#2563eb" />
+                        <FunnelStep label="クリック" count={sc.clk} total={sc.imp} color="#f59e0b" />
+                        <FunnelStep label="コンバージョン" count={sc.cv} total={sc.imp} color="#16a34a" />
+                        <div style={{ marginTop: 10, display: "flex", gap: 6 }}>
+                          <span className="badge" style={{ background: "rgba(22,163,74,.1)", color: "#16a34a", fontWeight: 700 }}>
+                            CVR {sc.cvr}%
+                          </span>
+                          <span className="badge" style={{ background: "rgba(37,99,235,.08)", color: "#2563eb" }}>
+                            CTR {pct(sc.clk, sc.imp)}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {/* 施策別売上 */}
                 {revenueByScenario.length > 0 && (
                   <div className="card" style={{ padding: 18, background: "#fff", marginBottom: 16 }}>
                     <div className="small" style={{ fontWeight: 700, marginBottom: 12 }}>施策別売上（ラストタッチ帰属）</div>
@@ -1899,7 +1882,7 @@ export default function AnalyticsPage() {
                     </div>
                   </div>
                 )}
-                {/* 施策比較テーブル（アクティブ） */}
+                {/* 施策比較テーブル */}
                 <div className="card" style={{ padding: 0, overflow: "hidden", background: "#fff" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                     <thead>
@@ -1913,106 +1896,22 @@ export default function AnalyticsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {activeFunnelData.length === 0 ? (
-                        <tr>
-                          <td colSpan={6} style={{ padding: "20px 16px", textAlign: "center", opacity: 0.55 }}>データなし</td>
+                      {inPeriodFunnelData.map((sc, i) => (
+                        <tr key={sc.id} style={{ borderBottom: "1px solid rgba(15,23,42,.05)", background: i === 0 && sc.cvr > 0 ? "rgba(22,163,74,.03)" : undefined }}>
+                          <td style={{ padding: "10px 16px", fontWeight: 600 }}>
+                            {i === 0 && sc.cvr > 0 && <span style={{ marginRight: 6, fontSize: 12 }}>🏆</span>}
+                            {sc.name}
+                          </td>
+                          <td style={{ padding: "10px 16px", textAlign: "right" }}>{fmtInt(sc.imp)}</td>
+                          <td style={{ padding: "10px 16px", textAlign: "right" }}>{fmtInt(sc.clk)}</td>
+                          <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: sc.cv > 0 ? "#16a34a" : undefined }}>{fmtInt(sc.cv)}</td>
+                          <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: sc.cvr > 0 ? "#16a34a" : undefined }}>{sc.cvr}%</td>
+                          <td style={{ padding: "10px 16px", textAlign: "right" }}>{pct(sc.clk, sc.imp)}</td>
                         </tr>
-                      ) : (
-                        activeFunnelData.map((sc, i) => (
-                          <tr key={sc.id} style={{ borderBottom: "1px solid rgba(15,23,42,.05)", background: i === 0 && sc.cvr > 0 ? "rgba(22,163,74,.03)" : undefined }}>
-                            <td style={{ padding: "10px 16px", fontWeight: 600 }}>
-                              {i === 0 && sc.cvr > 0 && <span style={{ marginRight: 6, fontSize: 12 }}>🏆</span>}
-                              {sc.name}
-                            </td>
-                            <td style={{ padding: "10px 16px", textAlign: "right" }}>{fmtInt(sc.imp)}</td>
-                            <td style={{ padding: "10px 16px", textAlign: "right" }}>{fmtInt(sc.clk)}</td>
-                            <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: sc.cv > 0 ? "#16a34a" : undefined }}>{fmtInt(sc.cv)}</td>
-                            <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: sc.cvr > 0 ? "#16a34a" : undefined }}>{sc.cvr}%</td>
-                            <td style={{ padding: "10px 16px", textAlign: "right" }}>{pct(sc.clk, sc.imp)}</td>
-                          </tr>
-                        ))
-                      )}
+                      ))}
                     </tbody>
                   </table>
                 </div>
-              </>
-            )}
-            {scenarioTab === "archive" && (
-              <>
-                <div className="small" style={{ opacity: 0.6, marginBottom: 12 }}>一時停止中の施策の過去データを表示しています</div>
-                {archiveFunnelData.length === 0 ? (
-                  <div className="card" style={{ padding: 20, opacity: 0.7 }}>
-                    <div className="small">一時停止中の施策はありません</div>
-                  </div>
-                ) : (
-                  <>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14, marginBottom: 16 }}>
-                      {archiveFunnelData.slice(0, 6).map((sc) => {
-                        const scRev = revenueByScenario.find((r) => r.id === sc.id);
-                        return (
-                          <div key={sc.id} className="card" style={{ padding: 18, background: "#fff" }}>
-                            <div style={{ fontWeight: 700, marginBottom: scRev && scRev.revenue > 0 ? 8 : 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={sc.name}>
-                              {sc.name}
-                            </div>
-                            {scRev && scRev.count > 0 && (
-                              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-                                <div style={{ background: "#f0fdf4", borderRadius: 6, padding: "4px 10px", fontSize: 12 }}>
-                                  <span style={{ color: "#15803d", fontWeight: 700 }}>¥{Math.round(scRev.revenue).toLocaleString()}</span>
-                                  <span style={{ color: "#86efac", fontSize: 11, marginLeft: 4 }}>売上</span>
-                                </div>
-                                <div style={{ background: "#eff6ff", borderRadius: 6, padding: "4px 10px", fontSize: 12 }}>
-                                  <span style={{ color: "#1d4ed8", fontWeight: 700 }}>{scRev.count}件</span>
-                                  <span style={{ color: "#93c5fd", fontSize: 11, marginLeft: 4 }}>購入</span>
-                                </div>
-                              </div>
-                            )}
-                            <FunnelStep label="表示（インプレッション）" count={sc.imp} total={sc.imp} color="#2563eb" />
-                            <FunnelStep label="クリック" count={sc.clk} total={sc.imp} color="#f59e0b" />
-                            <FunnelStep label="コンバージョン" count={sc.cv} total={sc.imp} color="#16a34a" />
-                            <div style={{ marginTop: 10, display: "flex", gap: 6 }}>
-                              <span className="badge" style={{ background: "rgba(22,163,74,.1)", color: "#16a34a", fontWeight: 700 }}>
-                                CVR {sc.cvr}%
-                              </span>
-                              <span className="badge" style={{ background: "rgba(37,99,235,.08)", color: "#2563eb" }}>
-                                CTR {pct(sc.clk, sc.imp)}
-                              </span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    {/* 施策比較テーブル（アーカイブ） */}
-                    <div className="card" style={{ padding: 0, overflow: "hidden", background: "#fff" }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                        <thead>
-                          <tr style={{ borderBottom: "1px solid rgba(15,23,42,.08)", background: "rgba(15,23,42,.02)" }}>
-                            <th style={{ padding: "10px 16px", textAlign: "left", fontWeight: 700, opacity: 0.7 }}>施策名</th>
-                            <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>表示</th>
-                            <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>クリック</th>
-                            <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CV</th>
-                            <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CVR</th>
-                            <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CTR</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {archiveFunnelData.map((sc, i) => (
-                            <tr key={sc.id} style={{ borderBottom: "1px solid rgba(15,23,42,.05)", background: i === 0 && sc.cvr > 0 ? "rgba(22,163,74,.03)" : undefined }}>
-                              <td style={{ padding: "10px 16px", fontWeight: 600 }}>
-                                {i === 0 && sc.cvr > 0 && <span style={{ marginRight: 6, fontSize: 12 }}>🏆</span>}
-                                {sc.name}
-                              </td>
-                              <td style={{ padding: "10px 16px", textAlign: "right" }}>{fmtInt(sc.imp)}</td>
-                              <td style={{ padding: "10px 16px", textAlign: "right" }}>{fmtInt(sc.clk)}</td>
-                              <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: sc.cv > 0 ? "#16a34a" : undefined }}>{fmtInt(sc.cv)}</td>
-                              <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: sc.cvr > 0 ? "#16a34a" : undefined }}>{sc.cvr}%</td>
-                              <td style={{ padding: "10px 16px", textAlign: "right" }}>{pct(sc.clk, sc.imp)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </>
-                )}
               </>
             )}
           </div>
