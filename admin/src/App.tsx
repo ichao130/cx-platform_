@@ -1,5 +1,5 @@
-import React, { createContext, useCallback, useEffect, useMemo, useState } from "react";
-import { Link, NavLink, Navigate } from "react-router-dom";
+import React, { createContext, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, NavLink, Navigate, useLocation } from "react-router-dom";
 import AppRoutes from "./routes";
 import AnnouncementToast from "./components/AnnouncementToast";
 import AdminContextHeader from "./components/AdminContextHeader";
@@ -435,6 +435,47 @@ function getWorkspaceRailIcon(row: { id: string; data: any }) {
 const SelectedSiteContext = React.createContext<string | null>(null);
 export function useSelectedSiteId() { return React.useContext(SelectedSiteContext); }
 
+/** ページ遷移時にトップに細いプログレスバーをさりげなく表示 */
+function RouteProgressBar() {
+  const location = useLocation();
+  const [visible, setVisible] = useState(false);
+  const [width, setWidth] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    // 遷移開始: バーを素早く70%まで伸ばす
+    setWidth(0);
+    setVisible(true);
+    const t1 = setTimeout(() => setWidth(70), 10);
+    // 少し待ってから100%に伸ばして消す
+    const t2 = setTimeout(() => setWidth(100), 250);
+    const t3 = setTimeout(() => { setVisible(false); setWidth(0); }, 550);
+    timerRef.current = t3;
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
+  }, [location.pathname]);
+
+  if (!visible && width === 0) return null;
+
+  return (
+    <div style={{
+      position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999,
+      height: 2, pointerEvents: "none",
+    }}>
+      <div style={{
+        height: "100%",
+        width: `${width}%`,
+        background: "linear-gradient(90deg, #1f6573, #59b7c6)",
+        borderRadius: "0 2px 2px 0",
+        transition: width === 100
+          ? "width 0.2s ease-out, opacity 0.2s ease 0.1s"
+          : "width 0.25s ease-out",
+        opacity: width === 100 ? 0 : 1,
+        boxShadow: "0 0 6px rgba(89,183,198,0.6)",
+      }} />
+    </div>
+  );
+}
+
 function AppShell({ children }: { children: React.ReactNode }) {
 
   const { user, workspaceId, workspaceRole, canAccess, currentUid, logout } = useAuth();
@@ -663,6 +704,8 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const sidebarW = sidebarOpen ? 240 : 44;
 
   return (
+    <>
+    <RouteProgressBar />
     <div
       style={{
         minHeight: "100vh",
@@ -916,6 +959,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
         {children}
       </main>
     </div>
+    </>
   );
 }
 
