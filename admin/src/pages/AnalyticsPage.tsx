@@ -93,6 +93,52 @@ function readSelectedWorkspaceId(uid?: string) {
   }
 }
 
+// ---- CountUp: 数値をゼロからカウントアップ ----
+function CountUp({ value, duration = 600, formatter = (n: number) => n.toLocaleString("ja-JP") }: {
+  value: number; duration?: number; formatter?: (n: number) => string;
+}) {
+  const [display, setDisplay] = React.useState(0);
+  const startRef = React.useRef<number | null>(null);
+  const rafRef = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    const target = value;
+    startRef.current = null;
+    const step = (ts: number) => {
+      if (startRef.current === null) startRef.current = ts;
+      const progress = Math.min((ts - startRef.current) / duration, 1);
+      // easeOutCubic
+      const ease = 1 - Math.pow(1 - progress, 3);
+      setDisplay(Math.round(target * ease));
+      if (progress < 1) rafRef.current = requestAnimationFrame(step);
+    };
+    rafRef.current = requestAnimationFrame(step);
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+  }, [value, duration]);
+  return <>{formatter(display)}</>;
+}
+
+// ---- SkeletonBar: グレーのパルシング棒 ----
+const skeletonKeyframes = `
+@keyframes cx-skeleton-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.65; }
+}`;
+if (typeof document !== "undefined" && !document.getElementById("cx-skeleton-style")) {
+  const s = document.createElement("style");
+  s.id = "cx-skeleton-style";
+  s.textContent = skeletonKeyframes;
+  document.head.appendChild(s);
+}
+function SkeletonBar({ width = "80%", height = 16, radius = 6 }: { width?: string | number; height?: number; radius?: number }) {
+  return (
+    <div style={{
+      width, height, borderRadius: radius,
+      background: "rgba(15,23,42,.12)",
+      animation: "cx-skeleton-pulse 1.4s ease-in-out infinite",
+    }} />
+  );
+}
+
 // ---- MiniBar: シンプルな横棒グラフ ----
 function MiniBar({ value, max, color = "#59b7c6" }: { value: number; max: number; color?: string }) {
   const pctVal = max > 0 ? Math.max(2, Math.round((value / max) * 100)) : 0;
@@ -162,16 +208,29 @@ function FunnelStep({
 }
 
 // ---- StatCard ----
-function StatCard({ label, value, sub, accent }: { label: string; value: string | number; sub?: string; accent?: string }) {
+function StatCard({ label, value, sub, accent, loading, numericValue }: {
+  label: string; value: string | number; sub?: string; accent?: string;
+  loading?: boolean; numericValue?: number;
+}) {
   const str = String(value);
   const fontSize = str.length > 10 ? 18 : str.length > 8 ? 22 : str.length > 6 ? 26 : 30;
   return (
     <div className="card" style={{ padding: 18, background: "#fff", border: "1px solid rgba(15,23,42,.08)", minWidth: 0 }}>
       <div className="small" style={{ opacity: 0.68 }}>{label}</div>
-      <div style={{ fontSize, fontWeight: 800, lineHeight: 1.2, marginTop: 6, letterSpacing: "-.02em", color: accent || "inherit", wordBreak: "break-all" }}>
-        {value}
+      <div style={{ fontSize, fontWeight: 800, lineHeight: 1.2, marginTop: 6, letterSpacing: "-.02em", color: accent || "inherit", wordBreak: "break-all", minHeight: fontSize }}>
+        {loading ? (
+          <SkeletonBar width="70%" height={fontSize * 0.9} radius={4} />
+        ) : numericValue !== undefined ? (
+          <CountUp value={numericValue} />
+        ) : (
+          value
+        )}
       </div>
-      {sub && <div className="small" style={{ opacity: 0.6, marginTop: 6 }}>{sub}</div>}
+      {sub && (
+        <div className="small" style={{ opacity: 0.6, marginTop: 6 }}>
+          {loading ? <SkeletonBar width="50%" height={10} radius={3} /> : sub}
+        </div>
+      )}
     </div>
   );
 }
@@ -420,6 +479,7 @@ export default function AnalyticsPage() {
 
   // ---- stats_daily（ファネル用） ----
   const [statRows, setStatRows] = useState<any[]>([]);
+  const [statsLoading, setStatsLoading] = useState(false);
 
   // ---- 訪問者ジャーニー ----
   const [journeyLogs, setJourneyLogs] = useState<any[]>([]);
@@ -566,6 +626,7 @@ export default function AnalyticsPage() {
     const fromStr = isoDay(new Date(effectiveFrom));
     const toStr   = isoDay(new Date(effectiveTo));
     if (!fromStr || !toStr) return;
+    setStatsLoading(true);
     const q = query(
       collection(db, "stats_daily"),
       where("siteId", "==", siteId),
@@ -574,6 +635,7 @@ export default function AnalyticsPage() {
     );
     return onSnapshot(q, (snap) => {
       setStatRows(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      setStatsLoading(false);
     });
   }, [siteId, effectiveFrom, effectiveTo]);
 
@@ -1104,18 +1166,25 @@ export default function AnalyticsPage() {
   }, [sites, siteId]);
 
   const focusCards = useMemo(() => {
+    const pvTotal = dailyTrend.reduce((sum, d) => sum + safeNum(d.pv), 0);
+    const impTotal = dailyTrend.reduce((sum, d) => sum + safeNum(d.imp), 0);
+    const cvTotal = dailyTrend.reduce((sum, d) => sum + safeNum(d.cv), 0);
     const cards = [
       {
         key: "pv",
         label: "ページビュー",
-        value: fmtInt(dailyTrend.reduce((sum, d) => sum + safeNum(d.pv), 0)),
+        value: fmtInt(pvTotal),
+        numericValue: pvTotal,
+        formatter: (n: number) => n.toLocaleString("ja-JP"),
         sub: `${dateRangeLabel} の閲覧量`,
         accent: "#2563eb",
       },
       {
         key: "imp",
         label: "施策表示",
-        value: fmtInt(dailyTrend.reduce((sum, d) => sum + safeNum(d.imp), 0)),
+        value: fmtInt(impTotal),
+        numericValue: impTotal,
+        formatter: (n: number) => n.toLocaleString("ja-JP"),
         sub: "シナリオ表示回数",
         accent: "#7c3aed",
       },
@@ -1124,13 +1193,17 @@ export default function AnalyticsPage() {
             key: "revenue",
             label: "売上合計",
             value: `¥${Math.round(totalRevenue).toLocaleString()}`,
+            numericValue: Math.round(totalRevenue),
+            formatter: (n: number) => `¥${n.toLocaleString("ja-JP")}`,
             sub: `${purchaseCount}件の購入`,
             accent: "#16a34a",
           }
         : {
             key: "cv",
             label: "コンバージョン",
-            value: fmtInt(dailyTrend.reduce((sum, d) => sum + safeNum(d.cv), 0)),
+            value: fmtInt(cvTotal),
+            numericValue: cvTotal,
+            formatter: (n: number) => n.toLocaleString("ja-JP"),
             sub: "期間内のCV数",
             accent: "#f59e0b",
           },
@@ -1299,8 +1372,16 @@ export default function AnalyticsPage() {
               {focusCards.map((card) => (
                 <div key={card.key} style={{ border: "1px solid rgba(15,23,42,.08)", borderRadius: 14, padding: 16, background: "#fff" }}>
                   <div className="small" style={{ opacity: 0.68 }}>{card.label}</div>
-                  <div style={{ fontSize: 28, fontWeight: 800, lineHeight: 1.1, marginTop: 8, letterSpacing: "-.03em", color: card.accent }}>{card.value}</div>
-                  <div className="small" style={{ opacity: 0.58, marginTop: 6 }}>{card.sub}</div>
+                  <div style={{ fontSize: 28, fontWeight: 800, lineHeight: 1.1, marginTop: 8, letterSpacing: "-.03em", color: card.accent, minHeight: 34 }}>
+                    {statsLoading
+                      ? <SkeletonBar width="65%" height={26} radius={5} />
+                      : typeof card.numericValue === "number"
+                        ? <CountUp value={card.numericValue} formatter={card.formatter || ((n) => n.toLocaleString("ja-JP"))} />
+                        : card.value}
+                  </div>
+                  <div className="small" style={{ opacity: 0.58, marginTop: 6 }}>
+                    {statsLoading ? <SkeletonBar width="50%" height={10} radius={3} /> : card.sub}
+                  </div>
                 </div>
               ))}
             </div>
@@ -1410,9 +1491,9 @@ export default function AnalyticsPage() {
               ) : (
                 <>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }}>
-                    <StatCard label="売上合計" value={`¥${Math.round(totalRevenue).toLocaleString()}`} sub={`${purchaseCount}件の購入`} accent="#22c55e" />
-                    <StatCard label="平均注文額" value={`¥${Math.round(avgOrderValue).toLocaleString()}`} sub="AOV" accent="#0891b2" />
-                    <StatCard label="購入件数" value={fmtInt(purchaseCount)} sub="ユニーク注文" accent="#7c3aed" />
+                    <StatCard label="売上合計" value={`¥${Math.round(totalRevenue).toLocaleString()}`} numericValue={Math.round(totalRevenue)} sub={`${purchaseCount}件の購入`} accent="#22c55e" loading={statsLoading} />
+                    <StatCard label="平均注文額" value={`¥${Math.round(avgOrderValue).toLocaleString()}`} numericValue={Math.round(avgOrderValue)} sub="AOV" accent="#0891b2" loading={statsLoading} />
+                    <StatCard label="購入件数" value={fmtInt(purchaseCount)} numericValue={purchaseCount} sub="ユニーク注文" accent="#7c3aed" loading={statsLoading} />
                   </div>
                   {/* デバッグ: 購入ログのvid確認 */}
                   <details style={{ marginBottom: 10 }}>
