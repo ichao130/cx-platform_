@@ -393,6 +393,25 @@
     return { close: close };
   }
 
+  // テンプレートの <script> タグと tpl.js フィールドを実行する
+  // innerHTML で挿入した <script> はブラウザが実行しないため、手動で再生成して appendChild する
+  function execTemplateScripts(root, tpl) {
+    // 1) HTML内に書かれた <script> タグを再実行
+    var scripts = root.querySelectorAll("script");
+    for (var i = 0; i < scripts.length; i++) {
+      var orig = scripts[i];
+      var s = document.createElement("script");
+      s.textContent = orig.textContent;
+      orig.parentNode.replaceChild(s, orig);
+    }
+    // 2) テンプレートの js フィールドを実行
+    if (tpl && tpl.js && tpl.js.trim()) {
+      var s2 = document.createElement("script");
+      s2.textContent = tpl.js;
+      root.appendChild(s2);
+    }
+  }
+
   // 画像を事前ロードしてからコールバックを呼ぶ
   // render 時は 1000ms だけ待ち、キャッシュ済みなら即時反映・未ロードなら即表示
   function preloadImage(url, callback) {
@@ -463,6 +482,9 @@
       // insert
       if (rootForInsert && rootForInsert.appendChild) rootForInsert.appendChild(root);
       else document.body.appendChild(root);
+
+      // JS実行（<script>タグ再挿入 + tpl.jsフィールド）
+      execTemplateScripts(root, tpl);
 
       // impression
       postLog(apiBase, {
@@ -1019,6 +1041,9 @@
       var tpl = action.template;
       ensureTemplateStyle(tpl.template_id || tpl.templateId, tpl.css, handle.shadowRoot || null);
       root.innerHTML = renderTemplate(tpl.html, creative);
+
+      // JS実行（<script>タグ再挿入 + tpl.jsフィールド）
+      execTemplateScripts(root, tpl);
 
       var openBtn = root.querySelector("[data-cx-launcher-open]") || root.firstElementChild;
       if (openBtn) {

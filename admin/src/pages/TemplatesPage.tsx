@@ -46,6 +46,7 @@ type TemplateDoc = {
   name: string;
   html: string;
   css: string;
+  js?: string;
 };
 
 type SampleData = {
@@ -75,7 +76,7 @@ function renderMiniTemplate(tpl: string, data: Record<string, any>): string {
   });
 }
 
-function buildPreviewSrcDoc(opts: { html: string; css: string; data: Record<string, any> }): string {
+function buildPreviewSrcDoc(opts: { html: string; css: string; js?: string; data: Record<string, any> }): string {
   const body = renderMiniTemplate(opts.html, opts.data);
   return `<!doctype html>
 <html>
@@ -94,6 +95,7 @@ function buildPreviewSrcDoc(opts: { html: string; css: string; data: Record<stri
   </head>
   <body>
     ${body}
+    ${opts.js ? `<script>\n${opts.js}\n<\/script>` : ''}
   </body>
 </html>`;
 }
@@ -226,6 +228,7 @@ export default function TemplatesPage() {
   const [name, setName] = useState('Default');
   const [html, setHtml] = useState(DEFAULTS.modal.html);
   const [css, setCss] = useState(DEFAULTS.modal.css);
+  const [js, setJs] = useState('');
 
   const selectedWorkspaceName = useMemo(() => workspaceLabel(workspaces, workspaceId), [workspaces, workspaceId]);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -326,8 +329,8 @@ export default function TemplatesPage() {
   const ALL_DEFAULT_HTML = Object.values(DEFAULTS).map((d) => d.html);
 
   const payload: TemplateDoc = useMemo(
-    () => ({ workspaceId, siteId: siteId || undefined, type, name: name.trim() || 'Template', html, css }),
-    [workspaceId, siteId, type, name, html, css]
+    () => ({ workspaceId, siteId: siteId || undefined, type, name: name.trim() || 'Template', html, css, ...(js.trim() ? { js: js.trim() } : {}) }),
+    [workspaceId, siteId, type, name, html, css, js]
   );
 
   const isDirty = useMemo(() => {
@@ -337,8 +340,8 @@ export default function TemplatesPage() {
   useBeforeUnload(isModalOpen && isDirty);
 
   const previewSrcDoc = useMemo(() => {
-    return buildPreviewSrcDoc({ html, css, data: sample });
-  }, [html, css, sample]);
+    return buildPreviewSrcDoc({ html, css, js, data: sample });
+  }, [html, css, js, sample]);
 
   function resetEditor() {
     setId(genId('tpl'));
@@ -346,6 +349,7 @@ export default function TemplatesPage() {
     setType('modal');
     setHtml(DEFAULTS.modal.html);
     setCss(DEFAULTS.modal.css);
+    setJs('');
     setSaveError('');
     setSaveMessage('');
     setSavedPayloadStr(null);
@@ -366,6 +370,7 @@ export default function TemplatesPage() {
     // ?? を使い、空文字列も意図的な値として保持する（|| だと空文字→デフォルトに戻ってしまう）
     setHtml(row.data.html ?? DEFAULTS[row.data.type].html);
     setCss(row.data.css ?? DEFAULTS[row.data.type].css);
+    setJs(row.data.js ?? '');
     setSaveError('');
     setSaveMessage('');
     setSavedPayloadStr(JSON.stringify(row.data));
@@ -610,18 +615,40 @@ export default function TemplatesPage() {
                 <div style={{ height: 10 }} />
                 <div className="h2">CSSスタイル</div>
                 <CodeEditor value={css} onChange={setCss} minHeight={180} placeholder="/* CSSをここに書いてください */" />
+
+                <div style={{ height: 10 }} />
+                <div className="h2">JavaScript <span className="badge" style={{ background: "rgba(234,179,8,.15)", color: "#92400e", borderColor: "rgba(234,179,8,.3)", fontSize: 11 }}>オプション</span></div>
+                <div className="small" style={{ opacity: 0.68, marginBottom: 6 }}>
+                  テンプレートが表示された直後に実行されます。ページのDOMを読み書きしたり、カウントダウンなどの動的処理が書けます。
+                </div>
+                <details style={{ marginBottom: 6 }}>
+                  <summary className="small" style={{ cursor: "pointer", color: "#2563eb", userSelect: "none" }}>📌 使い方のヒント</summary>
+                  <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "10px 14px", marginTop: 6, fontSize: 12, lineHeight: 1.9 }}>
+                    <div>// テンプレート内の要素を操作</div>
+                    <div><code>document.querySelector('.cx-title').innerText = '動的テキスト';</code></div>
+                    <div style={{ marginTop: 4 }}>// ページ上の文字列を読む</div>
+                    <div><code>var price = document.querySelector('.price')?.innerText;</code></div>
+                    <div style={{ marginTop: 4 }}>// カウントダウンタイマー</div>
+                    <div><code>{'var end = Date.now() + 10 * 60 * 1000;'}</code></div>
+                    <div><code>{'setInterval(function() {'}</code></div>
+                    <div><code>{'  var s = Math.max(0, Math.ceil((end - Date.now()) / 1000));'}</code></div>
+                    <div><code>{'  document.getElementById("cx-timer").innerText = s + "秒";'}</code></div>
+                    <div><code>{'}, 1000);'}</code></div>
+                  </div>
+                </details>
+                <CodeEditor value={js} onChange={setJs} minHeight={160} placeholder="// JavaScriptをここに書いてください&#10;// テンプレート表示直後に実行されます" />
               </div>
 
               <div style={{ flex: 1, minWidth: 280 }}>
                 <div className="h2">プレビュー</div>
-                <div className="small">安全のため script は実行しません。固定表示のテンプレートでも見やすいように iframe 内で補正しています。</div>
+                <div className="small">JSを書いている場合はプレビューでも実行されます。固定表示のテンプレートでも見やすいように iframe 内で補正しています。</div>
                 <div style={{ height: 10 }} />
 
                 <div className="card liquid-page" style={{ background: 'linear-gradient(180deg,#ffffff,#f8fbff)', minWidth: 0 }}>
                   <div className="h2">プレビュー</div>
                   <iframe
                     title="template-preview"
-                    sandbox=""
+                    sandbox="allow-scripts"
                     style={{ width: '100%', height: 420, border: '1px solid rgba(15,23,42,.12)', borderRadius: 12, background: '#0b0b0b' }}
                     srcDoc={previewSrcDoc}
                   />
