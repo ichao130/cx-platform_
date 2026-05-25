@@ -3563,7 +3563,7 @@ export function registerV1Routes(app: Express) {
             const tSnap = await db.collection("templates").doc(a.templateId).get();
             if (tSnap.exists) {
               const t = tSnap.data() as any;
-              template = { template_id: a.templateId, html: t.html || "", css: t.css || "" };
+              template = { template_id: a.templateId, html: t.html || "", css: t.css || "", ...(t.js ? { js: t.js } : {}) };
             }
           }
 
@@ -3582,7 +3582,7 @@ export function registerV1Routes(app: Express) {
             const mtSnap = await db.collection("templates").doc(a.modalTemplateId).get();
             if (mtSnap.exists) {
               const mt = mtSnap.data() as any;
-              modalTemplate = { template_id: a.modalTemplateId, html: mt.html || "", css: mt.css || "" };
+              modalTemplate = { template_id: a.modalTemplateId, html: mt.html || "", css: mt.css || "", ...(mt.js ? { js: mt.js } : {}) };
             }
           }
           // launcher用: modalTemplateIdもない場合、プラットフォームのmodalデフォルトにフォールバック

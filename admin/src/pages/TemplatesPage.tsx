@@ -95,7 +95,7 @@ function buildPreviewSrcDoc(opts: { html: string; css: string; js?: string; data
   </head>
   <body>
     ${body}
-    ${opts.js ? `<script>\n${opts.js}\n<\/script>` : ''}
+    ${opts.js ? `<script>\ndocument.addEventListener('DOMContentLoaded', function() {\n${opts.js}\n});\n<\/script>` : ''}
   </body>
 </html>`;
 }
@@ -648,7 +648,7 @@ export default function TemplatesPage() {
                   <div className="h2">プレビュー</div>
                   <iframe
                     title="template-preview"
-                    sandbox="allow-scripts"
+                    sandbox="allow-scripts allow-modals"
                     style={{ width: '100%', height: 420, border: '1px solid rgba(15,23,42,.12)', borderRadius: 12, background: '#0b0b0b' }}
                     srcDoc={previewSrcDoc}
                   />

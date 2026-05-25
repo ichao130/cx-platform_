@@ -404,10 +404,11 @@
       s.textContent = orig.textContent;
       orig.parentNode.replaceChild(s, orig);
     }
-    // 2) テンプレートの js フィールドを実行
+    // 2) テンプレートの js フィールドを実行（root変数をクロージャで渡す）
     if (tpl && tpl.js && tpl.js.trim()) {
       var s2 = document.createElement("script");
-      s2.textContent = tpl.js;
+      // $cx_root でテンプレートのルート要素を参照できるようにする
+      s2.textContent = "(function(root){\n" + tpl.js + "\n})(document.currentScript && document.currentScript.parentElement);";
       root.appendChild(s2);
     }
   }
