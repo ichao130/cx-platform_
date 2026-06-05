@@ -226,6 +226,7 @@ export default function TemplatesPage() {
   const templateLimit = usePlanLimit(workspaceId, "templates");
   const [type, setType] = useState<TemplateDoc['type']>('modal');
   const [codeTab, setCodeTab] = useState<'html' | 'css' | 'js'>('html');
+  const [codeFullscreen, setCodeFullscreen] = useState(false);
   const [name, setName] = useState('Default');
   const [html, setHtml] = useState(DEFAULTS.modal.html);
   const [css, setCss] = useState(DEFAULTS.modal.css);
@@ -600,7 +601,7 @@ export default function TemplatesPage() {
                 <div style={{ height: 10 }} />
 
                 {/* ---- コードエディタ タブ ---- */}
-                <div style={{ display: "flex", gap: 2, marginBottom: 0, borderBottom: "2px solid rgba(15,23,42,.08)" }}>
+                <div style={{ display: "flex", gap: 2, marginBottom: 0, borderBottom: "2px solid rgba(15,23,42,.08)", alignItems: "center" }}>
                   {(["html", "css", "js"] as const).map((tab) => {
                     const labels: Record<string, string> = { html: "HTML", css: "CSS", js: "JS" };
                     const hasContent = tab === "html" ? !!html : tab === "css" ? !!css : !!js;
@@ -632,7 +633,52 @@ export default function TemplatesPage() {
                       </button>
                     );
                   })}
+                  <button
+                    type="button"
+                    onClick={() => setCodeFullscreen((v) => !v)}
+                    title="エディタを全画面表示"
+                    style={{ marginLeft: "auto", padding: "4px 8px", border: "1px solid rgba(15,23,42,.12)", borderRadius: 6, background: "transparent", cursor: "pointer", fontSize: 14, color: "rgba(15,23,42,.5)", lineHeight: 1 }}
+                  >
+                    ⛶
+                  </button>
                 </div>
+
+                {/* フルスクリーン オーバーレイ */}
+                {codeFullscreen && (
+                  <div style={{ position: "fixed", inset: 0, zIndex: 9998, background: "rgba(15,23,42,.55)", display: "flex", alignItems: "center", justifyContent: "center" }}
+                    onClick={(e) => { if (e.target === e.currentTarget) setCodeFullscreen(false); }}
+                  >
+                    <div style={{ width: "min(1200px, 96vw)", height: "min(800px, 92vh)", background: "#fff", borderRadius: 14, display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 24px 64px rgba(15,23,42,.25)" }}>
+                      {/* ヘッダー */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 2, padding: "0 16px", borderBottom: "2px solid rgba(15,23,42,.08)", flexShrink: 0 }}>
+                        {(["html", "css", "js"] as const).map((tab) => {
+                          const labels: Record<string, string> = { html: "HTML", css: "CSS", js: "JS" };
+                          const hasContent = tab === "html" ? !!html : tab === "css" ? !!css : !!js;
+                          const active = codeTab === tab;
+                          return (
+                            <button key={tab} type="button" onClick={() => setCodeTab(tab)}
+                              style={{ padding: "10px 20px", border: "none", borderBottom: active ? "2px solid #1f6573" : "2px solid transparent", marginBottom: -2, background: "transparent", fontWeight: active ? 700 : 500, fontSize: 14, color: active ? "#1f6573" : "rgba(15,23,42,.5)", cursor: "pointer", display: "flex", alignItems: "center", gap: 5 }}
+                            >
+                              {labels[tab]}
+                              {hasContent && !active && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#94a3b8", display: "inline-block" }} />}
+                            </button>
+                          );
+                        })}
+                        <button type="button" onClick={() => setCodeFullscreen(false)}
+                          style={{ marginLeft: "auto", padding: "6px 12px", border: "1px solid rgba(15,23,42,.12)", borderRadius: 6, background: "transparent", cursor: "pointer", fontSize: 13, color: "rgba(15,23,42,.6)" }}
+                        >
+                          ✕ 閉じる
+                        </button>
+                      </div>
+                      {/* エディタ本体 */}
+                      <div style={{ flex: 1, overflow: "auto", padding: 16 }}>
+                        {codeTab === "html" && <CodeEditor value={html} onChange={setHtml} minHeight={600} placeholder="<!-- HTMLをここに書いてください -->" />}
+                        {codeTab === "css"  && <CodeEditor value={css}  onChange={setCss}  minHeight={600} placeholder="/* CSSをここに書いてください */" />}
+                        {codeTab === "js"   && <CodeEditor value={js}   onChange={setJs}   minHeight={600} placeholder="// JavaScriptをここに書いてください" />}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <div style={{ paddingTop: 10 }}>
                   {codeTab === "html" && (
