@@ -393,6 +393,25 @@
     return { close: close };
   }
 
+  // クリックCVモード: click_link 時に即 conversion を発火するヘルパー
+  function handleClickCtaCv(ctx, apiBase) {
+    if (!ctx.pending_click_cta_cv) return;
+    var pcc = ctx.pending_click_cta_cv;
+    ctx.pending_click_cta_cv = null;
+    postLog(apiBase, {
+      site_id: ctx.site_id,
+      scenario_id: pcc.scenarioId,
+      action_id: pcc.actionId,
+      variant_id: pcc.variantId || null,
+      event: "conversion",
+      url: ctx.url,
+      path: ctx.path,
+      ref: ctx.ref,
+      vid: ctx.vid,
+      sid: ctx.sid
+    }, ctx.site_id, ctx.site_key);
+  }
+
   // テンプレートの <script> タグと tpl.js フィールドを実行する
   // innerHTML で挿入した <script> はブラウザが実行しないため、手動で再生成して appendChild する
   function execTemplateScripts(root, tpl) {
@@ -520,6 +539,8 @@
               vid: ctx.vid,
               sid: ctx.sid
             }, ctx.site_id, ctx.site_key);
+            // クリックCVモード: クリック自体をCV計上
+            handleClickCtaCv(ctx, apiBase);
             // クリックベース: click_link 時にゴール登録
             if (ctx.pending_click_goal) {
               var pcg = ctx.pending_click_goal;
@@ -628,6 +649,7 @@
           vid: ctx.vid,
           sid: ctx.sid
         }, ctx.site_id, ctx.site_key);
+        handleClickCtaCv(ctx, apiBase);
         if (ctx.pending_click_goal) {
           var pcg = ctx.pending_click_goal;
           registerGoal(ctx.site_id, pcg.scenarioId, pcg.actionId, pcg.variantId, pcg.goal);
@@ -742,6 +764,7 @@
             event: "click_link",
             url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid
           }, ctx.site_id, ctx.site_key);
+          handleClickCtaCv(ctx, apiBase);
           if (ctx.pending_click_goal) {
             var pcg = ctx.pending_click_goal;
             registerGoal(ctx.site_id, pcg.scenarioId, pcg.actionId, pcg.variantId, pcg.goal);
@@ -866,6 +889,7 @@
             event: "click_link",
             url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid
           }, ctx.site_id, ctx.site_key);
+          handleClickCtaCv(ctx, apiBase);
           if (ctx.pending_click_goal) {
             var pcg = ctx.pending_click_goal;
             registerGoal(ctx.site_id, pcg.scenarioId, pcg.actionId, pcg.variantId, pcg.goal);
@@ -1359,9 +1383,16 @@
     ctx.variant_id = s.variant_id || null;
 
     // ゴール登録（コンバージョン計測用）
-    if (s.goal && s.goal.type && s.goal.value) {
+    if (s.goal && s.goal.type) {
       var firstActionId = actions.length ? (actions[0].action_id || null) : null;
-      if (s.goal.attribution === "click") {
+      if (s.goal.type === "click_cta") {
+        // クリックCVモード: click_link 発火時に即 conversion をpostする
+        ctx.pending_click_cta_cv = {
+          scenarioId: ctx.scenario_id,
+          actionId: firstActionId,
+          variantId: ctx.variant_id
+        };
+      } else if (s.goal.attribution === "click") {
         // クリックベース: click_link 発火時に登録するため ctx に保持
         ctx.pending_click_goal = {
           scenarioId: ctx.scenario_id,

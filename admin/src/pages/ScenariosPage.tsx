@@ -24,7 +24,8 @@ type ActionRef = {
 type Goal =
   | { type: "path_prefix"; value: string; attribution?: "view" | "click" }
   | { type: "path_exact"; value: string; attribution?: "view" | "click" }
-  | { type: "url_contains"; value: string; attribution?: "view" | "click" };
+  | { type: "url_contains"; value: string; attribution?: "view" | "click" }
+  | { type: "click_cta"; value: string; attribution?: "click" };
 
 type ExperimentVariant = {
   id: string;
@@ -94,7 +95,7 @@ type Scenario = {
 };
 
 const PAGE_TYPES = ["product", "blog_post", "other"] as const;
-const GOAL_TYPES = ["path_prefix", "path_exact", "url_contains"] as const;
+const GOAL_TYPES = ["path_prefix", "path_exact", "url_contains", "click_cta"] as const;
 
 function stripUndefinedDeep<T>(obj: T): T {
   if (Array.isArray(obj)) {
@@ -569,6 +570,10 @@ export default function ScenariosPage() {
 
   const goal: Goal | null = useMemo(() => {
     if (!goalEnabled) return null;
+    // click_cta は value 不要（CTA クリック自体が CV）
+    if (goalType === "click_cta") {
+      return { type: "click_cta", value: "click", attribution: "click" } as any;
+    }
     const v = String(goalValue || "").trim();
     if (!v) return null;
     return { type: goalType, value: v, attribution: goalAttribution } as any;
@@ -973,11 +978,11 @@ export default function ScenariosPage() {
     }
 
     // goal
-    if (s.goal && (s.goal as any).type && (s.goal as any).value) {
+    if (s.goal && (s.goal as any).type) {
       setGoalEnabled(true);
       setGoalType((s.goal as any).type);
-      setGoalValue(String((s.goal as any).value || ""));
-      setGoalAttribution((s.goal as any).attribution === "click" ? "click" : "view");
+      setGoalValue((s.goal as any).type === "click_cta" ? "" : String((s.goal as any).value || ""));
+      setGoalAttribution((s.goal as any).type === "click_cta" ? "click" : (s.goal as any).attribution === "click" ? "click" : "view");
     } else {
       setGoalEnabled(false);
       setGoalType("path_prefix");
@@ -1190,7 +1195,7 @@ export default function ScenariosPage() {
             {rows.filter((r) => scenarioListTab === "active" ? r.data.status === "active" : r.data.status === "paused").map((r) => {
               const ab = !!(r.data.experiment && (r.data.experiment as any).enabled);
               const g = r.data.goal as any;
-              const goalLabel = g?.type ? `${g.type}:${String(g.value || "")}` : "-";
+              const goalLabel = g?.type === "click_cta" ? "クリックCV" : g?.type ? `${g.type}:${String(g.value || "")}` : "-";
               const actionsCount = ab
                 ? ((r.data.experiment as any)?.variants || []).reduce(
                     (acc: number, v: any) => acc + (Array.isArray(v.actionRefs) ? v.actionRefs.length : 0),
@@ -2000,13 +2005,16 @@ export default function ScenariosPage() {
                     コンバージョン計測を有効化
                   </label>
                   <select className="input" style={{ width: 220 }} disabled={!goalEnabled} value={goalType} onChange={(e) => setGoalType(e.target.value as any)}>
+                    <option value="click_cta">🖱️ クリックCV（CTA クリック = CV）</option>
                     <option value="path_prefix">URL前方一致（/thanksで始まる）</option>
                     <option value="path_exact">URLパス完全一致</option>
                     <option value="url_contains">URL部分一致（文字列を含む）</option>
                   </select>
-                  <input className="input" style={{ flex: 1, minWidth: 180 }} disabled={!goalEnabled} value={goalValue} onChange={(e) => setGoalValue(e.target.value)} placeholder={goalType === "path_prefix" ? "例：/thanks" : goalType === "path_exact" ? "例：/order/complete" : "例：complete"} />
+                  {goalType !== "click_cta" && (
+                    <input className="input" style={{ flex: 1, minWidth: 180 }} disabled={!goalEnabled} value={goalValue} onChange={(e) => setGoalValue(e.target.value)} placeholder={goalType === "path_prefix" ? "例：/thanks" : goalType === "path_exact" ? "例：/order/complete" : "例：complete"} />
+                  )}
                 </div>
-                {goalEnabled && (
+                {goalEnabled && goalType !== "click_cta" && (
                   <div className="row" style={{ gap: 8, marginTop: 8, alignItems: "center" }}>
                     <div className="small" style={{ opacity: 0.8 }}>CV計測タイミング:</div>
                     <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", fontSize: 13 }}>
@@ -2020,6 +2028,7 @@ export default function ScenariosPage() {
                   </div>
                 )}
                 <div className="small" style={{ marginTop: 6, opacity: 0.6 }}>
+                  {goalType === "click_cta" && "🖱️ CTAボタンのクリック自体をCV計上します。他サイトへの遷移など、遷移後の計測ができないケースに最適です。"}
                   {goalType === "path_prefix" && "✅ 入力したパスで始まるURLにアクセスしたときにCV計測（例：/thanks → /thanks, /thanks/123 が対象）"}
                   {goalType === "path_exact" && "✅ 入力したパスと完全に一致するURLにアクセスしたときにCV計測"}
                   {goalType === "url_contains" && "✅ URLのどこかに入力した文字列が含まれる場合にCV計測（例：complete → checkout/complete も対象）"}
