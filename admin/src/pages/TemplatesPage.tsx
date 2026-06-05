@@ -225,6 +225,7 @@ export default function TemplatesPage() {
   const [siteId, setSiteId] = useState(() => readSelectedSiteId());
   const templateLimit = usePlanLimit(workspaceId, "templates");
   const [type, setType] = useState<TemplateDoc['type']>('modal');
+  const [codeTab, setCodeTab] = useState<'html' | 'css' | 'js'>('html');
   const [name, setName] = useState('Default');
   const [html, setHtml] = useState(DEFAULTS.modal.html);
   const [css, setCss] = useState(DEFAULTS.modal.css);
@@ -597,46 +598,87 @@ export default function TemplatesPage() {
                 </div>
 
                 <div style={{ height: 10 }} />
-                <div className="h2">HTMLテンプレート</div>
-                <CodeEditor value={html} onChange={setHtml} minHeight={240} placeholder="<!-- HTMLをここに書いてください -->" />
-                <details style={{ marginTop: 6 }}>
-                  <summary className="small" style={{ cursor: "pointer", color: "#2563eb", userSelect: "none" }}>📌 差し込みタグ一覧を見る</summary>
-                  <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "10px 14px", marginTop: 6, fontSize: 12, lineHeight: 1.8 }}>
-                    <div><code>{"{{title}}"}</code> — タイトル</div>
-                    <div><code>{"{{body}}"}</code> — 本文</div>
-                    <div><code>{"{{image_url}}"}</code> — 画像URL</div>
-                    <div><code>{"{{cta_text}}"}</code> — CTAボタン文言</div>
-                    <div><code>{"{{cta_url}}"}</code> — 遷移先URL</div>
-                    <div><code>{"{{cta_url_text}}"}</code> — 補助リンク文言</div>
-                    <div style={{ marginTop: 6, opacity: 0.7 }}><code>{"{{#if image_url}}"}</code>…<code>{"{{/if}}"}</code> — 条件分岐（値がある場合のみ表示）</div>
-                  </div>
-                </details>
 
-                <div style={{ height: 10 }} />
-                <div className="h2">CSSスタイル</div>
-                <CodeEditor value={css} onChange={setCss} minHeight={180} placeholder="/* CSSをここに書いてください */" />
-
-                <div style={{ height: 10 }} />
-                <div className="h2">JavaScript <span className="badge" style={{ background: "rgba(234,179,8,.15)", color: "#92400e", borderColor: "rgba(234,179,8,.3)", fontSize: 11 }}>オプション</span></div>
-                <div className="small" style={{ opacity: 0.68, marginBottom: 6 }}>
-                  テンプレートが表示された直後に実行されます。ページのDOMを読み書きしたり、カウントダウンなどの動的処理が書けます。
+                {/* ---- コードエディタ タブ ---- */}
+                <div style={{ display: "flex", gap: 2, marginBottom: 0, borderBottom: "2px solid rgba(15,23,42,.08)" }}>
+                  {(["html", "css", "js"] as const).map((tab) => {
+                    const labels: Record<string, string> = { html: "HTML", css: "CSS", js: "JS" };
+                    const hasContent = tab === "html" ? !!html : tab === "css" ? !!css : !!js;
+                    const active = codeTab === tab;
+                    return (
+                      <button
+                        key={tab}
+                        type="button"
+                        onClick={() => setCodeTab(tab)}
+                        style={{
+                          padding: "6px 18px",
+                          border: "none",
+                          borderBottom: active ? "2px solid #1f6573" : "2px solid transparent",
+                          marginBottom: -2,
+                          background: "transparent",
+                          fontWeight: active ? 700 : 500,
+                          fontSize: 13,
+                          color: active ? "#1f6573" : "rgba(15,23,42,.5)",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 5,
+                        }}
+                      >
+                        {labels[tab]}
+                        {hasContent && !active && (
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#94a3b8", display: "inline-block" }} />
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
-                <details style={{ marginBottom: 6 }}>
-                  <summary className="small" style={{ cursor: "pointer", color: "#2563eb", userSelect: "none" }}>📌 使い方のヒント</summary>
-                  <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "10px 14px", marginTop: 6, fontSize: 12, lineHeight: 1.9 }}>
-                    <div>// テンプレート内の要素を操作</div>
-                    <div><code>document.querySelector('.cx-title').innerText = '動的テキスト';</code></div>
-                    <div style={{ marginTop: 4 }}>// ページ上の文字列を読む</div>
-                    <div><code>var price = document.querySelector('.price')?.innerText;</code></div>
-                    <div style={{ marginTop: 4 }}>// カウントダウンタイマー</div>
-                    <div><code>{'var end = Date.now() + 10 * 60 * 1000;'}</code></div>
-                    <div><code>{'setInterval(function() {'}</code></div>
-                    <div><code>{'  var s = Math.max(0, Math.ceil((end - Date.now()) / 1000));'}</code></div>
-                    <div><code>{'  document.getElementById("cx-timer").innerText = s + "秒";'}</code></div>
-                    <div><code>{'}, 1000);'}</code></div>
-                  </div>
-                </details>
-                <CodeEditor value={js} onChange={setJs} minHeight={160} placeholder="// JavaScriptをここに書いてください&#10;// テンプレート表示直後に実行されます" />
+
+                <div style={{ paddingTop: 10 }}>
+                  {codeTab === "html" && (
+                    <>
+                      <CodeEditor value={html} onChange={setHtml} minHeight={400} placeholder="<!-- HTMLをここに書いてください -->" />
+                      <details style={{ marginTop: 6 }}>
+                        <summary className="small" style={{ cursor: "pointer", color: "#2563eb", userSelect: "none" }}>📌 差し込みタグ一覧を見る</summary>
+                        <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "10px 14px", marginTop: 6, fontSize: 12, lineHeight: 1.8 }}>
+                          <div><code>{"{{title}}"}</code> — タイトル</div>
+                          <div><code>{"{{body}}"}</code> — 本文</div>
+                          <div><code>{"{{image_url}}"}</code> — 画像URL</div>
+                          <div><code>{"{{cta_text}}"}</code> — CTAボタン文言</div>
+                          <div><code>{"{{cta_url}}"}</code> — 遷移先URL</div>
+                          <div><code>{"{{cta_url_text}}"}</code> — 補助リンク文言</div>
+                          <div style={{ marginTop: 6, opacity: 0.7 }}><code>{"{{#if image_url}}"}</code>…<code>{"{{/if}}"}</code> — 条件分岐（値がある場合のみ表示）</div>
+                        </div>
+                      </details>
+                    </>
+                  )}
+                  {codeTab === "css" && (
+                    <CodeEditor value={css} onChange={setCss} minHeight={400} placeholder="/* CSSをここに書いてください */" />
+                  )}
+                  {codeTab === "js" && (
+                    <>
+                      <div className="small" style={{ opacity: 0.68, marginBottom: 6 }}>
+                        テンプレートが表示された直後に実行されます。ページのDOMを読み書きしたり、カウントダウンなどの動的処理が書けます。
+                      </div>
+                      <CodeEditor value={js} onChange={setJs} minHeight={400} placeholder="// JavaScriptをここに書いてください&#10;// テンプレート表示直後に実行されます" />
+                      <details style={{ marginTop: 6 }}>
+                        <summary className="small" style={{ cursor: "pointer", color: "#2563eb", userSelect: "none" }}>📌 使い方のヒント</summary>
+                        <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "10px 14px", marginTop: 6, fontSize: 12, lineHeight: 1.9 }}>
+                          <div>// テンプレート内の要素を操作</div>
+                          <div><code>document.querySelector('.cx-title').innerText = '動的テキスト';</code></div>
+                          <div style={{ marginTop: 4 }}>// ページ上の文字列を読む</div>
+                          <div><code>var price = document.querySelector('.price')?.innerText;</code></div>
+                          <div style={{ marginTop: 4 }}>// カウントダウンタイマー</div>
+                          <div><code>{'var end = Date.now() + 10 * 60 * 1000;'}</code></div>
+                          <div><code>{'setInterval(function() {'}</code></div>
+                          <div><code>{'  var s = Math.max(0, Math.ceil((end - Date.now()) / 1000));'}</code></div>
+                          <div><code>{'  document.getElementById("cx-timer").innerText = s + "秒";'}</code></div>
+                          <div><code>{'}, 1000);'}</code></div>
+                        </div>
+                      </details>
+                    </>
+                  )}
+                </div>
               </div>
 
               <div style={{ flex: 1, minWidth: 280 }}>
