@@ -1,5 +1,6 @@
 import React, { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged, getAuth } from 'firebase/auth';
+const auth = getAuth();
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db, apiPostJson } from '../firebase';
 import { genId } from '../components/id';
@@ -848,8 +849,37 @@ export default function SitesPage() {
                           </div>
                         </div>
                         {(rows.find(r => r.id === id)?.data as any)?.shopify?.connected && (
-                          <div className="small" style={{ marginTop: 8, color: '#4ade80', fontWeight: 600 }}>
-                            ✓ 連携済み: {(rows.find(r => r.id === id)?.data as any)?.shopify?.shop}
+                          <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                            <div className="small" style={{ color: '#4ade80', fontWeight: 600 }}>
+                              ✓ 連携済み: {(rows.find(r => r.id === id)?.data as any)?.shopify?.shop}
+                            </div>
+                            <button
+                              type="button"
+                              className="btn"
+                              style={{ fontSize: 11, padding: '3px 10px' }}
+                              onClick={async () => {
+                                const btn = document.getElementById('shopify-reinject-btn') as HTMLButtonElement;
+                                if (btn) btn.textContent = '注入中...';
+                                try {
+                                  const token = await auth.currentUser?.getIdToken();
+                                  const res = await fetch('https://api-o56523at7q-an.a.run.app/shopify/reinject', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                                    body: JSON.stringify({ site_id: id }),
+                                  });
+                                  const json = await res.json();
+                                  if (json.ok) alert('✅ SDKを再注入しました！ストアをリロードして確認してください。');
+                                  else alert('❌ エラー: ' + (json.error || 'unknown'));
+                                } catch (e: any) {
+                                  alert('❌ ' + e.message);
+                                } finally {
+                                  if (btn) btn.textContent = 'SDK再注入';
+                                }
+                              }}
+                              id="shopify-reinject-btn"
+                            >
+                              SDK再注入
+                            </button>
                           </div>
                         )}
                       </div>

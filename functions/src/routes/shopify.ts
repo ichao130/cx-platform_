@@ -245,7 +245,36 @@ export function registerShopifyRoutes(app: Express) {
     });
   });
 
-  // ④ アンインストール Webhook
+  // ④ ScriptTag確認 & 再注入（管理画面から呼ぶ）
+  app.post("/shopify/reinject", async (req: Request, res: Response) => {
+    const siteId = String(req.body?.site_id || "").trim();
+    if (!siteId) { res.status(400).json({ error: "site_id required" }); return; }
+
+    const db = adminDb();
+
+    // shopify_stores から siteId で検索
+    const snap = await db.collection("shopify_stores").where("siteId", "==", siteId).limit(1).get();
+    if (snap.empty) { res.status(404).json({ error: "store not found for this site_id" }); return; }
+
+    const storeData = snap.docs[0].data() as any;
+    const { shop, accessToken } = storeData;
+    if (!accessToken) { res.status(400).json({ error: "no access token" }); return; }
+
+    // siteKey を取得
+    const siteDoc = await db.collection("sites").doc(siteId).get();
+    const siteKey = siteDoc.exists ? (siteDoc.data() as any)?.siteKey || "" : "";
+
+    try {
+      const result = await injectScriptTag(shop, accessToken, siteId, siteKey);
+      console.log(`[shopify] reinject result:`, JSON.stringify(result));
+      res.json({ ok: true, shop, siteId, result });
+    } catch (e: any) {
+      console.error("[shopify] reinject failed:", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ⑤ アンインストール Webhook
   app.post("/shopify/webhook/uninstall", async (req: Request, res: Response) => {
     const shopHeader = req.headers["x-shopify-shop-domain"] as string;
     if (!shopHeader) { res.status(400).send("missing shop"); return; }
