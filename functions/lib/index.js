@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.syncRmsDailyAll = exports.deleteMedia = exports.processBackupRun = exports.enqueueDailyBackups = exports.sendMonthlyMisocaInvoices = exports.cleanupExpiredFreeAccounts = exports.api = void 0;
+exports.autoExpireScenarios = exports.syncRmsDailyAll = exports.deleteMedia = exports.processBackupRun = exports.enqueueDailyBackups = exports.sendMonthlyMisocaInvoices = exports.cleanupExpiredFreeAccounts = exports.api = void 0;
 // functions/src/index.ts
 const v2_1 = require("firebase-functions/v2");
 const https_1 = require("firebase-functions/v2/https");
@@ -65,6 +65,7 @@ const MISOCA_CLIENT_SECRET = (0, params_1.defineSecret)("MISOCA_CLIENT_SECRET");
 const v1_1 = require("./routes/v1");
 const mcp_1 = require("./routes/mcp");
 const rms_1 = require("./routes/rms");
+const shopify_1 = require("./routes/shopify");
 const rms_2 = require("./services/rms");
 const misoca_1 = require("./services/misoca");
 const backup_1 = require("./services/backup");
@@ -135,6 +136,7 @@ app.get("/", (_req, res) => res.status(200).send("ok"));
 (0, v1_1.registerV1Routes)(app);
 (0, mcp_1.registerMcpRoutes)(app);
 (0, rms_1.registerRmsRoutes)(app);
+(0, shopify_1.registerShopifyRoutes)(app);
 exports.api = (0, https_1.onRequest)({
     region: "asia-northeast1",
     // コスト爆発防止: インスタンスの最大数を制限
@@ -430,4 +432,30 @@ exports.syncRmsDailyAll = (0, scheduler_1.onSchedule)({
         }
     }
     console.log(`[syncRmsDailyAll] done: success=${success} failed=${failed}`);
+});
+/**
+ * ==========================
+ * autoExpireScenarios
+ * 毎時0分: schedule.endAt を過ぎた active シナリオを自動的に paused に変更
+ * ==========================
+ */
+exports.autoExpireScenarios = (0, scheduler_1.onSchedule)({ region: "asia-northeast1", schedule: "0 * * * *", timeZone: "UTC", timeoutSeconds: 120 }, async () => {
+    const db = (0, admin_1.adminDb)();
+    const now = new Date().toISOString();
+    // active なシナリオを全取得して endAt < now のものを抽出
+    const snap = await db.collection("scenarios").where("status", "==", "active").get();
+    const expired = snap.docs.filter((d) => {
+        const endAt = d.data()?.schedule?.endAt;
+        return endAt && endAt < now;
+    });
+    if (expired.length === 0) {
+        console.log("[autoExpireScenarios] 期限切れシナリオなし");
+        return;
+    }
+    const batch = db.batch();
+    for (const d of expired) {
+        batch.update(d.ref, { status: "paused" });
+    }
+    await batch.commit();
+    console.log(`[autoExpireScenarios] ${expired.length}件を paused に変更:`, expired.map((d) => d.id));
 });

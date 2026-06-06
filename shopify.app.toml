@@ -1,0 +1,23 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "a4eff458fe7e9c87df22fa013b80a672"
+name = "MOKKEDA CONNECT"
+application_url = "https://cx-platform-v1.web.app/shopify-connect.html"
+embedded = true
+
+[webhooks]
+api_version = "2026-04"
+
+[webhooks.privacy_compliance]
+customer_deletion_url = "https://api-o56523at7q-an.a.run.app/shopify/webhook/customers/redact"
+customer_data_request_url = "https://api-o56523at7q-an.a.run.app/shopify/webhook/customers/data_request"
+shop_deletion_url = "https://api-o56523at7q-an.a.run.app/shopify/webhook/shop/redact"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_fulfillment_constraint_rules,read_script_tags,write_script_tags"
+optional_scopes = [ ]
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = [ "https://api-o56523at7q-an.a.run.app/shopify/callback" ]
