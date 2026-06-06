@@ -207,7 +207,7 @@ export function registerShopifyRoutes(app: Express) {
     if (siteId) {
       // siteKey を取得
       const siteDoc = await db.collection("sites").doc(siteId).get();
-      const siteKey = siteDoc.exists ? (siteDoc.data() as any)?.siteKey || "" : "";
+      const siteKey = siteDoc.exists ? (siteDoc.data() as any)?.publicKey || "" : "";
 
       try {
         await injectScriptTag(shop, accessToken, siteId, siteKey);
@@ -313,7 +313,7 @@ export function registerShopifyRoutes(app: Express) {
 
     // siteKey を取得
     const siteDoc = await db.collection("sites").doc(siteId).get();
-    const siteKey = siteDoc.exists ? (siteDoc.data() as any)?.siteKey || "" : "";
+    const siteKey = siteDoc.exists ? (siteDoc.data() as any)?.publicKey || "" : "";
 
     try {
       const result = await injectScriptTag(shop, accessToken, siteId, siteKey);
