@@ -802,28 +802,42 @@ export default function SitesPage() {
                         <div className="small" style={{ opacity: 0.75, marginBottom: 10 }}>
                           Shopifyストアのドメインを入力してインストールするだけ。SDKの注入とWeb Pixelが自動でセットアップされます。
                         </div>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                          <input
-                            className="input"
-                            placeholder="yourstore.myshopify.com"
-                            style={{ flex: 1, fontSize: 12, padding: '6px 10px', background: 'rgba(255,255,255,.1)', border: '1px solid rgba(255,255,255,.2)', color: '#fff', borderRadius: 7 }}
-                            id="shopify-shop-input"
-                          />
-                          <button
-                            type="button"
-                            className="btn btn--primary"
-                            style={{ fontSize: 12, padding: '6px 14px', flexShrink: 0 }}
-                            onClick={() => {
-                              const input = document.getElementById('shopify-shop-input') as HTMLInputElement;
-                              let shop = (input?.value || '').trim();
-                              if (!shop) return;
-                              if (!shop.endsWith('.myshopify.com')) shop = shop + '.myshopify.com';
-                              const apiBase = 'https://api-o56523at7q-an.a.run.app';
-                              window.open(`${apiBase}/shopify/install?shop=${encodeURIComponent(shop)}&site_id=${encodeURIComponent(id)}`, '_blank');
-                            }}
-                          >
-                            インストール
-                          </button>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexDirection: 'column' }}>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', width: '100%' }}>
+                            <input
+                              className="input"
+                              placeholder="yourstore.myshopify.com"
+                              style={{ flex: 1, fontSize: 12, padding: '6px 10px', background: '#fff', border: '1px solid rgba(15,23,42,.2)', color: '#1e293b', borderRadius: 7 }}
+                              id="shopify-shop-input"
+                              onChange={() => {
+                                const err = document.getElementById('shopify-shop-error');
+                                if (err) err.style.display = 'none';
+                              }}
+                            />
+                            <button
+                              type="button"
+                              className="btn btn--primary"
+                              style={{ fontSize: 12, padding: '6px 14px', flexShrink: 0 }}
+                              onClick={() => {
+                                const input = document.getElementById('shopify-shop-input') as HTMLInputElement;
+                                const err = document.getElementById('shopify-shop-error');
+                                let shop = (input?.value || '').trim();
+                                if (!shop) {
+                                  if (err) { err.style.display = 'block'; }
+                                  input?.focus();
+                                  return;
+                                }
+                                if (!shop.endsWith('.myshopify.com')) shop = shop + '.myshopify.com';
+                                const apiBase = 'https://api-o56523at7q-an.a.run.app';
+                                window.open(`${apiBase}/shopify/install?shop=${encodeURIComponent(shop)}&site_id=${encodeURIComponent(id)}`, '_blank');
+                              }}
+                            >
+                              インストール
+                            </button>
+                          </div>
+                          <div id="shopify-shop-error" style={{ display: 'none', fontSize: 12, color: '#f87171', fontWeight: 600 }}>
+                            ⚠ ストアのドメインを入力してください（例: yourstore.myshopify.com）
+                          </div>
                         </div>
                         {(rows.find(r => r.id === id)?.data as any)?.shopify?.connected && (
                           <div className="small" style={{ marginTop: 8, color: '#4ade80', fontWeight: 600 }}>
