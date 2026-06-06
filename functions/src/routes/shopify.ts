@@ -121,10 +121,90 @@ function getCookie(name) {
   return { pixelScript };
 }
 
+// ---- Session Token 検証（App Bridge 3.x / HS256）----
+function decodeSessionToken(token: string, secret: string): { shop: string } | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const sig = crypto
+      .createHmac("sha256", secret)
+      .update(parts[0] + "." + parts[1])
+      .digest("base64")
+      .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    if (sig !== parts[2]) return null;
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString());
+    const shop = String(payload.dest || "").replace(/^https?:\/\//, "");
+    if (!shop) return null;
+    return { shop };
+  } catch { return null; }
+}
+
 // ---- ルート登録 ----
 export function registerShopifyRoutes(app: Express) {
 
-  // ① インストール開始: ?shop=xxx.myshopify.com&site_id=yyy
+  // ① Session Token → Offline Token 交換（App Bridge連携）
+  app.post("/shopify/token-exchange", async (req: Request, res: Response) => {
+    const { session_token } = req.body || {};
+    if (!session_token) { res.status(400).json({ error: "session_token required" }); return; }
+
+    // セッショントークンを検証してshopを取得
+    const decoded = decodeSessionToken(session_token, SHOPIFY_API_SECRET.value());
+    if (!decoded) { res.status(401).json({ error: "Invalid session token" }); return; }
+    const shop = decoded.shop;
+
+    // Session Token → 期限付きOffline Token に交換
+    const tokenRes = await fetch(`https://${shop}/admin/oauth/access_token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_id: SHOPIFY_API_KEY.value(),
+        client_secret: SHOPIFY_API_SECRET.value(),
+        grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+        subject_token: session_token,
+        subject_token_type: "urn:ietf:params:oauth:token-type:id_token",
+        requested_token_type: "urn:shopify:params:oauth:token-type:offline-access-token",
+      }),
+    });
+    const tokenJson = await tokenRes.json() as any;
+
+    if (!tokenRes.ok || !tokenJson.access_token) {
+      console.error("[shopify] token-exchange failed:", JSON.stringify(tokenJson));
+      res.status(400).json({ error: "Token exchange failed: " + JSON.stringify(tokenJson) });
+      return;
+    }
+
+    const newToken: string = tokenJson.access_token;
+    console.log(`[shopify] token-exchange success: ${shop}`);
+
+    // Firestoreにトークンを保存・更新
+    const db = adminDb();
+    const storeId = shop.replace(".myshopify.com", "");
+    const storeRef = db.collection("shopify_stores").doc(storeId);
+    await storeRef.set({
+      shop, accessToken: newToken,
+      tokenUpdatedAt: new Date().toISOString(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    // siteId があればScriptTagを注入
+    const storeDoc = await storeRef.get();
+    const siteId = storeDoc.exists ? (storeDoc.data() as any)?.siteId : null;
+
+    if (siteId) {
+      const siteDoc = await db.collection("sites").doc(siteId).get();
+      const siteKey = siteDoc.exists ? (siteDoc.data() as any)?.publicKey || "" : "";
+      try {
+        await injectScriptTag(shop, newToken, siteId, siteKey);
+        console.log(`[shopify] ScriptTag injected via token-exchange: ${shop}`);
+      } catch (e) {
+        console.error("[shopify] ScriptTag injection failed:", e);
+      }
+    }
+
+    res.json({ ok: true, shop, siteId: siteId || null });
+  });
+
+  // ② インストール開始: ?shop=xxx.myshopify.com&site_id=yyy
   app.get("/shopify/install", (req: Request, res: Response) => {
     // https:// などのプロトコルを除去して正規化
     let shop = String(req.query.shop || "").trim()

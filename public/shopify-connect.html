@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MOKKEDA CONNECT</title>
+  <!-- App Bridge 3.x: data-api-key で自動初期化 -->
+  <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"
+          data-api-key="a4eff458fe7e9c87df22fa013b80a672"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f4f6f8;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      padding: 40px 36px;
+      max-width: 420px;
+      width: 92%;
+      box-shadow: 0 4px 24px rgba(0,0,0,.08);
+      text-align: center;
+    }
+    .logo {
+      width: 56px; height: 56px;
+      background: linear-gradient(135deg, #1f6573, #59b7c6);
+      border-radius: 14px;
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 20px;
+      font-size: 26px;
+    }
+    h1 { margin: 0 0 6px; font-size: 20px; color: #111; }
+    .subtitle { margin: 0 0 28px; font-size: 14px; color: #666; }
+    .spinner {
+      width: 32px; height: 32px;
+      border: 3px solid #e2e8f0;
+      border-top-color: #1f6573;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      margin: 0 auto 16px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .status { font-size: 14px; color: #555; line-height: 1.6; }
+    .status.success { color: #16a34a; font-weight: 600; }
+    .status.error   { color: #dc2626; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      margin-top: 20px; padding: 8px 16px;
+      border-radius: 99px; font-size: 13px; font-weight: 600;
+    }
+    .badge.ok  { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; }
+    .badge.err { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">📊</div>
+  <h1>MOKKEDA CONNECT</h1>
+  <p class="subtitle">Shopifyストアにトラッキングをセットアップします</p>
+
+  <div class="spinner" id="spinner"></div>
+  <div class="status" id="status">認証中...</div>
+  <div id="badge-area"></div>
+</div>
+
+<script>
+  var API_BASE = 'https://api-o56523at7q-an.a.run.app';
+
+  function setStatus(msg, type) {
+    document.getElementById('status').textContent = msg;
+    document.getElementById('status').className = 'status ' + (type || '');
+    if (type) document.getElementById('spinner').style.display = 'none';
+  }
+
+  function setBadge(ok, msg) {
+    document.getElementById('badge-area').innerHTML =
+      '<div class="badge ' + (ok ? 'ok' : 'err') + '">' + msg + '</div>';
+  }
+
+  // App Bridge 3.x: window.shopify が利用可能になるまで待つ
+  function waitForShopify(cb, tries) {
+    tries = tries || 0;
+    if (window.shopify && window.shopify.idToken) {
+      cb(window.shopify);
+    } else if (tries < 30) {
+      setTimeout(function() { waitForShopify(cb, tries + 1); }, 200);
+    } else {
+      setStatus('App Bridgeの読み込みに失敗しました。Shopify管理画面から開き直してください。', 'error');
+      setBadge(false, '❌ 初期化失敗');
+    }
+  }
+
+  waitForShopify(function(shopify) {
+    setStatus('セッショントークンを取得中...');
+
+    shopify.idToken()
+      .then(function(sessionToken) {
+        setStatus('SDKをセットアップ中...');
+        return fetch(API_BASE + '/shopify/token-exchange', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_token: sessionToken })
+        });
+      })
+      .then(function(res) { return res.json(); })
+      .then(function(data) {
+        if (data.ok) {
+          setStatus('セットアップが完了しました！', 'success');
+          setBadge(true, '✅ SDKがインストールされました');
+        } else {
+          setStatus('エラーが発生しました: ' + (data.error || 'unknown'), 'error');
+          setBadge(false, '❌ ' + (data.error || 'セットアップ失敗'));
+        }
+      })
+      .catch(function(e) {
+        setStatus('エラー: ' + e.message, 'error');
+        setBadge(false, '❌ ' + e.message);
+      });
+  });
+</script>
+</body>
+</html>
