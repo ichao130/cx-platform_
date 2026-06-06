@@ -11,7 +11,7 @@ const SHOPIFY_API_KEY    = defineString("SHOPIFY_API_KEY");
 const SHOPIFY_API_SECRET = defineString("SHOPIFY_API_SECRET");
 const SHOPIFY_APP_URL    = defineString("SHOPIFY_APP_URL");
 
-const SHOPIFY_SCOPES = "write_script_tags,read_script_tags,write_pixels,read_pixels";
+const SHOPIFY_SCOPES = "write_script_tags,read_script_tags";
 const ADMIN_APP_URL  = "https://cx-platform-v1.web.app";
 
 // ---- helpers ----
@@ -138,8 +138,7 @@ export function registerShopifyRoutes(app: Express) {
       + `?client_id=${SHOPIFY_API_KEY.value()}`
       + `&scope=${encodeURIComponent(SHOPIFY_SCOPES)}`
       + `&redirect_uri=${encodeURIComponent(redirectUri)}`
-      + `&state=${state}`
-      + (siteId ? `&grant_options[]=per-user` : "");
+      + `&state=${state}`;
 
     // state と siteId を一時保存（10分）
     const db = adminDb();
