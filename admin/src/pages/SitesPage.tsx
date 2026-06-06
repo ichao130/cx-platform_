@@ -848,40 +848,48 @@ export default function SitesPage() {
                             ⚠ ストアのドメインを入力してください（例: yourstore.myshopify.com）
                           </div>
                         </div>
-                        {(rows.find(r => r.id === id)?.data as any)?.shopify?.connected && (
-                          <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                            <div className="small" style={{ color: '#4ade80', fontWeight: 600 }}>
-                              ✓ 連携済み: {(rows.find(r => r.id === id)?.data as any)?.shopify?.shop}
+                        {(() => {
+                          const sd = (rows.find(r => r.id === id)?.data as any)?.shopify;
+                          if (!sd?.connected) return null;
+                          const exp = sd?.tokenExpiresAt ? new Date(sd.tokenExpiresAt) : null;
+                          const expired = exp ? exp < new Date() : false;
+                          const hours = exp ? Math.round((exp.getTime() - Date.now()) / 3600000) : null;
+                          return (
+                            <div style={{ marginTop: 8 }}>
+                              <div className="small" style={{ color: expired ? '#f87171' : '#4ade80', fontWeight: 600, marginBottom: 6 }}>
+                                {expired ? '⚠ トークン期限切れ — Shopify管理画面でMOKKEDA CONNECTを開いて更新してください' : `✓ 連携済み: ${sd.shop}`}
+                                {!expired && hours !== null && <span style={{ fontWeight: 400, opacity: 0.7 }}>（あと約{hours}時間）</span>}
+                              </div>
+                              <button
+                                type="button"
+                                className="btn"
+                                style={{ fontSize: 11, padding: '3px 10px' }}
+                                onClick={async () => {
+                                  const btn = document.getElementById('shopify-reinject-btn') as HTMLButtonElement;
+                                  if (btn) btn.textContent = '注入中...';
+                                  try {
+                                    const token = await auth.currentUser?.getIdToken();
+                                    const res = await fetch('https://api-o56523at7q-an.a.run.app/shopify/reinject', {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                                      body: JSON.stringify({ site_id: id }),
+                                    });
+                                    const json = await res.json();
+                                    if (json.ok) alert('✅ SDKを再注入しました！');
+                                    else alert('❌ エラー: ' + (json.error || 'unknown'));
+                                  } catch (e: any) {
+                                    alert('❌ ' + e.message);
+                                  } finally {
+                                    if (btn) btn.textContent = 'SDK再注入';
+                                  }
+                                }}
+                                id="shopify-reinject-btn"
+                              >
+                                SDK再注入
+                              </button>
                             </div>
-                            <button
-                              type="button"
-                              className="btn"
-                              style={{ fontSize: 11, padding: '3px 10px' }}
-                              onClick={async () => {
-                                const btn = document.getElementById('shopify-reinject-btn') as HTMLButtonElement;
-                                if (btn) btn.textContent = '注入中...';
-                                try {
-                                  const token = await auth.currentUser?.getIdToken();
-                                  const res = await fetch('https://api-o56523at7q-an.a.run.app/shopify/reinject', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                                    body: JSON.stringify({ site_id: id }),
-                                  });
-                                  const json = await res.json();
-                                  if (json.ok) alert('✅ SDKを再注入しました！ストアをリロードして確認してください。');
-                                  else alert('❌ エラー: ' + (json.error || 'unknown'));
-                                } catch (e: any) {
-                                  alert('❌ ' + e.message);
-                                } finally {
-                                  if (btn) btn.textContent = 'SDK再注入';
-                                }
-                              }}
-                              id="shopify-reinject-btn"
-                            >
-                              SDK再注入
-                            </button>
-                          </div>
-                        )}
+                          );
+                        })()}
                       </div>
                     </div>
                   ) : (

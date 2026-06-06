@@ -96,12 +96,21 @@
     }
   }
 
+  function formatExpiry(isoStr) {
+    if (!isoStr) return '';
+    var d = new Date(isoStr);
+    var now = new Date();
+    var diff = Math.round((d - now) / 1000 / 60 / 60);
+    if (diff <= 0) return '（期限切れ）';
+    return '（あと約' + diff + '時間）';
+  }
+
   waitForShopify(function(shopify) {
     setStatus('セッショントークンを取得中...');
 
     shopify.idToken()
       .then(function(sessionToken) {
-        setStatus('SDKをセットアップ中...');
+        setStatus('トークンを更新中...');
         return fetch(API_BASE + '/shopify/token-exchange', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -111,8 +120,12 @@
       .then(function(res) { return res.json(); })
       .then(function(data) {
         if (data.ok) {
-          setStatus('セットアップが完了しました！', 'success');
-          setBadge(true, '✅ SDKがインストールされました');
+          var expiry = data.tokenExpiresAt ? formatExpiry(data.tokenExpiresAt) : '';
+          var msg = data.scriptTagOk
+            ? '✅ SDKがインストールされています'
+            : '⚠️ ScriptTagの登録に失敗しました';
+          setStatus('セットアップ完了！ トークン更新済み' + expiry, 'success');
+          setBadge(data.scriptTagOk, msg);
         } else {
           setStatus('エラーが発生しました: ' + (data.error || 'unknown'), 'error');
           setBadge(false, '❌ ' + (data.error || 'セットアップ失敗'));

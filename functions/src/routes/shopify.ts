@@ -174,15 +174,18 @@ export function registerShopifyRoutes(app: Express) {
     }
 
     const newToken: string = tokenJson.access_token;
-    console.log(`[shopify] token-exchange success: ${shop}`);
+    const expiresIn: number = tokenJson.expires_in || 86400;
+    const tokenExpiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
+    console.log(`[shopify] token-exchange success: ${shop}, expires_in=${expiresIn}s`);
 
-    // Firestoreにトークンを保存・更新
+    // Firestoreにトークンと期限を保存・更新
     const db = adminDb();
     const storeId = shop.replace(".myshopify.com", "");
     const storeRef = db.collection("shopify_stores").doc(storeId);
     await storeRef.set({
       shop, accessToken: newToken,
       tokenUpdatedAt: new Date().toISOString(),
+      tokenExpiresAt,
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
 
@@ -230,10 +233,16 @@ export function registerShopifyRoutes(app: Express) {
       }
     }
 
+    // siteドキュメントのtokenExpiresAtも更新
+    if (siteId) {
+      await db.collection("sites").doc(siteId).update({
+        "shopify.tokenExpiresAt": tokenExpiresAt,
+      }).catch(() => {});
+    }
+
     res.json({
       ok: true, shop, siteId: siteId || null,
-      tokenPrefix: newToken.substring(0, 12) + "...",
-      tokenExchangeResponse: { expires_in: (tokenJson as any).expires_in || null, scope: tokenJson.scope },
+      tokenExpiresAt,
       scriptTagOk, scriptTagError,
     });
   });
