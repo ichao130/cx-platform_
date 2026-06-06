@@ -471,4 +471,125 @@ export function registerShopifyRoutes(app: Express) {
 
     res.status(200).send("ok");
   });
+
+  // ---- GDPR Compliance Webhooks ----
+  // Webhook HMAC検証ヘルパー（bodyはBuffer）
+  function verifyWebhookHmac(rawBody: Buffer, secret: string, hmacHeader: string): boolean {
+    const digest = crypto.createHmac("sha256", secret).update(rawBody).digest("base64");
+    try {
+      return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(hmacHeader));
+    } catch { return false; }
+  }
+
+  // ⑥ customers/data_request — 顧客データ開示リクエスト
+  app.post("/shopify/webhook/customers/data_request", async (req: Request, res: Response) => {
+    const hmacHeader = req.headers["x-shopify-hmac-sha256"] as string;
+    const rawBody: Buffer = (req as any).rawBody;
+    if (!hmacHeader || !rawBody || !verifyWebhookHmac(rawBody, SHOPIFY_API_SECRET.value(), hmacHeader)) {
+      res.status(401).send("HMAC verification failed");
+      return;
+    }
+
+    const body = req.body as any;
+    const shop = req.headers["x-shopify-shop-domain"] as string;
+    const customerId = body?.customer?.id;
+    const email = body?.customer?.email;
+
+    console.log(`[shopify/gdpr] data_request: shop=${shop}, customer=${customerId}, email=${email}`);
+
+    // 当アプリは匿名vidベースの計測のみを行い、顧客個人情報（メール・氏名等）は
+    // 保存していません。顧客IDと紐付くデータはありません。
+    // 必要に応じて logs コレクションを調査してレポートを送付してください。
+
+    res.status(200).send("ok");
+  });
+
+  // ⑦ customers/redact — 顧客データ削除リクエスト
+  app.post("/shopify/webhook/customers/redact", async (req: Request, res: Response) => {
+    const hmacHeader = req.headers["x-shopify-hmac-sha256"] as string;
+    const rawBody: Buffer = (req as any).rawBody;
+    if (!hmacHeader || !rawBody || !verifyWebhookHmac(rawBody, SHOPIFY_API_SECRET.value(), hmacHeader)) {
+      res.status(401).send("HMAC verification failed");
+      return;
+    }
+
+    const body = req.body as any;
+    const shop = req.headers["x-shopify-shop-domain"] as string;
+    const customerId = body?.customer?.id;
+    const ordersToRedact: string[] = body?.orders_to_redact || [];
+
+    console.log(`[shopify/gdpr] customers/redact: shop=${shop}, customer=${customerId}, orders=${ordersToRedact.length}`);
+
+    // order_idと一致するlogsを削除（購入ログに注文IDが含まれる場合）
+    if (ordersToRedact.length > 0) {
+      try {
+        const db = adminDb();
+        const storeDoc = await db.collection("shopify_stores")
+          .where("shop", "==", shop).limit(1).get();
+        if (!storeDoc.empty) {
+          const siteId = storeDoc.docs[0].data().siteId;
+          if (siteId) {
+            for (const orderId of ordersToRedact) {
+              const logsSnap = await db.collection("logs")
+                .where("siteId", "==", siteId)
+                .where("order_id", "==", String(orderId))
+                .get();
+              const batch = db.batch();
+              logsSnap.docs.forEach((d) => batch.delete(d.ref));
+              if (!logsSnap.empty) await batch.commit();
+              console.log(`[shopify/gdpr] deleted ${logsSnap.size} logs for order ${orderId}`);
+            }
+          }
+        }
+      } catch (e) {
+        console.error("[shopify/gdpr] customers/redact error:", e);
+      }
+    }
+
+    res.status(200).send("ok");
+  });
+
+  // ⑧ shop/redact — ショップデータ削除リクエスト（アンインストール後48時間）
+  app.post("/shopify/webhook/shop/redact", async (req: Request, res: Response) => {
+    const hmacHeader = req.headers["x-shopify-hmac-sha256"] as string;
+    const rawBody: Buffer = (req as any).rawBody;
+    if (!hmacHeader || !rawBody || !verifyWebhookHmac(rawBody, SHOPIFY_API_SECRET.value(), hmacHeader)) {
+      res.status(401).send("HMAC verification failed");
+      return;
+    }
+
+    const shop = req.headers["x-shopify-shop-domain"] as string;
+    console.log(`[shopify/gdpr] shop/redact: shop=${shop}`);
+
+    try {
+      const db = adminDb();
+      const storeSnap = await db.collection("shopify_stores")
+        .where("shop", "==", shop).limit(1).get();
+
+      if (!storeSnap.empty) {
+        const storeData = storeSnap.docs[0].data();
+        const siteId = storeData.siteId;
+
+        // logs コレクションからそのサイトのデータを削除
+        if (siteId) {
+          const logsSnap = await db.collection("logs").where("siteId", "==", siteId).get();
+          const chunkSize = 500;
+          for (let i = 0; i < logsSnap.docs.length; i += chunkSize) {
+            const batch = db.batch();
+            logsSnap.docs.slice(i, i + chunkSize).forEach((d) => batch.delete(d.ref));
+            await batch.commit();
+          }
+          console.log(`[shopify/gdpr] shop/redact: deleted ${logsSnap.size} logs for siteId=${siteId}`);
+        }
+
+        // shopify_stores ドキュメントを削除
+        await storeSnap.docs[0].ref.delete();
+        console.log(`[shopify/gdpr] shop/redact: deleted store document for ${shop}`);
+      }
+    } catch (e) {
+      console.error("[shopify/gdpr] shop/redact error:", e);
+    }
+
+    res.status(200).send("ok");
+  });
 }
