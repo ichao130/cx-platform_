@@ -9,7 +9,8 @@ import * as crypto from "crypto";
 
 const SHOPIFY_API_KEY    = defineString("SHOPIFY_API_KEY");
 const SHOPIFY_API_SECRET = defineString("SHOPIFY_API_SECRET");
-const SHOPIFY_APP_URL    = defineString("SHOPIFY_APP_URL");
+const SHOPIFY_APP_URL    = defineString("SHOPIFY_APP_URL"); // Cloud Functions URL（OAuthコールバック用）
+const SHOPIFY_SDK_URL    = "https://cx-platform-v1.web.app"; // SDK配信URL（Firebase Hosting）
 
 const SHOPIFY_SCOPES = "write_script_tags,read_script_tags";
 const ADMIN_APP_URL  = "https://cx-platform-v1.web.app";
@@ -37,8 +38,7 @@ async function shopifyFetch(shop: string, token: string, path: string, body?: an
 
 // ---- ScriptTag 注入 ----
 async function injectScriptTag(shop: string, token: string, siteId: string, siteKey: string) {
-  const appUrl = SHOPIFY_APP_URL.value();
-  const src = `${appUrl}/sdk.js?site_id=${encodeURIComponent(siteId)}&site_key=${encodeURIComponent(siteKey)}`;
+  const src = `${SHOPIFY_SDK_URL}/sdk.js?site_id=${encodeURIComponent(siteId)}&site_key=${encodeURIComponent(siteKey)}`;
 
   // 既存タグを確認（重複防止）
   const existing = await shopifyFetch(shop, token, "script_tags.json");
@@ -54,7 +54,7 @@ async function injectScriptTag(shop: string, token: string, siteId: string, site
 // ---- Web Pixel 登録 ----
 // Web Pixel は REST では登録できないため、GraphQL Admin API を使用
 async function registerWebPixel(shop: string, token: string, siteId: string, siteKey: string) {
-  const appUrl = SHOPIFY_APP_URL.value();
+  const appUrl = SHOPIFY_APP_URL.value(); // APIエンドポイント用
   // すでに登録済みか確認
   const checkRes = await fetch(`https://${shop}/admin/api/2024-01/web_pixels.json`, {
     headers: { "X-Shopify-Access-Token": token },
