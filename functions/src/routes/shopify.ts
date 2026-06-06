@@ -245,7 +245,37 @@ export function registerShopifyRoutes(app: Express) {
     });
   });
 
-  // ④ ScriptTag確認 & 再注入（管理画面から呼ぶ）
+  // ④ 診断エンドポイント（現在のScriptTag一覧を返す）
+  app.get("/shopify/diagnose", async (req: Request, res: Response) => {
+    const siteId = String(req.query.site_id || "").trim();
+    if (!siteId) { res.status(400).json({ error: "site_id required" }); return; }
+
+    const db = adminDb();
+    const snap = await db.collection("shopify_stores").where("siteId", "==", siteId).limit(1).get();
+    if (snap.empty) {
+      // siteIdなしで保存されたドキュメントも確認
+      const allSnap = await db.collection("shopify_stores").get();
+      const docs = allSnap.docs.map(d => ({ id: d.id, siteId: d.data().siteId, shop: d.data().shop, hasToken: !!d.data().accessToken }));
+      res.json({ error: "store not found for site_id", allStores: docs });
+      return;
+    }
+
+    const storeData = snap.docs[0].data() as any;
+    const { shop, accessToken } = storeData;
+
+    // Shopify ScriptTag一覧を取得
+    const scriptTagsRes = await shopifyFetch(shop, accessToken, "script_tags.json");
+
+    res.json({
+      shop,
+      siteId: storeData.siteId,
+      hasToken: !!accessToken,
+      scriptTags: scriptTagsRes.script_tags || [],
+      expectedSrc: `${SHOPIFY_SDK_URL}/sdk.js?site_id=${siteId}`,
+    });
+  });
+
+  // ⑤ ScriptTag確認 & 再注入（管理画面から呼ぶ）
   app.post("/shopify/reinject", async (req: Request, res: Response) => {
     const siteId = String(req.body?.site_id || "").trim();
     if (!siteId) { res.status(400).json({ error: "site_id required" }); return; }
