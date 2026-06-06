@@ -564,6 +564,11 @@ export default function SitesPage() {
                       <div className="small" style={{ opacity: 0.72 }}>
                         ID: <code>{r.id}</code>
                       </div>
+                      {(r.data as any)?.shopify?.connected && (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 4, fontSize: 11, fontWeight: 700, color: '#16a34a', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 20, padding: '2px 8px' }}>
+                          🛍️ Shopify連携済み
+                        </span>
+                      )}
                     </td>
                     <td>
                       <div>{workspaceLabel(workspaces, r.data.workspaceId)}</div>
