@@ -162,7 +162,7 @@ export function registerShopifyRoutes(app: Express) {
         grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
         subject_token: session_token,
         subject_token_type: "urn:ietf:params:oauth:token-type:id_token",
-        requested_token_type: "urn:shopify:params:oauth:token-type:offline-access-token",
+        requested_token_type: "urn:shopify:params:oauth:token-type:online-access-token",
       }),
     });
     const tokenJson = await tokenRes.json() as any;
