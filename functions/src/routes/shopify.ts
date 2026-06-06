@@ -190,18 +190,27 @@ export function registerShopifyRoutes(app: Express) {
     const storeDoc = await storeRef.get();
     const siteId = storeDoc.exists ? (storeDoc.data() as any)?.siteId : null;
 
+    let scriptTagOk = false;
+    let scriptTagError = "";
     if (siteId) {
       const siteDoc = await db.collection("sites").doc(siteId).get();
       const siteKey = siteDoc.exists ? (siteDoc.data() as any)?.publicKey || "" : "";
       try {
         await injectScriptTag(shop, newToken, siteId, siteKey);
+        scriptTagOk = true;
         console.log(`[shopify] ScriptTag injected via token-exchange: ${shop}`);
-      } catch (e) {
-        console.error("[shopify] ScriptTag injection failed:", e);
+      } catch (e: any) {
+        scriptTagError = e.message;
+        console.error("[shopify] ScriptTag injection failed:", e.message);
       }
     }
 
-    res.json({ ok: true, shop, siteId: siteId || null });
+    res.json({
+      ok: true, shop, siteId: siteId || null,
+      tokenPrefix: newToken.substring(0, 12) + "...",
+      tokenExchangeResponse: { expires_in: (tokenJson as any).expires_in || null, scope: tokenJson.scope },
+      scriptTagOk, scriptTagError,
+    });
   });
 
   // ② インストール開始: ?shop=xxx.myshopify.com&site_id=yyy
@@ -369,6 +378,8 @@ export function registerShopifyRoutes(app: Express) {
       shop,
       siteId: storeData.siteId,
       hasToken: !!accessToken,
+      tokenPrefix: accessToken ? accessToken.substring(0, 12) + "..." : null,
+      tokenUpdatedAt: storeData.tokenUpdatedAt || null,
       scriptTags: scriptTagsRes.script_tags || [],
       expectedSrc: src,
       createTestResult: createTestRes,
