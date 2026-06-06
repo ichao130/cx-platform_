@@ -33,6 +33,7 @@ const MISOCA_CLIENT_SECRET = defineSecret("MISOCA_CLIENT_SECRET");
 import { registerV1Routes } from "./routes/v1";
 import { registerMcpRoutes } from "./routes/mcp";
 import { registerRmsRoutes } from "./routes/rms";
+import { registerShopifyRoutes } from "./routes/shopify";
 import { syncRmsData } from "./services/rms";
 import { sendMisocaInvoicesJob } from "./services/misoca";
 import { executeQueuedBackupRun, maybeEnqueueScheduledBackup } from "./services/backup";
@@ -107,6 +108,7 @@ app.get("/", (_req, res) => res.status(200).send("ok"));
 registerV1Routes(app);
 registerMcpRoutes(app);
 registerRmsRoutes(app);
+registerShopifyRoutes(app);
 export const api = onRequest(
 {
   region: "asia-northeast1",

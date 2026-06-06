@@ -1490,6 +1490,14 @@
 
     var siteId = script.getAttribute("data-site-id") || "";
     var siteKey = script.getAttribute("data-site-key") || "";
+    // ScriptTag API経由（Shopifyアプリ）の場合: URLクエリパラメータから読み込む
+    if ((!siteId || !siteKey) && script.src) {
+      try {
+        var srcUrl = new URL(script.src);
+        if (!siteId)  siteId  = srcUrl.searchParams.get("site_id")  || "";
+        if (!siteKey) siteKey = srcUrl.searchParams.get("site_key") || "";
+      } catch (e) {}
+    }
     var apiBase = resolveApiBase(script);
     if (!siteId || !apiBase) {
       log("[cx] missing data-site-id or could not resolve api base");
