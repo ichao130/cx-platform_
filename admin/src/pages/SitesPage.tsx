@@ -827,6 +827,9 @@ export default function SitesPage() {
                                   input?.focus();
                                   return;
                                 }
+                                // https:// や http:// を取り除く
+                                shop = shop.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+                                // .myshopify.com がなければ補完
                                 if (!shop.endsWith('.myshopify.com')) shop = shop + '.myshopify.com';
                                 const apiBase = 'https://api-o56523at7q-an.a.run.app';
                                 window.open(`${apiBase}/shopify/install?shop=${encodeURIComponent(shop)}&site_id=${encodeURIComponent(id)}`, '_blank');

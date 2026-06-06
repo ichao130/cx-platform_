@@ -121,11 +121,14 @@ export function registerShopifyRoutes(app: Express) {
 
   // ① インストール開始: ?shop=xxx.myshopify.com&site_id=yyy
   app.get("/shopify/install", (req: Request, res: Response) => {
-    const shop   = String(req.query.shop || "").trim();
+    // https:// などのプロトコルを除去して正規化
+    let shop = String(req.query.shop || "").trim()
+      .replace(/^https?:\/\//i, "")
+      .replace(/\/+$/, "");
     const siteId = String(req.query.site_id || "").trim();
 
     if (!shop || !shop.endsWith(".myshopify.com")) {
-      res.status(400).send("shop パラメータが不正です");
+      res.status(400).send("shop パラメータが不正です（例: yourstore.myshopify.com）");
       return;
     }
 
