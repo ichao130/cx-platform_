@@ -195,13 +195,38 @@ export function registerShopifyRoutes(app: Express) {
     if (siteId) {
       const siteDoc = await db.collection("sites").doc(siteId).get();
       const siteKey = siteDoc.exists ? (siteDoc.data() as any)?.publicKey || "" : "";
+      const src = `${SHOPIFY_SDK_URL}/sdk.js?site_id=${encodeURIComponent(siteId)}&site_key=${encodeURIComponent(siteKey)}`;
+
+      // ① まずOffline Tokenで試みる
       try {
         await injectScriptTag(shop, newToken, siteId, siteKey);
         scriptTagOk = true;
-        console.log(`[shopify] ScriptTag injected via token-exchange: ${shop}`);
+        console.log(`[shopify] ScriptTag injected via offline token: ${shop}`);
       } catch (e: any) {
-        scriptTagError = e.message;
-        console.error("[shopify] ScriptTag injection failed:", e.message);
+        scriptTagError = "offline_token: " + e.message;
+        console.warn(`[shopify] offline token failed, trying session token: ${e.message}`);
+
+        // ② 失敗したらSession Tokenで直接試みる（session tokenはexpiringなのでAdmin APIが受け付ける可能性あり）
+        try {
+          const stRes = await fetch(`https://${shop}/admin/api/2024-01/script_tags.json`, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${session_token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ script_tag: { event: "onload", src } }),
+          });
+          const stJson = await stRes.json() as any;
+          if (stRes.ok && stJson.script_tag) {
+            scriptTagOk = true;
+            scriptTagError = "";
+            console.log(`[shopify] ScriptTag injected via session token: ${shop}`);
+          } else {
+            scriptTagError += " | session_token: " + JSON.stringify(stJson);
+          }
+        } catch (e2: any) {
+          scriptTagError += " | session_token: " + e2.message;
+        }
       }
     }
 
