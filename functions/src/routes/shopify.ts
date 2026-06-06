@@ -33,7 +33,12 @@ async function shopifyFetch(shop: string, token: string, path: string, body?: an
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
-  return res.json();
+  const json = await res.json();
+  if (!res.ok) {
+    console.error(`[shopifyFetch] ${res.status} ${path}`, JSON.stringify(json));
+    throw new Error(`Shopify API error ${res.status}: ${JSON.stringify(json)}`);
+  }
+  return json;
 }
 
 // ---- ScriptTag 注入 ----
@@ -264,14 +269,30 @@ export function registerShopifyRoutes(app: Express) {
     const { shop, accessToken } = storeData;
 
     // Shopify ScriptTag一覧を取得
-    const scriptTagsRes = await shopifyFetch(shop, accessToken, "script_tags.json");
+    let scriptTagsRes: any = {};
+    let createTestRes: any = {};
+    let createError = "";
+
+    try {
+      scriptTagsRes = await shopifyFetch(shop, accessToken, "script_tags.json");
+    } catch (e: any) { scriptTagsRes = { error: e.message }; }
+
+    // ScriptTag作成テスト
+    const src = `${SHOPIFY_SDK_URL}/sdk.js?site_id=${encodeURIComponent(siteId)}&site_key=test`;
+    try {
+      createTestRes = await shopifyFetch(shop, accessToken, "script_tags.json", {
+        script_tag: { event: "onload", src },
+      });
+    } catch (e: any) { createError = e.message; }
 
     res.json({
       shop,
       siteId: storeData.siteId,
       hasToken: !!accessToken,
       scriptTags: scriptTagsRes.script_tags || [],
-      expectedSrc: `${SHOPIFY_SDK_URL}/sdk.js?site_id=${siteId}`,
+      expectedSrc: src,
+      createTestResult: createTestRes,
+      createError,
     });
   });
 
