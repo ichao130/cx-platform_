@@ -340,13 +340,13 @@ export default function DashboardPage() {
   }, [filteredRows]);
 
   // ---- Computed: シナリオ別比較（常に全シナリオ表示） ----
-  const archivedIds = useMemo(() => new Set(scenarios.filter((s) => (s.data as any)?.status === "paused").map((s) => s.id)), [scenarios]);
+  const activeScenarioIds = useMemo(() => new Set(scenarios.map((s) => s.id)), [scenarios]);
 
   const scenarioStats = useMemo(() => {
     const map = new Map<string, { id: string; name: string; imp: number; cv: number; clk: number }>();
     for (const r of rows) {
-      const sid = String(r.scenarioId || "（未割当）");
-      if (archivedIds.has(sid)) continue; // アーカイブ済みは除外
+      const sid = String(r.scenarioId || "");
+      if (!sid || !activeScenarioIds.has(sid)) continue; // activeシナリオ以外は除外
       if (!map.has(sid)) {
         const sc = scenarios.find((s) => s.id === sid);
         map.set(sid, { id: sid, name: scenarioLabel(sc) || sid, imp: 0, cv: 0, clk: 0 });
@@ -364,7 +364,7 @@ export default function DashboardPage() {
       }))
       .filter((s) => s.imp > 0)
       .sort((a, b) => b.cvr - a.cvr);
-  }, [rows, scenarios, archivedIds]);
+  }, [rows, scenarios, activeScenarioIds]);
 
   // ---- Computed: バリアント別テーブル ----
   const summaryTable = useMemo(() => {
