@@ -472,6 +472,50 @@ export function registerShopifyRoutes(app: Express) {
     res.status(200).send("ok");
   });
 
+  // ⑤' ストータス・最近のログ取得（shopify-connect.html用）
+  app.post("/shopify/status", async (req: Request, res: Response) => {
+    const { session_token } = req.body || {};
+    if (!session_token) { res.status(400).json({ error: "session_token required" }); return; }
+
+    const decoded = decodeSessionToken(session_token, SHOPIFY_API_SECRET.value());
+    if (!decoded) { res.status(401).json({ error: "Invalid session token" }); return; }
+    const shop = decoded.shop;
+
+    const db = adminDb();
+    const storeId = shop.replace(".myshopify.com", "");
+    const storeDoc = await db.collection("shopify_stores").doc(storeId).get();
+    if (!storeDoc.exists) { res.json({ connected: false }); return; }
+
+    const store = storeDoc.data() as any;
+    const siteId = store?.siteId;
+    if (!siteId) { res.json({ connected: true, siteId: null, logs: [] }); return; }
+
+    // 直近24時間の集計
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const logsSnap = await db.collection("logs")
+      .where("site_id", "==", siteId)
+      .where("createdAt", ">=", since)
+      .orderBy("createdAt", "desc")
+      .limit(100)
+      .get();
+
+    let pageviews = 0, purchases = 0, lastSeenAt: string | null = null;
+    logsSnap.forEach(doc => {
+      const d = doc.data();
+      if (d.event === "pageview") pageviews++;
+      if (d.event === "purchase") purchases++;
+      if (!lastSeenAt) lastSeenAt = d.createdAt;
+    });
+
+    res.json({
+      connected: true,
+      shop,
+      siteId,
+      tokenExpiresAt: store.tokenExpiresAt || null,
+      stats24h: { pageviews, purchases, lastSeenAt },
+    });
+  });
+
   // ---- GDPR Compliance Webhooks ----
   // Webhook HMAC検証ヘルパー（bodyはBuffer）
   function verifyWebhookHmac(rawBody: Buffer, secret: string, hmacHeader: string): boolean {

@@ -156,6 +156,22 @@
   </div>
 </div>
 
+<!-- 監視ログ -->
+<div class="status-card" id="monitor-card" style="display:none">
+  <div style="font-size:12px; font-weight:700; color:rgba(255,255,255,.5); letter-spacing:.06em; margin-bottom:14px;">過去24時間のアクティビティ</div>
+  <div style="display:flex; gap:12px; margin-bottom:4px;">
+    <div style="flex:1; background:rgba(89,183,198,.08); border:1px solid rgba(89,183,198,.15); border-radius:10px; padding:12px; text-align:center;">
+      <div style="font-size:24px; font-weight:800; color:#59b7c6;" id="stat-pv">—</div>
+      <div style="font-size:11px; color:rgba(255,255,255,.4); margin-top:2px;">ページビュー</div>
+    </div>
+    <div style="flex:1; background:rgba(74,222,128,.06); border:1px solid rgba(74,222,128,.12); border-radius:10px; padding:12px; text-align:center;">
+      <div style="font-size:24px; font-weight:800; color:#4ade80;" id="stat-cv">—</div>
+      <div style="font-size:11px; color:rgba(255,255,255,.4); margin-top:2px;">購入</div>
+    </div>
+  </div>
+  <div style="font-size:11px; color:rgba(255,255,255,.25); margin-top:10px; text-align:right;" id="stat-last"></div>
+</div>
+
 <!-- 機能リスト -->
 <div class="features">
 
@@ -259,11 +275,29 @@
     return '（接続有効期限: 約' + diff + '時間）';
   }
 
+  function showMonitor(stats) {
+    var card = document.getElementById('monitor-card');
+    if (card) card.style.display = 'block';
+    var pv = document.getElementById('stat-pv');
+    var cv = document.getElementById('stat-cv');
+    var last = document.getElementById('stat-last');
+    if (pv) pv.textContent = stats.pageviews != null ? String(stats.pageviews) : '0';
+    if (cv) cv.textContent = stats.purchases != null ? String(stats.purchases) : '0';
+    if (last && stats.lastSeenAt) {
+      var d = new Date(stats.lastSeenAt);
+      last.textContent = '最終計測: ' + d.toLocaleString('ja-JP');
+    } else if (last) {
+      last.textContent = '過去24時間のアクセスはありません';
+    }
+  }
+
   waitForShopify(function(shopify) {
     setStatus('セッショントークンを取得中...');
+    var _sessionToken = '';
 
     shopify.idToken()
       .then(function(sessionToken) {
+        _sessionToken = sessionToken;
         setStatus('MOKKEDAへ接続中...');
         return fetch(API_BASE + '/shopify/token-exchange', {
           method: 'POST',
@@ -276,14 +310,24 @@
         if (data.ok) {
           var expiry = data.tokenExpiresAt ? formatExpiry(data.tokenExpiresAt) : '';
           setStatus('接続が完了しました' + expiry, 'success');
-          // 機能バッジを更新
           setFeature('pixel', 'ok');
           setFeature('embed', data.scriptTagOk ? 'ok' : 'error');
           setFeature('monitor', 'active');
           setFeature('analytics', 'active');
+          // ログ取得
+          return fetch(API_BASE + '/shopify/status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_token: _sessionToken })
+          });
         } else {
           setStatus('接続エラー: ' + (data.error || 'unknown'), 'error');
+          return null;
         }
+      })
+      .then(function(res) { return res ? res.json() : null; })
+      .then(function(data) {
+        if (data && data.stats24h) showMonitor(data.stats24h);
       })
       .catch(function(e) {
         setStatus('通信エラー: ' + e.message, 'error');
