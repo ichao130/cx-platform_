@@ -868,7 +868,7 @@ export default function AnalyticsPage() {
 
   // ---- computed: シナリオファネル ----
   const funnelData = useMemo(() => {
-    return scenarios.map((sc) => {
+    return scenarios.filter((sc) => !sc.data?.archived).map((sc) => {
       const rows = statRows.filter((r) => r.scenarioId === sc.id);
       const imp = rows.filter((r) => r.event === "impression").reduce((s, r) => s + safeNum(r.count), 0);
       const clk = rows.filter((r) => r.event === "click" || r.event === "click_link").reduce((s, r) => s + safeNum(r.count), 0);
@@ -881,8 +881,8 @@ export default function AnalyticsPage() {
   // ---- computed: 施策比較テーブル ----
   const comparisonData = useMemo(() => [...funnelData], [funnelData]);
 
-  // 期間内に稼働していたシナリオのみ表示
-  const inPeriodScenarios = useMemo(() => scenarios.filter((s) => isScenarioInPeriod(s.id)), [scenarios, isScenarioInPeriod]);
+  // 期間内に稼働していたシナリオのみ表示（アーカイブ除外）
+  const inPeriodScenarios = useMemo(() => scenarios.filter((s) => !s.data?.archived && isScenarioInPeriod(s.id)), [scenarios, isScenarioInPeriod]);
 
   // 施策ファネル: 期間内シナリオのみ
   const inPeriodFunnelData = useMemo(() => funnelData.filter((f) => inPeriodScenarios.some((s) => s.id === f.id)), [funnelData, inPeriodScenarios]);
