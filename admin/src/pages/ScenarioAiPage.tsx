@@ -56,6 +56,7 @@ export default function ScenarioAiPage() {
 
   const [review, setReview] = useState<any | null>(null);
   const [insight, setInsight] = useState<any | null>(null);
+  const [summaryData, setSummaryData] = useState<any | null>(null);
   const [visionLoading, setVisionLoading] = useState(false);
   const [visionStatus, setVisionStatus] = useState<"idle" | "capturing" | "analyzing">("idle");
   const previewRef = useRef<HTMLDivElement | null>(null);
@@ -215,15 +216,25 @@ export default function ScenarioAiPage() {
   }, [sites, workspaceId]);
 
   const stats = useMemo(() => {
-    const counts = insight?.counts || review?.counts || {};
-
+    const counts = summaryData?.counts || insight?.counts || review?.counts || {};
     return {
       impressions: safeNum(counts?.impressions),
       clicks: safeNum(counts?.clicks),
       closes: safeNum(counts?.closes),
       conversions: safeNum(counts?.conversions),
     };
-  }, [insight, review]);
+  }, [summaryData, insight, review]);
+
+  // シナリオ・期間が変わったら自動でサマリ取得
+  useEffect(() => {
+    if (!siteId || !scenarioId || !dayFrom || !dayTo) return;
+    setSummaryData(null);
+    apiPostJson(
+      "/v1/stats/summary",
+      { site_id: siteId, day_from: dayFrom, day_to: dayTo, scope: "scenario", scope_id: scenarioId },
+      { siteId }
+    ).then((d) => setSummaryData(d)).catch(() => {});
+  }, [siteId, scenarioId, dayFrom, dayTo]);
 
 
   async function runReview(forceRefresh = false) {

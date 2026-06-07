@@ -494,7 +494,7 @@ export default function AnalyticsPage() {
   const [expandedProducts, setExpandedProducts] = useState<Set<string>>(new Set());
 
   // ---- 訪問者ジャーニーフィルター ----
-  const [visitorFilter, setVisitorFilter] = useState<"all" | "purchase" | "cv" | "new" | "repeat">("all");
+  const [visitorFilter, setVisitorFilter] = useState<"all" | "purchase" | "scenario_purchase" | "cv" | "new" | "repeat">("all");
   // journeyFilterFrom/To は削除 → 上部の期間指定（effectiveFrom/To）に統一
   const [utmFilter, setUtmFilter] = useState<string>(""); // UTMフィルター（utm_source）
   const [visitorDisplayLimit, setVisitorDisplayLimit] = useState<number>(100); // 表示件数
@@ -1093,18 +1093,53 @@ export default function AnalyticsPage() {
     return sources;
   }, [visitorList]);
 
+  // シナリオ帰属購入のvid集合（購入ありかつシナリオに帰属している訪問者）
+  const scenarioPurchaseVids = useMemo(() => {
+    const vids = new Set<string>();
+    if (!purchaseLogs.length) return vids;
+    const vidToImpScenario = new Map<string, string>();
+    const sortedImp = [...journeyLogs]
+      .filter((l) => l.event === "impression" && l.scenario_id)
+      .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+    for (const l of sortedImp) { if (l.vid) vidToImpScenario.set(l.vid, l.scenario_id); }
+    const vidToClickScenario = new Map<string, string>();
+    const sortedClick = [...journeyLogs]
+      .filter((l) => (l.event === "click" || l.event === "click_link") && l.scenario_id)
+      .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+    for (const l of sortedClick) { if (l.vid) vidToClickScenario.set(l.vid, l.scenario_id); }
+    for (const purchase of purchaseLogs) {
+      if (!purchase.vid) continue;
+      let scenarioId: string | null = purchase.scenario_id || null;
+      if (!scenarioId) {
+        const clickScId = vidToClickScenario.get(purchase.vid) || null;
+        const impScId = vidToImpScenario.get(purchase.vid) || null;
+        if (clickScId) {
+          const sc = scenarios.find((s) => s.id === clickScId);
+          if ((sc?.data?.goal as any)?.attribution === "click") scenarioId = clickScId;
+        }
+        if (!scenarioId && impScId) {
+          const sc = scenarios.find((s) => s.id === impScId);
+          if ((sc?.data?.goal as any)?.attribution !== "click") scenarioId = impScId;
+        }
+      }
+      if (scenarioId && isScenarioInPeriod(scenarioId)) vids.add(purchase.vid);
+    }
+    return vids;
+  }, [purchaseLogs, journeyLogs, scenarios, isScenarioInPeriod]);
+
   // ---- computed: フィルター済み訪問者リスト ----
   // visitorList は既にジャーニーフィルター範囲で集計されているため、
   // ここでは visitorFilter / utmFilter のみ適用
   const filteredVisitorList = useMemo(() => {
     let list = visitorList;
     if (visitorFilter === "purchase") list = list.filter((v) => v.hasPurchase);
+    if (visitorFilter === "scenario_purchase") list = list.filter((v) => scenarioPurchaseVids.has(v.vid));
     if (visitorFilter === "cv") list = list.filter((v) => v.hasConversion || v.hasPurchase);
     if (visitorFilter === "new") list = list.filter((v) => v.isNew === true);
     if (visitorFilter === "repeat") list = list.filter((v) => v.isNew === false);
     if (utmFilter) list = list.filter((v: any) => v.utmSource === utmFilter);
     return list.slice(0, visitorDisplayLimit);
-  }, [visitorList, visitorFilter, utmFilter, visitorDisplayLimit]);
+  }, [visitorList, visitorFilter, scenarioPurchaseVids, utmFilter, visitorDisplayLimit]);
 
   // ---- computed: 選択中訪問者のイベント一覧（購入ログ含む） ----
   const selectedJourney = useMemo(() => {
@@ -2017,7 +2052,7 @@ export default function AnalyticsPage() {
               <span className="small" style={{ opacity: 0.55, whiteSpace: "nowrap", fontWeight: 700, marginRight: 4 }}>このブロックだけに適用</span>
               {/* 絞り込みタイプ */}
               <div style={{ display: "flex", border: "1px solid rgba(15,23,42,.12)", borderRadius: 8, overflow: "hidden", flexShrink: 0 }}>
-                {([["all", "全員"], ["new", "🆕 新規"], ["repeat", "🔁 リピート"], ["purchase", "💰 購入あり"], ["cv", "✅ CV あり"]] as const).map(([val, label]) => (
+                {([["all", "全員"], ["new", "🆕 新規"], ["repeat", "🔁 リピート"], ["purchase", "💰 購入あり"], ["scenario_purchase", "🎯 施策経由購入"], ["cv", "✅ CV あり"]] as const).map(([val, label]) => (
                   <button key={val} type="button" onClick={() => { setVisitorFilter(val); setSelectedVid(null); }} style={{ padding: "5px 10px", border: "none", fontSize: 12, fontWeight: visitorFilter === val ? 700 : 500, background: visitorFilter === val ? "#1f6573" : "transparent", color: visitorFilter === val ? "#fff" : "inherit", cursor: "pointer", whiteSpace: "nowrap" }}>
                     {label}
                   </button>
@@ -2079,7 +2114,7 @@ export default function AnalyticsPage() {
                           onClick={() => { setVisitorFilter("all"); setUtmFilter(""); setSelectedVid(null); }}
                           style={{ fontSize: 11, padding: "3px 8px", border: "none", borderRadius: 20, background: "#fde68a", color: "#92400e", cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}
                         >
-                          {utmFilter ? `📡 ${utmFilter} ×` : visitorFilter === "purchase" ? "💰 購入フィルター中 ×" : visitorFilter === "cv" ? "✅ CVフィルター中 ×" : visitorFilter === "new" ? "🆕 新規フィルター中 ×" : "🔁 リピートフィルター中 ×"}
+                          {utmFilter ? `📡 ${utmFilter} ×` : visitorFilter === "purchase" ? "💰 購入フィルター中 ×" : visitorFilter === "scenario_purchase" ? "🎯 施策経由購入フィルター中 ×" : visitorFilter === "cv" ? "✅ CVフィルター中 ×" : visitorFilter === "new" ? "🆕 新規フィルター中 ×" : "🔁 リピートフィルター中 ×"}
                         </button>
                       )}
                     </div>
