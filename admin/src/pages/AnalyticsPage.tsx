@@ -1708,8 +1708,8 @@ export default function AnalyticsPage() {
                       labelStyle={{ fontWeight: 700, marginBottom: 4 }}
                     />
                     <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
-                    <Bar dataKey="newCount" name="新規" stackId="a" fill="#22c55e" fillOpacity={0.8} radius={[0, 0, 0, 0]} />
-                    <Bar dataKey="repeatCount" name="リピート" stackId="a" fill="#94a3b8" fillOpacity={0.7} radius={[3, 3, 0, 0]} />
+                    <Bar dataKey="newCount" name="新規" stackId="a" fill="#22c55e" fillOpacity={0.8} radius={[0, 0, 0, 0]} maxBarSize={40} />
+                    <Bar dataKey="repeatCount" name="リピート" stackId="a" fill="#94a3b8" fillOpacity={0.7} radius={[3, 3, 0, 0]} maxBarSize={40} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -1836,7 +1836,7 @@ export default function AnalyticsPage() {
                           <XAxis dataKey="label" tick={{ fontSize: 9, fill: "rgba(15,23,42,.4)" }} axisLine={false} tickLine={false} />
                           <YAxis tick={{ fontSize: 9, fill: "rgba(15,23,42,.4)" }} axisLine={false} tickLine={false} />
                           <Tooltip contentStyle={{ fontSize: 11, borderRadius: 6 }} />
-                          <Bar dataKey="imp" name="表示" fill="#7c3aed" fillOpacity={0.65} radius={[2, 2, 0, 0]} />
+                          <Bar dataKey="imp" name="表示" fill="#7c3aed" fillOpacity={0.65} radius={[2, 2, 0, 0]} maxBarSize={32} />
                           <Line type="monotone" dataKey="cv" name="CV" stroke="#16a34a" strokeWidth={2} dot={false} />
                         </ComposedChart>
                       </ResponsiveContainer>
