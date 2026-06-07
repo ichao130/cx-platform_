@@ -356,7 +356,7 @@ export default function AdminPreviewWithPins({
           borderRadius: 16,
           border: "1px solid rgba(255,255,255,0.10)",
           background: "rgba(0,0,0,0.35)",
-          overflow: "hidden",
+          overflow: "auto",
           minWidth: 0,
         }}
       >
