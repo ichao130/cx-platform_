@@ -1,0 +1,5 @@
+.env.cx-platform-v1
+.env.local
+.env.*.local
+lib/
+node_modules/
