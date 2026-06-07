@@ -346,6 +346,7 @@ export default function DashboardPage() {
       const sid = String(r.scenarioId || "（未割当）");
       if (!map.has(sid)) {
         const sc = scenarios.find((s) => s.id === sid);
+        if (sc && (sc.data as any)?.archived) continue; // アーカイブ済みは除外
         map.set(sid, { id: sid, name: scenarioLabel(sc) || sid, imp: 0, cv: 0, clk: 0 });
       }
       const obj = map.get(sid)!;
@@ -632,8 +633,8 @@ export default function DashboardPage() {
                 <YAxis unit="%" tick={{ fontSize: 11 }} />
                 <Tooltip formatter={(v: any) => `${v}%`} />
                 <Legend />
-                <Bar dataKey="cvr" name="CVR%" fill="#16a34a" radius={[3, 3, 0, 0]} />
-                <Bar dataKey="ctr" name="CTR%" fill="#59b7c6" radius={[3, 3, 0, 0]} />
+                <Bar dataKey="cvr" name="CVR%" fill="#16a34a" radius={[3, 3, 0, 0]} maxBarSize={40} />
+                <Bar dataKey="ctr" name="CTR%" fill="#59b7c6" radius={[3, 3, 0, 0]} maxBarSize={40} />
               </BarChart>
             </ResponsiveContainer>
           </div>
