@@ -137,7 +137,8 @@ export default function SitesPage() {
   const [copyMessage, setCopyMessage] = useState('');
   const [copyPixelMessage, setCopyPixelMessage] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [tagMode, setTagMode] = useState<'direct' | 'gtm' | 'shopify'>('direct');
+  const [tagMode, setTagMode] = useState<'shopify' | 'direct' | 'gtm'>('shopify');
+  const [shopifyManualExpanded, setShopifyManualExpanded] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [expandedSiteId, setExpandedSiteId] = useState<string | null>(null);
   const [memberOpLoading, setMemberOpLoading] = useState<string | null>(null);
@@ -745,7 +746,7 @@ export default function SitesPage() {
                       <div className="h2" style={{ marginBottom: 6 }}>埋め込みタグ</div>
                       {/* タブ切り替え */}
                       <div style={{ display: 'flex', gap: 0, background: 'rgba(0,0,0,.15)', borderRadius: 8, padding: 3, width: 'fit-content' }}>
-                        {(['direct', 'gtm', 'shopify'] as const).map((mode) => (
+                        {(['shopify', 'direct', 'gtm'] as const).map((mode) => (
                           <button
                             key={mode}
                             onClick={() => setTagMode(mode)}
@@ -760,9 +761,14 @@ export default function SitesPage() {
                               color: tagMode === mode ? '#1e293b' : 'rgba(255,255,255,.6)',
                               boxShadow: tagMode === mode ? '0 1px 3px rgba(0,0,0,.15)' : 'none',
                               transition: 'all .15s',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 4,
                             }}
                           >
-                            {mode === 'direct' ? '直接埋め込み' : mode === 'gtm' ? 'タグマネージャー' : '🛍️ Shopify'}
+                            {mode === 'shopify' ? (
+                              <>🛍️ Shopify <span style={{ fontSize: 10, background: '#22c55e', color: '#fff', borderRadius: 4, padding: '1px 5px', fontWeight: 700 }}>推奨</span></>
+                            ) : mode === 'direct' ? '直接埋め込み' : 'GTM'}
                           </button>
                         ))}
                       </div>
@@ -787,109 +793,107 @@ export default function SitesPage() {
                   {/* 説明文 */}
                   {tagMode === 'shopify' ? (
                     <div style={{ marginBottom: 12 }}>
-                      <div className="small" style={{ opacity: 0.85, marginBottom: 8 }}>
-                        Shopify管理画面 → <b>オンラインストア &gt; テーマ &gt; コードを編集</b> → <code>theme.liquid</code> を開き、<code>&lt;/head&gt;</code> の直前に貼り付けてください。
+                      {/* アプリ連携（メイン） */}
+                      <div className="small" style={{ opacity: 0.75, marginBottom: 10 }}>
+                        ストアのドメインを入力してインストールするだけ。SDKが自動でセットアップされます。
                       </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
-                        {[
-                          { step: '1', label: 'Shopify管理画面 → オンラインストア → テーマ' },
-                          { step: '2', label: '「コードを編集」→ Layout/theme.liquid を開く' },
-                          { step: '3', label: '</head> の直前に下のコードを貼り付けて保存' },
-                        ].map(({ step, label }) => (
-                          <div key={step} className="small" style={{ display: 'flex', gap: 8, alignItems: 'flex-start', opacity: 0.8 }}>
-                            <span style={{ background: 'rgba(255,255,255,.2)', borderRadius: '50%', width: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, flexShrink: 0, fontSize: 11 }}>{step}</span>
-                            <span>{label}</span>
-                          </div>
-                        ))}
-                      </div>
-                      {/* Shopify アプリ連携ボタン */}
-                      <div style={{ background: 'rgba(255,255,255,.08)', borderRadius: 10, padding: '12px 14px', marginBottom: 8, border: '1px solid rgba(255,255,255,.12)' }}>
-                        <div className="small" style={{ fontWeight: 700, marginBottom: 4 }}>🚀 アプリ連携（推奨）</div>
-                        <div className="small" style={{ opacity: 0.75, marginBottom: 10 }}>
-                          Shopifyストアのドメインを入力してインストールするだけ。SDKの注入とWeb Pixelが自動でセットアップされます。
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexDirection: 'column', marginBottom: 12 }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', width: '100%' }}>
+                          <input
+                            className="input"
+                            placeholder="yourstore.myshopify.com"
+                            style={{ flex: 1, fontSize: 12, padding: '6px 10px', background: '#fff', border: '1px solid rgba(15,23,42,.2)', color: '#1e293b', borderRadius: 7 }}
+                            id="shopify-shop-input"
+                            onChange={() => {
+                              const err = document.getElementById('shopify-shop-error');
+                              if (err) err.style.display = 'none';
+                            }}
+                          />
+                          <button
+                            type="button"
+                            className="btn btn--primary"
+                            style={{ fontSize: 12, padding: '6px 14px', flexShrink: 0 }}
+                            onClick={() => {
+                              const input = document.getElementById('shopify-shop-input') as HTMLInputElement;
+                              const err = document.getElementById('shopify-shop-error');
+                              let shop = (input?.value || '').trim();
+                              if (!shop) {
+                                if (err) { err.style.display = 'block'; }
+                                input?.focus();
+                                return;
+                              }
+                              shop = shop.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+                              if (!shop.endsWith('.myshopify.com')) shop = shop + '.myshopify.com';
+                              const apiBase = 'https://api-o56523at7q-an.a.run.app';
+                              window.open(`${apiBase}/shopify/install?shop=${encodeURIComponent(shop)}&site_id=${encodeURIComponent(id)}`, '_blank');
+                            }}
+                          >
+                            インストール
+                          </button>
                         </div>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexDirection: 'column' }}>
-                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', width: '100%' }}>
-                            <input
-                              className="input"
-                              placeholder="yourstore.myshopify.com"
-                              style={{ flex: 1, fontSize: 12, padding: '6px 10px', background: '#fff', border: '1px solid rgba(15,23,42,.2)', color: '#1e293b', borderRadius: 7 }}
-                              id="shopify-shop-input"
-                              onChange={() => {
-                                const err = document.getElementById('shopify-shop-error');
-                                if (err) err.style.display = 'none';
-                              }}
-                            />
+                        <div id="shopify-shop-error" style={{ display: 'none', fontSize: 12, color: '#f87171', fontWeight: 600 }}>
+                          ⚠ ストアのドメインを入力してください（例: yourstore.myshopify.com）
+                        </div>
+                      </div>
+                      {/* 連携済みステータス */}
+                      {(() => {
+                        const sd = (rows.find(r => r.id === id)?.data as any)?.shopify;
+                        if (!sd?.connected) return null;
+                        const exp = sd?.tokenExpiresAt ? new Date(sd.tokenExpiresAt) : null;
+                        const expired = exp ? exp < new Date() : false;
+                        const hours = exp ? Math.round((exp.getTime() - Date.now()) / 3600000) : null;
+                        return (
+                          <div style={{ marginBottom: 12 }}>
+                            <div className="small" style={{ color: expired ? '#f87171' : '#4ade80', fontWeight: 600, marginBottom: 6 }}>
+                              {expired ? '⚠ トークン期限切れ — Shopify管理画面でMOKKEDA CONNECTを開いて更新してください' : `✓ 連携済み: ${sd.shop}`}
+                              {!expired && hours !== null && <span style={{ fontWeight: 400, opacity: 0.7 }}>（あと約{hours}時間）</span>}
+                            </div>
                             <button
                               type="button"
-                              className="btn btn--primary"
-                              style={{ fontSize: 12, padding: '6px 14px', flexShrink: 0 }}
-                              onClick={() => {
-                                const input = document.getElementById('shopify-shop-input') as HTMLInputElement;
-                                const err = document.getElementById('shopify-shop-error');
-                                let shop = (input?.value || '').trim();
-                                if (!shop) {
-                                  if (err) { err.style.display = 'block'; }
-                                  input?.focus();
-                                  return;
+                              className="btn"
+                              style={{ fontSize: 11, padding: '3px 10px' }}
+                              onClick={async () => {
+                                const btn = document.getElementById('shopify-reinject-btn') as HTMLButtonElement;
+                                if (btn) btn.textContent = '注入中...';
+                                try {
+                                  const token = await auth.currentUser?.getIdToken();
+                                  const res = await fetch('https://api-o56523at7q-an.a.run.app/shopify/reinject', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                                    body: JSON.stringify({ site_id: id }),
+                                  });
+                                  const json = await res.json();
+                                  if (json.ok) alert('✅ SDKを再注入しました！');
+                                  else alert('❌ エラー: ' + (json.error || 'unknown'));
+                                } catch (e: any) {
+                                  alert('❌ ' + e.message);
+                                } finally {
+                                  if (btn) btn.textContent = 'SDK再注入';
                                 }
-                                // https:// や http:// を取り除く
-                                shop = shop.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
-                                // .myshopify.com がなければ補完
-                                if (!shop.endsWith('.myshopify.com')) shop = shop + '.myshopify.com';
-                                const apiBase = 'https://api-o56523at7q-an.a.run.app';
-                                window.open(`${apiBase}/shopify/install?shop=${encodeURIComponent(shop)}&site_id=${encodeURIComponent(id)}`, '_blank');
                               }}
+                              id="shopify-reinject-btn"
                             >
-                              インストール
+                              SDK再注入
                             </button>
                           </div>
-                          <div id="shopify-shop-error" style={{ display: 'none', fontSize: 12, color: '#f87171', fontWeight: 600 }}>
-                            ⚠ ストアのドメインを入力してください（例: yourstore.myshopify.com）
-                          </div>
-                        </div>
-                        {(() => {
-                          const sd = (rows.find(r => r.id === id)?.data as any)?.shopify;
-                          if (!sd?.connected) return null;
-                          const exp = sd?.tokenExpiresAt ? new Date(sd.tokenExpiresAt) : null;
-                          const expired = exp ? exp < new Date() : false;
-                          const hours = exp ? Math.round((exp.getTime() - Date.now()) / 3600000) : null;
-                          return (
-                            <div style={{ marginTop: 8 }}>
-                              <div className="small" style={{ color: expired ? '#f87171' : '#4ade80', fontWeight: 600, marginBottom: 6 }}>
-                                {expired ? '⚠ トークン期限切れ — Shopify管理画面でMOKKEDA CONNECTを開いて更新してください' : `✓ 連携済み: ${sd.shop}`}
-                                {!expired && hours !== null && <span style={{ fontWeight: 400, opacity: 0.7 }}>（あと約{hours}時間）</span>}
-                              </div>
-                              <button
-                                type="button"
-                                className="btn"
-                                style={{ fontSize: 11, padding: '3px 10px' }}
-                                onClick={async () => {
-                                  const btn = document.getElementById('shopify-reinject-btn') as HTMLButtonElement;
-                                  if (btn) btn.textContent = '注入中...';
-                                  try {
-                                    const token = await auth.currentUser?.getIdToken();
-                                    const res = await fetch('https://api-o56523at7q-an.a.run.app/shopify/reinject', {
-                                      method: 'POST',
-                                      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                                      body: JSON.stringify({ site_id: id }),
-                                    });
-                                    const json = await res.json();
-                                    if (json.ok) alert('✅ SDKを再注入しました！');
-                                    else alert('❌ エラー: ' + (json.error || 'unknown'));
-                                  } catch (e: any) {
-                                    alert('❌ ' + e.message);
-                                  } finally {
-                                    if (btn) btn.textContent = 'SDK再注入';
-                                  }
-                                }}
-                                id="shopify-reinject-btn"
-                              >
-                                SDK再注入
-                              </button>
+                        );
+                      })()}
+                      {/* 手動タグ（折りたたみ） */}
+                      <div style={{ borderTop: '1px solid rgba(255,255,255,.1)', paddingTop: 10 }}>
+                        <button
+                          type="button"
+                          onClick={() => setShopifyManualExpanded(v => !v)}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,.5)', fontSize: 12, padding: 0, display: 'flex', alignItems: 'center', gap: 4 }}
+                        >
+                          {shopifyManualExpanded ? '▾' : '▸'} 手動でタグを設置する場合
+                        </button>
+                        {shopifyManualExpanded && (
+                          <div style={{ marginTop: 8 }}>
+                            <div className="small" style={{ opacity: 0.75, marginBottom: 8 }}>
+                              Shopify管理画面 → <b>オンラインストア &gt; テーマ &gt; コードを編集</b> → <code>theme.liquid</code> を開き、<code>&lt;/head&gt;</code> の直前に貼り付けてください。
                             </div>
-                          );
-                        })()}
+                          </div>
+                        )}
                       </div>
                     </div>
                   ) : (
@@ -899,7 +903,7 @@ export default function SitesPage() {
                         : 'GTM の「カスタムHTML」タグとして貼り付けてください'}
                     </div>
                   )}
-                  <pre style={{
+                  {tagMode !== 'shopify' || shopifyManualExpanded ? <pre style={{
                     margin: 0,
                     padding: '16px',
                     background: '#1a2a3a',
@@ -935,7 +939,7 @@ export default function SitesPage() {
                         <span style={{ color: '#7ec8e3' }}>&lt;/script&gt;</span>
                       </>
                     )}
-                  </pre>
+                  </pre> : null}
                   {copyMessage === 'コピーに失敗しました' && (
                     <div className="small" style={{ marginTop: 8, color: 'var(--danger)' }}>
                       クリップボードへのコピーに失敗しました。上のコードを直接選択してコピーしてください。
