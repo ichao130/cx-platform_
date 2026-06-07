@@ -1639,6 +1639,77 @@
       try { localStorage.removeItem(cartKey); } catch (e) {}
     }
     window.addEventListener("cx:purchase", clearCartFlag);
+
+    // ── dataLayer自動監視（GA4/UA購入イベントを自動検知）────────────
+    (function () {
+      var dlPurchaseFired = false;
+
+      function extractPurchaseData(item) {
+        // GA4標準: { event: 'purchase', ecommerce: { transaction_id, value, currency } }
+        // UA標準:  { event: 'purchase', ecommerce: { purchase: { actionField: { id, revenue } } } }
+        try {
+          var ec = item.ecommerce;
+          if (!ec) return null;
+          var transactionId = ec.transaction_id
+            || (ec.purchase && ec.purchase.actionField && ec.purchase.actionField.id)
+            || null;
+          var revenue = ec.value
+            || (ec.purchase && ec.purchase.actionField && (ec.purchase.actionField.revenue || ec.purchase.actionField.value))
+            || 0;
+          var currency = ec.currency || "JPY";
+          return { transactionId: transactionId, revenue: Number(revenue) || 0, currency: currency };
+        } catch (e) { return null; }
+      }
+
+      function handleDataLayerItem(item) {
+        if (!item || typeof item !== "object") return;
+        if (String(item.event || "").toLowerCase() !== "purchase") return;
+        if (dlPurchaseFired) return; // 重複防止
+        var data = extractPurchaseData(item);
+        if (!data) return;
+        dlPurchaseFired = true;
+        log("[cx] dataLayer purchase detected:", data);
+        // cx:purchase イベントを発火（既存処理に乗せる）
+        try {
+          window.dispatchEvent(new CustomEvent("cx:purchase", { detail: data }));
+        } catch (e) {}
+        // 購入ログをサーバーに送信
+        postLog(apiBase, {
+          site_id: siteId,
+          event: "purchase",
+          url: window.location.href,
+          path: window.location.pathname,
+          vid: ctx.vid,
+          sid: ctx.sid,
+          transaction_id: data.transactionId,
+          revenue: data.revenue,
+          currency: data.currency,
+          source: "datalayer",
+        });
+      }
+
+      // ① SDK起動前にすでにpushされているものをスキャン
+      var existing = window.dataLayer;
+      if (Array.isArray(existing)) {
+        for (var i = 0; i < existing.length; i++) {
+          handleDataLayerItem(existing[i]);
+          if (dlPurchaseFired) break;
+        }
+      }
+
+      // ② 以降のpushを監視（Array.pushをオーバーライド）
+      if (!dlPurchaseFired) {
+        window.dataLayer = window.dataLayer || [];
+        var origPush = window.dataLayer.push.bind(window.dataLayer);
+        window.dataLayer.push = function () {
+          for (var i = 0; i < arguments.length; i++) {
+            handleDataLayerItem(arguments[i]);
+          }
+          return origPush.apply(window.dataLayer, arguments);
+        };
+      }
+    })();
+    // ────────────────────────────────────────────────────────────────
     // サンキューページのURLパターンでも自動クリア
     var path = window.location.pathname.toLowerCase();
     if (/\/(thank|thanks|order[-_]?confirm|checkout\/thank|orders\/[a-z0-9]+\/thank)/.test(path)) {
