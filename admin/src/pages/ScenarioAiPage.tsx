@@ -191,6 +191,14 @@ export default function ScenarioAiPage() {
     });
   }, [scenarios, dayFrom, dayTo]);
 
+  // 期間変更でfiltered一覧が変わったとき、現在のscenarioIdが一覧にない場合は先頭にリセット
+  useEffect(() => {
+    if (routeScenarioId) return;
+    if (!filteredScenarios.length) return;
+    const exists = filteredScenarios.find((s) => s.id === scenarioId);
+    if (!exists) setScenarioId(filteredScenarios[0].id);
+  }, [filteredScenarios]);
+
   const scenarioName = useMemo(() => {
     const s = scenarios.find((x) => x.id === scenarioId);
     return s?.data?.name || scenarioId || "";

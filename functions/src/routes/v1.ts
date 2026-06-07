@@ -4398,7 +4398,7 @@ export function registerV1Routes(app: Express) {
       }
 
       const actions = actionSnaps
-        .filter((snap) => snap.exists)
+        .filter((snap) => snap.exists && !(snap.data() as any)?.archived)
         .map((snap) => {
           const d = (snap.data() || {}) as any;
           const actionType = String(d.type || "modal");
