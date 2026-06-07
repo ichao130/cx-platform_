@@ -428,9 +428,8 @@ export default function AdminPreviewWithPins({
           borderRadius: 16,
           border: "1px solid rgba(255,255,255,0.10)",
           background: "rgba(0,0,0,0.35)",
-          overflow: "auto",
+          overflow: "visible",
           minWidth: 0,
-          maxHeight: 640,
         }}
       >
         <div
@@ -479,8 +478,8 @@ export default function AdminPreviewWithPins({
                       cursor: "pointer",
                     }}
                   >
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                      <div style={{ fontWeight: 900 }}>
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+                      <div style={{ fontWeight: 900, minWidth: 0 }}>
                         <span
                           style={{
                             display: "inline-grid",
@@ -491,15 +490,16 @@ export default function AdminPreviewWithPins({
                             background: color,
                             marginRight: 8,
                             fontSize: 12,
+                            flexShrink: 0,
                           }}
                         >
                           {i + 1}
                         </span>
                         {h.label}
                       </div>
-                      <div style={{ fontSize: 11, opacity: 0.7 }}>{h.action_id}</div>
+                      <div style={{ fontSize: 11, opacity: 0.7, flexShrink: 0 }}>{h.action_id}</div>
                     </div>
-                    <div style={{ marginTop: 8, fontSize: 13, opacity: 0.85, lineHeight: 1.6 }}>
+                    <div style={{ marginTop: 8, fontSize: 13, opacity: 0.85, lineHeight: 1.6, whiteSpace: "normal", wordBreak: "break-word" }}>
                       {h.reason}
                     </div>
                   </button>
