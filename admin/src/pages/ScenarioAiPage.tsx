@@ -311,7 +311,7 @@ export default function ScenarioAiPage() {
     setErr("");
     setLoading("insight");
     try {
-      // まず stats/summary で counts を取る（日付レンジ全体を集計）
+      // まず stats/summary で counts を取る（日付レンジ全体を集計・全バリアント合計）
       const sum = await apiPostJson(
         "/v1/stats/summary",
         {
@@ -320,7 +320,7 @@ export default function ScenarioAiPage() {
           day_to: dayTo,
           scope: "scenario",
           scope_id: scenarioId,
-          variant_id: variantId || "na",
+          // variant_id は送らない → API側で全バリアント合計を返す
         },
         { siteId }
       );
