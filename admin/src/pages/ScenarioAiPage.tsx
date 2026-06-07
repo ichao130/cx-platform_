@@ -178,6 +178,19 @@ export default function ScenarioAiPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [siteId]);
 
+  // 指定期間内にアクティブだったシナリオのみ表示
+  const filteredScenarios = useMemo(() => {
+    const fromMs = new Date(dayFrom).getTime();
+    const toMs   = new Date(dayTo).getTime() + 86400000; // 終日含む
+    return scenarios.filter((s) => {
+      const schedule = (s.data as any)?.schedule;
+      if (!schedule || (!schedule.startAt && !schedule.endAt)) return true;
+      const startMs = schedule.startAt ? new Date(schedule.startAt).getTime() : -Infinity;
+      const endMs   = schedule.endAt   ? new Date(schedule.endAt).getTime()   : Infinity;
+      return startMs <= toMs && endMs >= fromMs;
+    });
+  }, [scenarios, dayFrom, dayTo]);
+
   const scenarioName = useMemo(() => {
     const s = scenarios.find((x) => x.id === scenarioId);
     return s?.data?.name || scenarioId || "";
@@ -373,7 +386,7 @@ export default function ScenarioAiPage() {
             onChange={(e) => setScenarioId(e.target.value)}
             disabled={!!routeScenarioId}
           >
-            {scenarios.map((s) => (
+            {filteredScenarios.map((s) => (
               <option key={s.id} value={s.id}>{s.data?.name ? `${s.data.name} (${s.id})` : s.id}</option>
             ))}
           </select>
