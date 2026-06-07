@@ -4,86 +4,242 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MOKKEDA CONNECT</title>
-  <!-- App Bridge 3.x: data-api-key で自動初期化 -->
   <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"
           data-api-key="a4eff458fe7e9c87df22fa013b80a672"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
+
     body {
       margin: 0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #f4f6f8;
+      background: #0f1e2b;
+      min-height: 100vh;
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
-      min-height: 100vh;
+      padding: 24px 16px;
+      color: #e2f0f5;
     }
-    .card {
-      background: #fff;
-      border-radius: 16px;
-      padding: 40px 36px;
-      max-width: 420px;
-      width: 92%;
-      box-shadow: 0 4px 24px rgba(0,0,0,.08);
-      text-align: center;
+
+    /* ── ヘッダー ── */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 32px;
     }
-    .logo {
-      width: 56px; height: 56px;
+    .logo-mark {
+      width: 48px; height: 48px;
       background: linear-gradient(135deg, #1f6573, #59b7c6);
-      border-radius: 14px;
+      border-radius: 12px;
       display: flex; align-items: center; justify-content: center;
-      margin: 0 auto 20px;
-      font-size: 26px;
+      font-size: 22px;
+      flex-shrink: 0;
+      box-shadow: 0 4px 16px rgba(89,183,198,.35);
     }
-    h1 { margin: 0 0 6px; font-size: 20px; color: #111; }
-    .subtitle { margin: 0 0 28px; font-size: 14px; color: #666; }
+    .header-text h1 {
+      margin: 0; font-size: 20px; font-weight: 800;
+      background: linear-gradient(90deg, #59b7c6, #a5dde8);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      letter-spacing: -.02em;
+    }
+    .header-text p {
+      margin: 2px 0 0; font-size: 12px; color: rgba(255,255,255,.45); font-weight: 500;
+    }
+
+    /* ── ステータスカード ── */
+    .status-card {
+      width: 100%; max-width: 460px;
+      background: linear-gradient(160deg, #162534, #1a2f40);
+      border: 1px solid rgba(89,183,198,.18);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 8px 32px rgba(0,0,0,.3);
+    }
+
+    .status-row {
+      display: flex; align-items: center; gap: 12px;
+      margin-bottom: 16px;
+    }
     .spinner {
-      width: 32px; height: 32px;
-      border: 3px solid #e2e8f0;
-      border-top-color: #1f6573;
+      width: 28px; height: 28px; flex-shrink: 0;
+      border: 2.5px solid rgba(89,183,198,.2);
+      border-top-color: #59b7c6;
       border-radius: 50%;
       animation: spin .7s linear infinite;
-      margin: 0 auto 16px;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .status { font-size: 14px; color: #555; line-height: 1.6; }
-    .status.success { color: #16a34a; font-weight: 600; }
-    .status.error   { color: #dc2626; }
-    .badge {
-      display: inline-flex; align-items: center; gap: 6px;
-      margin-top: 20px; padding: 8px 16px;
-      border-radius: 99px; font-size: 13px; font-weight: 600;
+    .status-icon { font-size: 22px; flex-shrink: 0; }
+    .status-text { font-size: 14px; color: rgba(255,255,255,.75); line-height: 1.5; }
+    .status-text.success { color: #4ade80; font-weight: 600; }
+    .status-text.error   { color: #f87171; font-weight: 600; }
+
+    .divider { height: 1px; background: rgba(255,255,255,.07); margin: 16px 0; }
+
+    /* ── 機能リスト ── */
+    .features { width: 100%; max-width: 460px; display: flex; flex-direction: column; gap: 10px; }
+
+    .feature-item {
+      display: flex; align-items: flex-start; gap: 12px;
+      background: rgba(255,255,255,.04);
+      border: 1px solid rgba(255,255,255,.07);
+      border-radius: 12px;
+      padding: 14px 16px;
+      transition: border-color .2s, background .2s;
     }
-    .badge.ok  { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; }
-    .badge.err { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+    .feature-item.active {
+      border-color: rgba(89,183,198,.3);
+      background: rgba(89,183,198,.06);
+    }
+    .feature-icon {
+      width: 36px; height: 36px; flex-shrink: 0;
+      border-radius: 10px;
+      background: rgba(89,183,198,.12);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 17px;
+    }
+    .feature-item.active .feature-icon {
+      background: rgba(89,183,198,.22);
+    }
+    .feature-body { flex: 1; }
+    .feature-title {
+      font-size: 13px; font-weight: 700; color: #e2f0f5;
+      margin-bottom: 2px;
+    }
+    .feature-desc {
+      font-size: 11px; color: rgba(255,255,255,.45); line-height: 1.5;
+    }
+    .feature-badge {
+      font-size: 10px; font-weight: 700;
+      padding: 2px 7px; border-radius: 99px;
+      background: rgba(89,183,198,.18); color: #59b7c6;
+      align-self: center; flex-shrink: 0;
+    }
+    .feature-badge.ok {
+      background: rgba(74,222,128,.15); color: #4ade80;
+    }
+    .feature-badge.pending {
+      background: rgba(251,191,36,.12); color: #fbbf24;
+    }
+
+    /* ── フッター ── */
+    .footer {
+      margin-top: 24px;
+      font-size: 11px;
+      color: rgba(255,255,255,.2);
+      text-align: center;
+    }
   </style>
 </head>
 <body>
-<div class="card">
-  <div class="logo">📊</div>
-  <h1>MOKKEDA CONNECT</h1>
-  <p class="subtitle">Shopifyストアにトラッキングをセットアップします</p>
 
-  <div class="spinner" id="spinner"></div>
-  <div class="status" id="status">認証中...</div>
-  <div id="badge-area"></div>
+<div class="header">
+  <div class="logo-mark">📊</div>
+  <div class="header-text">
+    <h1>MOKKEDA CONNECT</h1>
+    <p>Powered by BRANBERY HEAG!!</p>
+  </div>
 </div>
+
+<!-- ステータスカード -->
+<div class="status-card">
+  <div class="status-row">
+    <div class="spinner" id="spinner"></div>
+    <div class="status-icon" id="status-icon" style="display:none"></div>
+    <div class="status-text" id="status">Shopify認証を確認中...</div>
+  </div>
+  <div class="divider"></div>
+  <div style="font-size:11px; color:rgba(255,255,255,.3); line-height:1.7">
+    このページを開くたびにセッショントークンが更新され、MOKKEDAとの接続が維持されます。
+  </div>
+</div>
+
+<!-- 機能リスト -->
+<div class="features">
+
+  <div class="feature-item" id="feat-pixel">
+    <div class="feature-icon">📈</div>
+    <div class="feature-body">
+      <div class="feature-title">Web Pixel — 購買ログ取得</div>
+      <div class="feature-desc">チェックアウト完了時の売上・訪問者IDをリアルタイムで収集します</div>
+    </div>
+    <div class="feature-badge pending" id="badge-pixel">待機中</div>
+  </div>
+
+  <div class="feature-item" id="feat-embed">
+    <div class="feature-icon">🧩</div>
+    <div class="feature-body">
+      <div class="feature-title">App Embed — 接客タグ読み込み</div>
+      <div class="feature-desc">ストアの全ページにMOKKEDAのSDKを自動インストールします</div>
+    </div>
+    <div class="feature-badge pending" id="badge-embed">待機中</div>
+  </div>
+
+  <div class="feature-item" id="feat-monitor">
+    <div class="feature-icon">🛡️</div>
+    <div class="feature-body">
+      <div class="feature-title">接続状態モニタリング</div>
+      <div class="feature-desc">Shopify管理画面から接続状態と最終ログをいつでも確認できます</div>
+    </div>
+    <div class="feature-badge pending" id="badge-monitor">待機中</div>
+  </div>
+
+  <div class="feature-item" id="feat-analytics">
+    <div class="feature-icon">🔍</div>
+    <div class="feature-body">
+      <div class="feature-title">MOKKEDA — 詳細分析・接客施策</div>
+      <div class="feature-desc">訪問者行動の可視化、AIによる施策提案、CVR改善レポートを提供します</div>
+    </div>
+    <div class="feature-badge" id="badge-analytics">MOKKEDA</div>
+  </div>
+
+</div>
+
+<div class="footer">MOKKEDA CONNECT v1 · cx-platform</div>
 
 <script>
   var API_BASE = 'https://api-o56523at7q-an.a.run.app';
 
   function setStatus(msg, type) {
-    document.getElementById('status').textContent = msg;
-    document.getElementById('status').className = 'status ' + (type || '');
-    if (type) document.getElementById('spinner').style.display = 'none';
+    var el = document.getElementById('status');
+    var spinner = document.getElementById('spinner');
+    var icon = document.getElementById('status-icon');
+    el.textContent = msg;
+    el.className = 'status-text' + (type ? ' ' + type : '');
+    if (type === 'success') {
+      spinner.style.display = 'none';
+      icon.style.display = 'block';
+      icon.textContent = '✅';
+    } else if (type === 'error') {
+      spinner.style.display = 'none';
+      icon.style.display = 'block';
+      icon.textContent = '❌';
+    }
   }
 
-  function setBadge(ok, msg) {
-    document.getElementById('badge-area').innerHTML =
-      '<div class="badge ' + (ok ? 'ok' : 'err') + '">' + msg + '</div>';
+  function setFeature(id, status) {
+    // status: 'ok' | 'error' | 'active'
+    var item = document.getElementById('feat-' + id);
+    var badge = document.getElementById('badge-' + id);
+    if (!item || !badge) return;
+    if (status === 'ok') {
+      item.classList.add('active');
+      badge.className = 'feature-badge ok';
+      badge.textContent = '有効';
+    } else if (status === 'error') {
+      badge.className = 'feature-badge';
+      badge.style.background = 'rgba(248,113,113,.15)';
+      badge.style.color = '#f87171';
+      badge.textContent = 'エラー';
+    } else if (status === 'active') {
+      item.classList.add('active');
+      badge.className = 'feature-badge ok';
+      badge.textContent = '接続中';
+    }
   }
 
-  // App Bridge 3.x: window.shopify が利用可能になるまで待つ
   function waitForShopify(cb, tries) {
     tries = tries || 0;
     if (window.shopify && window.shopify.idToken) {
@@ -92,17 +248,15 @@
       setTimeout(function() { waitForShopify(cb, tries + 1); }, 200);
     } else {
       setStatus('App Bridgeの読み込みに失敗しました。Shopify管理画面から開き直してください。', 'error');
-      setBadge(false, '❌ 初期化失敗');
     }
   }
 
   function formatExpiry(isoStr) {
     if (!isoStr) return '';
     var d = new Date(isoStr);
-    var now = new Date();
-    var diff = Math.round((d - now) / 1000 / 60 / 60);
-    if (diff <= 0) return '（期限切れ）';
-    return '（あと約' + diff + '時間）';
+    var diff = Math.round((d - new Date()) / 1000 / 60 / 60);
+    if (diff <= 0) return '（トークン期限切れ）';
+    return '（接続有効期限: 約' + diff + '時間）';
   }
 
   waitForShopify(function(shopify) {
@@ -110,7 +264,7 @@
 
     shopify.idToken()
       .then(function(sessionToken) {
-        setStatus('トークンを更新中...');
+        setStatus('MOKKEDAへ接続中...');
         return fetch(API_BASE + '/shopify/token-exchange', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -121,19 +275,18 @@
       .then(function(data) {
         if (data.ok) {
           var expiry = data.tokenExpiresAt ? formatExpiry(data.tokenExpiresAt) : '';
-          var msg = data.scriptTagOk
-            ? '✅ SDKがインストールされています'
-            : '⚠️ ScriptTagの登録に失敗しました';
-          setStatus('セットアップ完了！ トークン更新済み' + expiry, 'success');
-          setBadge(data.scriptTagOk, msg);
+          setStatus('接続が完了しました' + expiry, 'success');
+          // 機能バッジを更新
+          setFeature('pixel', 'ok');
+          setFeature('embed', data.scriptTagOk ? 'ok' : 'error');
+          setFeature('monitor', 'active');
+          setFeature('analytics', 'active');
         } else {
-          setStatus('エラーが発生しました: ' + (data.error || 'unknown'), 'error');
-          setBadge(false, '❌ ' + (data.error || 'セットアップ失敗'));
+          setStatus('接続エラー: ' + (data.error || 'unknown'), 'error');
         }
       })
       .catch(function(e) {
-        setStatus('エラー: ' + e.message, 'error');
-        setBadge(false, '❌ ' + e.message);
+        setStatus('通信エラー: ' + e.message, 'error');
       });
   });
 </script>
