@@ -340,7 +340,7 @@ export default function DashboardPage() {
   }, [filteredRows]);
 
   // ---- Computed: シナリオ別比較（常に全シナリオ表示） ----
-  const archivedIds = useMemo(() => new Set(scenarios.filter((s) => (s.data as any)?.archived).map((s) => s.id)), [scenarios]);
+  const archivedIds = useMemo(() => new Set(scenarios.filter((s) => (s.data as any)?.status === "paused").map((s) => s.id)), [scenarios]);
 
   const scenarioStats = useMemo(() => {
     const map = new Map<string, { id: string; name: string; imp: number; cv: number; clk: number }>();
