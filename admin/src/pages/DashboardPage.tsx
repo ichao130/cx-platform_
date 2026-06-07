@@ -610,7 +610,7 @@ export default function DashboardPage() {
                 <YAxis yAxisId="right" orientation="right" unit="%" tick={{ fontSize: 11 }} />
                 <Tooltip formatter={(value: any, name: string) => name === "CVR%" ? `${value}%` : fmtInt(value)} />
                 <Legend />
-                <Bar yAxisId="left" dataKey="impression" name="表示回数" fill="rgba(89,183,198,.5)" radius={[3, 3, 0, 0]} />
+                <Bar yAxisId="left" dataKey="impression" name="表示回数" fill="rgba(89,183,198,.5)" radius={[3, 3, 0, 0]} maxBarSize={40} />
                 <Line yAxisId="right" type="monotone" dataKey="cvr" name="CVR%" stroke="#16a34a" strokeWidth={2} dot={false} />
               </ComposedChart>
             </ResponsiveContainer>
