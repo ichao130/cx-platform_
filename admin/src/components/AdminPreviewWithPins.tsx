@@ -430,6 +430,7 @@ export default function AdminPreviewWithPins({
           background: "rgba(0,0,0,0.35)",
           overflow: "auto",
           minWidth: 0,
+          maxHeight: 640,
         }}
       >
         <div
@@ -508,11 +509,6 @@ export default function AdminPreviewWithPins({
           )}
 
           <div style={{ height: 14 }} />
-
-          <div style={{ fontSize: 12, opacity: 0.65, lineHeight: 1.6 }}>
-            ✅ Phase2の設計：AIは <b>action_id</b> を返すだけ。<br />
-            selectorは使わないので壊れにくい。
-          </div>
         </div>
       </div>
     </div>
