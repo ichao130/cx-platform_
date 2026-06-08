@@ -137,7 +137,7 @@ export default function SitesPage() {
   const [copyMessage, setCopyMessage] = useState('');
   const [copyPixelMessage, setCopyPixelMessage] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [tagMode, setTagMode] = useState<'shopify' | 'direct' | 'gtm'>('shopify');
+  const [tagMode, setTagMode] = useState<'shopify' | 'direct' | 'gtm'>('direct');
   const [shopifyManualExpanded, setShopifyManualExpanded] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [expandedSiteId, setExpandedSiteId] = useState<string | null>(null);
@@ -746,7 +746,7 @@ export default function SitesPage() {
                       <div className="h2" style={{ marginBottom: 6 }}>埋め込みタグ</div>
                       {/* タブ切り替え */}
                       <div style={{ display: 'flex', gap: 0, background: 'rgba(0,0,0,.15)', borderRadius: 8, padding: 3, width: 'fit-content' }}>
-                        {(['shopify', 'direct', 'gtm'] as const).map((mode) => (
+                        {(['direct', 'gtm', 'shopify'] as const).map((mode) => (
                           <button
                             key={mode}
                             onClick={() => setTagMode(mode)}
@@ -766,9 +766,7 @@ export default function SitesPage() {
                               gap: 4,
                             }}
                           >
-                            {mode === 'shopify' ? (
-                              <>🛍️ Shopify <span style={{ fontSize: 10, background: '#22c55e', color: '#fff', borderRadius: 4, padding: '1px 5px', fontWeight: 700 }}>推奨</span></>
-                            ) : mode === 'direct' ? '直接埋め込み' : 'GTM'}
+                            {mode === 'shopify' ? '🛍️ Shopify' : mode === 'direct' ? '直接埋め込み' : 'GTM'}
                           </button>
                         ))}
                       </div>
