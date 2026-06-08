@@ -4,6 +4,7 @@ import { useParams } from "react-router-dom";
 import { collection, onSnapshot, orderBy, query, where } from "firebase/firestore";
 import { db, apiPostJson } from "../firebase";
 import AdminPreviewWithPins from "../components/AdminPreviewWithPins";
+import { SkeletonBar } from "../components/Skeleton";
 import html2canvas from "html2canvas";
 
 
@@ -79,7 +80,7 @@ export default function ScenarioAiPage() {
     return String(site.data?.name || site.data?.siteName || site.id || "");
   }
 
-  function MiniStat({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
+  function MiniStat({ label, value, sub, loading: statLoading }: { label: string; value: string | number; sub?: string; loading?: boolean }) {
     return (
       <div
         className="card"
@@ -90,8 +91,12 @@ export default function ScenarioAiPage() {
         }}
       >
         <div className="small" style={{ opacity: 0.7 }}>{label}</div>
-        <div style={{ fontSize: 22, fontWeight: 900, marginTop: 6 }}>{value}</div>
-        {sub ? <div className="small" style={{ opacity: 0.6, marginTop: 6 }}>{sub}</div> : null}
+        <div style={{ fontSize: 22, fontWeight: 900, marginTop: 6, minHeight: 28 }}>
+          {statLoading ? <SkeletonBar width="60%" height={20} radius={4} /> : value}
+        </div>
+        {sub ? <div className="small" style={{ opacity: 0.6, marginTop: 6 }}>
+          {statLoading ? <SkeletonBar width="40%" height={10} radius={3} /> : sub}
+        </div> : null}
       </div>
     );
   }
@@ -491,10 +496,10 @@ export default function ScenarioAiPage() {
           gap: 12,
         }}
       >
-        <MiniStat label="表示回数" value={formatInt(stats.impressions)} />
-        <MiniStat label="クリック数" value={formatInt(stats.clicks)} />
-        <MiniStat label="閉じる操作" value={formatInt(stats.closes)} />
-        <MiniStat label="コンバージョン" value={formatInt(stats.conversions)} />
+        <MiniStat label="表示回数" value={formatInt(stats.impressions)} loading={summaryData === null && !!siteId} />
+        <MiniStat label="クリック数" value={formatInt(stats.clicks)} loading={summaryData === null && !!siteId} />
+        <MiniStat label="閉じる操作" value={formatInt(stats.closes)} loading={summaryData === null && !!siteId} />
+        <MiniStat label="コンバージョン" value={formatInt(stats.conversions)} loading={summaryData === null && !!siteId} />
       </div>
 
       <div style={{ height: 14 }} />
@@ -505,8 +510,14 @@ export default function ScenarioAiPage() {
         <div className="small" style={{ opacity: 0.75 }}>
           AIがデータを分析し、改善ポイントと次のアクションを提案します。
         </div>
-        {!insight ? (
-          <div className="small" style={{ opacity: 0.8 }}>まだ生成してません。上の「AI運用アシスタント生成」を押してね。</div>
+        {loadingSet.has("insight") ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12 }}>
+            <SkeletonBar width="90%" height={16} radius={4} />
+            <SkeletonBar width="70%" height={14} radius={4} />
+            <SkeletonBar width="80%" height={14} radius={4} />
+          </div>
+        ) : !insight ? (
+          <div className="small" style={{ opacity: 0.8 }}>まだ生成してません。上の「AI分析を実行」を押してね。</div>
         ) : insight.rule?.grade === "need_data" || !insight.ai ? (
           <div style={{ marginTop: 8 }}>
             <div className="small" style={{ color: "#f59e0b", fontWeight: 700 }}>
@@ -549,8 +560,14 @@ export default function ScenarioAiPage() {
             </span>
           )}
         </div>
-        {!review?.packs ? (
-          <div className="small" style={{ opacity: 0.8, marginTop: 10 }}>まだ生成してません。上の「AIレビュー生成」を押してね。</div>
+        {loadingSet.has("review") ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12 }}>
+            <SkeletonBar width="100%" height={120} radius={8} />
+            <SkeletonBar width="75%" height={14} radius={4} />
+            <SkeletonBar width="55%" height={14} radius={4} />
+          </div>
+        ) : !review?.packs ? (
+          <div className="small" style={{ opacity: 0.8, marginTop: 10 }}>まだ生成してません。上の「AI分析を実行」を押してね。</div>
         ) : (
           <div style={{ marginTop: 12 }}>
             <AdminPreviewWithPins

@@ -15,6 +15,7 @@ import {
   BarChart,
 } from "recharts";
 import { db, apiPostJson } from "../firebase";
+import { SkeletonBar, SkeletonCard } from "../components/Skeleton";
 
 type StatRow = {
   siteId: string;
@@ -102,23 +103,31 @@ function KpiCard({
   sub,
   accent,
   trend,
+  loading,
 }: {
   label: string;
   value: string | number;
   sub?: string;
   accent?: string;
   trend?: "up" | "down" | "neutral";
+  loading?: boolean;
 }) {
   const trendIcon = trend === "up" ? "↑" : trend === "down" ? "↓" : null;
   const trendColor = trend === "up" ? "#16a34a" : trend === "down" ? "#dc2626" : undefined;
   return (
     <div className="card" style={{ padding: 18, background: "#fff", border: "1px solid rgba(15,23,42,.08)", minWidth: 0 }}>
       <div className="small" style={{ opacity: 0.68 }}>{label}</div>
-      <div style={{ fontSize: 28, fontWeight: 800, lineHeight: 1.1, marginTop: 8, letterSpacing: "-.03em", color: accent }}>
-        {value}
-        {trendIcon && <span style={{ fontSize: 16, marginLeft: 6, color: trendColor }}>{trendIcon}</span>}
+      <div style={{ fontSize: 28, fontWeight: 800, lineHeight: 1.1, marginTop: 8, letterSpacing: "-.03em", color: accent, minHeight: 34 }}>
+        {loading ? <SkeletonBar width="65%" height={26} radius={5} /> : (
+          <>
+            {value}
+            {trendIcon && <span style={{ fontSize: 16, marginLeft: 6, color: trendColor }}>{trendIcon}</span>}
+          </>
+        )}
       </div>
-      {sub && <div className="small" style={{ opacity: 0.58, marginTop: 6 }}>{sub}</div>}
+      {sub && <div className="small" style={{ opacity: 0.58, marginTop: 6 }}>
+        {loading ? <SkeletonBar width="50%" height={10} radius={3} /> : sub}
+      </div>}
     </div>
   );
 }
@@ -149,6 +158,8 @@ export default function DashboardPage() {
   const [reviewData, setReviewData] = useState<any | null>(null);
   const [loadingReview, setLoadingReview] = useState(false);
   const [purchaseLogs, setPurchaseLogs] = useState<any[]>([]);
+  const [rowsLoading, setRowsLoading] = useState(true);
+  const [purchaseLoading, setPurchaseLoading] = useState(true);
 
   // Auth
   useEffect(() => {
@@ -251,8 +262,10 @@ export default function DashboardPage() {
       where("day", "<=", isoDay(end)),
       orderBy("day", "asc")
     );
-    return onSnapshot(q, (snap) => setRows(snap.docs.map((d) => d.data() as any)), () => {
+    setRowsLoading(true);
+    return onSnapshot(q, (snap) => { setRows(snap.docs.map((d) => d.data() as any)); setRowsLoading(false); }, () => {
       setRows([]);
+      setRowsLoading(false);
       setErr("データの読み込みに失敗しました。しばらく待ってから再試行してください。");
     });
   }, [siteId, days]);
@@ -269,7 +282,8 @@ export default function DashboardPage() {
       where("event", "==", "purchase"),
       where("createdAt", ">", Timestamp.fromDate(since))
     );
-    return onSnapshot(q, (snap) => setPurchaseLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), () => setPurchaseLogs([]));
+    setPurchaseLoading(true);
+    return onSnapshot(q, (snap) => { setPurchaseLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() }))); setPurchaseLoading(false); }, () => { setPurchaseLogs([]); setPurchaseLoading(false); });
   }, [siteId, days]);
 
   const latestDay = useMemo(() => {
@@ -537,7 +551,9 @@ export default function DashboardPage() {
             <div key={signal.label} style={{ border: "1px solid rgba(15,23,42,.08)", borderRadius: 14, padding: 16, background: "linear-gradient(180deg,#ffffff,#f8fbff)" }}>
               <div className="small" style={{ opacity: 0.7, marginBottom: 8 }}>{signal.title}</div>
               <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
-                <div style={{ fontSize: 24, fontWeight: 800, color: signal.accent, lineHeight: 1 }}>{signal.value}</div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: signal.accent, lineHeight: 1, minHeight: 28 }}>
+                    {rowsLoading || purchaseLoading ? <SkeletonBar width="60%" height={22} radius={5} /> : signal.value}
+                  </div>
                 <div className="small" style={{ fontWeight: 700 }}>{signal.label}</div>
               </div>
               <div className="small">{signal.description}</div>
@@ -548,24 +564,27 @@ export default function DashboardPage() {
 
       {/* KPIカード */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }}>
-        <KpiCard label="表示回数" value={fmtInt(summary.imp)} sub={`過去${days}日間`} />
-        <KpiCard label="コンバージョン数" value={fmtInt(summary.cv)} sub="CV総数" accent={summary.cv > 0 ? "#16a34a" : undefined} />
+        <KpiCard label="表示回数" value={fmtInt(summary.imp)} sub={`過去${days}日間`} loading={rowsLoading} />
+        <KpiCard label="コンバージョン数" value={fmtInt(summary.cv)} sub="CV総数" accent={summary.cv > 0 ? "#16a34a" : undefined} loading={rowsLoading} />
         <KpiCard
           label="CVR（転換率）"
           value={summary.imp > 0 ? `${summary.cvr}%` : "—"}
           sub="CV ÷ 表示回数"
           accent={summary.cvr >= 3 ? "#16a34a" : summary.cvr >= 1 ? "#2563eb" : undefined}
+          loading={rowsLoading}
         />
         <KpiCard
           label="CTR（クリック率）"
           value={summary.imp > 0 ? `${summary.ctr}%` : "—"}
           sub="クリック ÷ 表示回数"
+          loading={rowsLoading}
         />
         <KpiCard
           label="離脱率"
           value={summary.imp > 0 ? `${summary.closeRate}%` : "—"}
           sub="閉じる ÷ 表示回数"
           accent={summary.closeRate > 70 ? "#dc2626" : undefined}
+          loading={rowsLoading}
         />
       </div>
 
@@ -577,17 +596,20 @@ export default function DashboardPage() {
             value={`¥${totalRevenue.toLocaleString("ja-JP")}`}
             sub={`過去${days}日間`}
             accent="#16a34a"
+            loading={purchaseLoading}
           />
           <KpiCard
             label="🛒 購入件数"
             value={fmtInt(purchaseCount)}
             sub="購入回数"
             accent={purchaseCount > 0 ? "#2563eb" : undefined}
+            loading={purchaseLoading}
           />
           <KpiCard
             label="📊 客単価"
             value={avgOrderValue > 0 ? `¥${avgOrderValue.toLocaleString("ja-JP")}` : "—"}
             sub="売上 ÷ 購入件数"
+            loading={purchaseLoading}
           />
         </div>
       )}
@@ -598,7 +620,11 @@ export default function DashboardPage() {
         <div className="small" style={{ opacity: 0.65, marginBottom: 16 }}>
           棒グラフ（左軸）= 表示回数　折れ線（右軸）= CVR%。量と質を同時に確認できます。
         </div>
-        {trendData.length === 0 ? (
+        {rowsLoading ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "8px 0" }}>
+            <SkeletonBar width="100%" height={140} radius={8} />
+          </div>
+        ) : trendData.length === 0 ? (
           <div className="small" style={{ opacity: 0.55, padding: "32px 0", textAlign: "center" }}>
             {siteId ? "データがまだありません" : "サイトを選択してください"}
           </div>
@@ -735,9 +761,15 @@ export default function DashboardPage() {
       </div>
 
       {/* シナリオ別サマリーテーブル */}
-      {scenarioStats.length > 0 && (
+      {(scenarioStats.length > 0 || rowsLoading) && (
         <div className="card" style={{ marginBottom: 14, padding: 20 }}>
           <div className="h2" style={{ marginBottom: 16 }}>施策別パフォーマンス一覧</div>
+          {rowsLoading && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {[1,2,3].map((i) => <SkeletonBar key={i} width={`${90 - i * 10}%`} height={18} radius={4} />)}
+            </div>
+          )}
+          {!rowsLoading && scenarioStats.length > 0 && (
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
@@ -779,6 +811,7 @@ export default function DashboardPage() {
               </tbody>
             </table>
           </div>
+          )}
         </div>
       )}
     </div>
