@@ -301,7 +301,7 @@ type TrendPoint = { day: string; label: string; [key: string]: number | string }
 function DailyTrendTooltip({ active, payload, label }: { active?: boolean; payload?: any[]; label?: string }) {
   if (!active || !payload || payload.length === 0) return null;
 
-  const order = ["pv", "session", "uv"];
+  const order = ["pv", "session", "uv", "revenue"];
   const sortedPayload = [...payload].sort((a, b) => order.indexOf(String(a.dataKey)) - order.indexOf(String(b.dataKey)));
 
   return (
@@ -314,7 +314,11 @@ function DailyTrendTooltip({ active, payload, label }: { active?: boolean; paylo
               <span style={{ width: 8, height: 8, borderRadius: 99, background: entry.color || "#94a3b8", flexShrink: 0 }} />
               <span style={{ color: "#475569", whiteSpace: "nowrap" }}>{entry.name}</span>
             </div>
-            <span style={{ fontWeight: 700, color: "#0f172a" }}>{fmtInt(entry.value)}</span>
+            <span style={{ fontWeight: 700, color: "#0f172a" }}>
+              {entry.dataKey === "revenue"
+                ? `¥${Math.round(Number(entry.value)).toLocaleString()}`
+                : fmtInt(entry.value)}
+            </span>
           </div>
         ))}
       </div>
@@ -930,11 +934,14 @@ export default function AnalyticsPage() {
         ?? new Set(pvLogs.filter((l) => utcIsoToJstDay(l.createdAt || "") === day && l.sid).map((l) => l.sid)).size;
       const imp = statRows.filter((r) => r.day === day && r.event === "impression").reduce((s, r) => s + safeNum(r.count), 0);
       const cv = statRows.filter((r) => r.day === day && r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
-      result.push({ day, label, pv, uv, session, imp, cv });
+      const revenue = purchaseLogs
+        .filter((l) => utcIsoToJstDay(l.createdAt || "") === day)
+        .reduce((s, l) => s + (typeof l.revenue === "number" ? l.revenue : 0), 0);
+      result.push({ day, label, pv, uv, session, imp, cv, revenue });
       cur.setDate(cur.getDate() + 1);
     }
     return result;
-  }, [pvLogs, journeyLogs, statRows, effectiveFrom, effectiveTo]);
+  }, [pvLogs, journeyLogs, statRows, purchaseLogs, effectiveFrom, effectiveTo]);
 
   // ---- computed: 最近のセッション ----
   const sessionData = useMemo(() => {
@@ -1659,7 +1666,7 @@ export default function AnalyticsPage() {
                 <div className="card" style={{ padding: "20px 20px 8px", background: "#fff" }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: "#374151", marginBottom: 16 }}>📈 ページビュー / セッション数 / ユニーク訪問者</div>
                   <ResponsiveContainer width="100%" height={200}>
-                    <AreaChart data={dailyTrend} margin={{ top: 4, right: 12, left: -16, bottom: 0 }}>
+                    <ComposedChart data={dailyTrend} margin={{ top: 4, right: 48, left: -16, bottom: 0 }}>
                       <defs>
                         <linearGradient id="gradPv" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="5%" stopColor="#2563eb" stopOpacity={0.18} />
@@ -1676,13 +1683,15 @@ export default function AnalyticsPage() {
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,.06)" />
                       <XAxis dataKey="label" tick={{ fontSize: 10, fill: "rgba(15,23,42,.45)" }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fontSize: 10, fill: "rgba(15,23,42,.45)" }} axisLine={false} tickLine={false} />
+                      <YAxis yAxisId="left" tick={{ fontSize: 10, fill: "rgba(15,23,42,.45)" }} axisLine={false} tickLine={false} />
+                      <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: "#16a34a" }} axisLine={false} tickLine={false} tickFormatter={(v) => v === 0 ? "0" : `¥${(v >= 1000 ? `${Math.round(v / 1000)}k` : Math.round(v))}`} />
                       <Tooltip content={<DailyTrendTooltip />} />
                       <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
-                      <Area type="monotone" dataKey="pv" name="ページビュー" stroke="#2563eb" strokeWidth={2} fill="url(#gradPv)" dot={{ r: 3, fill: "#2563eb", strokeWidth: 0 }} activeDot={{ r: 5 }} />
-                      <Area type="monotone" dataKey="session" name="セッション数" stroke="#7c3aed" strokeWidth={2} fill="url(#gradSession)" dot={{ r: 3, fill: "#7c3aed", strokeWidth: 0 }} activeDot={{ r: 5 }} />
-                      <Area type="monotone" dataKey="uv" name="ユニーク訪問者" stroke="#0891b2" strokeWidth={2} fill="url(#gradUv)" dot={{ r: 3, fill: "#0891b2", strokeWidth: 0 }} activeDot={{ r: 5 }} />
-                    </AreaChart>
+                      <Area yAxisId="left" type="monotone" dataKey="pv" name="ページビュー" stroke="#2563eb" strokeWidth={2} fill="url(#gradPv)" dot={{ r: 3, fill: "#2563eb", strokeWidth: 0 }} activeDot={{ r: 5 }} />
+                      <Area yAxisId="left" type="monotone" dataKey="session" name="セッション数" stroke="#7c3aed" strokeWidth={2} fill="url(#gradSession)" dot={{ r: 3, fill: "#7c3aed", strokeWidth: 0 }} activeDot={{ r: 5 }} />
+                      <Area yAxisId="left" type="monotone" dataKey="uv" name="ユニーク訪問者" stroke="#0891b2" strokeWidth={2} fill="url(#gradUv)" dot={{ r: 3, fill: "#0891b2", strokeWidth: 0 }} activeDot={{ r: 5 }} />
+                      <Line yAxisId="right" type="monotone" dataKey="revenue" name="売上" stroke="#16a34a" strokeWidth={2} strokeDasharray="4 2" dot={{ r: 3, fill: "#16a34a", strokeWidth: 0 }} activeDot={{ r: 5 }} />
+                    </ComposedChart>
                   </ResponsiveContainer>
                 </div>
 
