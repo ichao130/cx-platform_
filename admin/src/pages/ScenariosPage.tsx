@@ -1255,14 +1255,14 @@ export default function ScenariosPage() {
                         複製
                       </button>
                       <span style={{ width: 8, display: "inline-block" }} />
-                      <button
-                        className="btn btn--danger"
-                        disabled={r.data.status === "active"}
-                        title={r.data.status === "active" ? "アクティブな施策は削除できません。先にアーカイブしてください。" : ""}
-                        onClick={() => setDeleteTarget({ id: r.id, name: String(r.data?.name || r.id) })}
-                      >
-                        削除
-                      </button>
+                      {r.data.status !== "active" && (
+                        <button
+                          className="btn btn--danger"
+                          onClick={() => setDeleteTarget({ id: r.id, name: String(r.data?.name || r.id) })}
+                        >
+                          削除
+                        </button>
+                      )}
                     </td>
                   </tr>
 
