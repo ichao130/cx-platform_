@@ -222,9 +222,9 @@ function FunnelStep({
 }
 
 // ---- StatCard ----
-function StatCard({ label, value, sub, accent, loading, numericValue }: {
+function StatCard({ label, value, sub, accent, loading, numericValue, formatter }: {
   label: string; value: string | number; sub?: string; accent?: string;
-  loading?: boolean; numericValue?: number;
+  loading?: boolean; numericValue?: number; formatter?: (n: number) => string;
 }) {
   const str = String(value);
   const fontSize = str.length > 10 ? 18 : str.length > 8 ? 22 : str.length > 6 ? 26 : 30;
@@ -235,7 +235,7 @@ function StatCard({ label, value, sub, accent, loading, numericValue }: {
         {loading ? (
           <SkeletonBar width="70%" height={fontSize * 0.9} radius={4} />
         ) : numericValue !== undefined ? (
-          <CountUp value={numericValue} />
+          <CountUp value={numericValue} formatter={formatter} />
         ) : (
           value
         )}
@@ -1460,11 +1460,11 @@ export default function AnalyticsPage() {
               />
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }}>
-              <StatCard label="アクティブ訪問者" value={fmtInt(activeVisitors)} sub="ユニーク訪問者数" accent="#22c55e" />
-              <StatCard label="今日のPV" value={fmtInt(todayPvCount)} sub="ページビュー" />
-              <StatCard label="今日の施策表示" value={fmtInt(todayImpCount)} sub="インプレッション" accent="#2563eb" />
-              <StatCard label="今日のCV" value={fmtInt(todayCvCount)} sub="コンバージョン" accent="#f59e0b" />
-              <StatCard label="今日の売上" value={todayRevenue > 0 ? `¥${Math.round(todayRevenue).toLocaleString()}` : "—"} numericValue={todayRevenue} sub="購入合計" accent="#16a34a" loading={purchaseLoading} />
+              <StatCard label="アクティブ訪問者" value={fmtInt(activeVisitors)} sub="ユニーク訪問者数" accent="#22c55e" loading={journeyLoading} />
+              <StatCard label="今日のPV" value={fmtInt(todayPvCount)} sub="ページビュー" loading={statsLoading} />
+              <StatCard label="今日の施策表示" value={fmtInt(todayImpCount)} sub="インプレッション" accent="#2563eb" loading={statsLoading} />
+              <StatCard label="今日のCV" value={fmtInt(todayCvCount)} sub="コンバージョン" accent="#f59e0b" loading={statsLoading} />
+              <StatCard label="今日の売上" value="—" numericValue={todayRevenue} sub="購入合計" accent="#16a34a" loading={purchaseLoading} formatter={(n) => n > 0 ? `¥${Math.round(n).toLocaleString()}` : "—"} />
             </div>
             {/* タブ: 直近のイベント / セッション行動 */}
             <TabBar
@@ -1556,8 +1556,8 @@ export default function AnalyticsPage() {
               ) : (
                 <>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }}>
-                    <StatCard label="売上合計" value={`¥${Math.round(totalRevenue).toLocaleString()}`} numericValue={Math.round(totalRevenue)} sub={`${purchaseCount}件の購入`} accent="#22c55e" loading={statsLoading} />
-                    <StatCard label="平均注文額" value={`¥${Math.round(avgOrderValue).toLocaleString()}`} numericValue={Math.round(avgOrderValue)} sub="AOV" accent="#0891b2" loading={statsLoading} />
+                    <StatCard label="売上合計" value="—" numericValue={Math.round(totalRevenue)} sub={`${purchaseCount}件の購入`} accent="#22c55e" loading={statsLoading} formatter={(n) => `¥${n.toLocaleString()}`} />
+                    <StatCard label="平均注文額" value="—" numericValue={Math.round(avgOrderValue)} sub="AOV" accent="#0891b2" loading={statsLoading} formatter={(n) => `¥${n.toLocaleString()}`} />
                     <StatCard label="購入件数" value={fmtInt(purchaseCount)} numericValue={purchaseCount} sub="ユニーク注文" accent="#7c3aed" loading={statsLoading} />
                   </div>
                   {/* デバッグ: 購入ログのvid確認 */}
