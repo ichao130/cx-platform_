@@ -117,11 +117,11 @@ function CountUp({ value, duration = 600, formatter = (n: number) => n.toLocaleS
   return <>{formatter(display)}</>;
 }
 
-// ---- SkeletonBar: グレーのパルシング棒 ----
+// ---- SkeletonBar: シマーアニメーション ----
 const skeletonKeyframes = `
-@keyframes cx-skeleton-pulse {
-  0%, 100% { opacity: 0.35; }
-  50% { opacity: 0.65; }
+@keyframes cx-shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position:  400px 0; }
 }`;
 if (typeof document !== "undefined" && !document.getElementById("cx-skeleton-style")) {
   const s = document.createElement("style");
@@ -133,9 +133,23 @@ function SkeletonBar({ width = "80%", height = 16, radius = 6 }: { width?: strin
   return (
     <div style={{
       width, height, borderRadius: radius,
-      background: "rgba(15,23,42,.12)",
-      animation: "cx-skeleton-pulse 1.4s ease-in-out infinite",
+      background: "linear-gradient(90deg, rgba(15,23,42,.08) 25%, rgba(15,23,42,.18) 50%, rgba(15,23,42,.08) 75%)",
+      backgroundSize: "800px 100%",
+      animation: "cx-shimmer 1.4s infinite linear",
     }} />
+  );
+}
+
+// ---- SkeletonCard: カード全体のスケルトン ----
+function SkeletonCard({ rows = 3 }: { rows?: number }) {
+  return (
+    <div className="card" style={{ padding: 18, background: "#fff" }}>
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} style={{ marginBottom: i < rows - 1 ? 12 : 0 }}>
+          <SkeletonBar width={i === 0 ? "40%" : i % 2 === 0 ? "70%" : "55%"} height={i === 0 ? 14 : 12} />
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -661,6 +675,12 @@ export default function AnalyticsPage() {
 
   // ---- computed: 売上 ----
   // 合計・件数・AOV は purchaseLogs ベース（raw データで正確に集計）
+  const todayRevenue = useMemo(() => {
+    const todayStart = todayStr + "T00:00:00";
+    return purchaseLogs
+      .filter((l) => (l.createdAt || "") >= todayStart)
+      .reduce((s, l) => s + (typeof l.revenue === "number" ? l.revenue : 0), 0);
+  }, [purchaseLogs, todayStr]);
   const totalRevenue = useMemo(() => purchaseLogs.reduce((s, l) => s + (typeof l.revenue === "number" ? l.revenue : 0), 0), [purchaseLogs]);
   const purchaseCount = useMemo(() => purchaseLogs.length, [purchaseLogs]);
   const avgOrderValue = useMemo(() => purchaseCount > 0 ? totalRevenue / purchaseCount : 0, [totalRevenue, purchaseCount]);
@@ -1437,6 +1457,7 @@ export default function AnalyticsPage() {
               <StatCard label="今日のPV" value={fmtInt(todayPvCount)} sub="ページビュー" />
               <StatCard label="今日の施策表示" value={fmtInt(todayImpCount)} sub="インプレッション" accent="#2563eb" />
               <StatCard label="今日のCV" value={fmtInt(todayCvCount)} sub="コンバージョン" accent="#f59e0b" />
+              <StatCard label="今日の売上" value={todayRevenue > 0 ? `¥${Math.round(todayRevenue).toLocaleString()}` : "—"} numericValue={todayRevenue} sub="購入合計" accent="#16a34a" loading={purchaseLoading} />
             </div>
             {/* タブ: 直近のイベント / セッション行動 */}
             <TabBar
@@ -1522,7 +1543,9 @@ export default function AnalyticsPage() {
                 💰 売上計測 <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel} · Shopify Web Pixel）</span>
               </div>
               {purchaseLoading ? (
-                <div className="card" style={{ padding: 24, textAlign: "center", opacity: 0.5, fontSize: 13 }}>読み込み中…</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }}>
+                  <SkeletonCard rows={3} /><SkeletonCard rows={3} /><SkeletonCard rows={3} />
+                </div>
               ) : (
                 <>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }}>
@@ -1626,7 +1649,10 @@ export default function AnalyticsPage() {
             </div>
 
             {journeyLoading ? (
-              <div className="card" style={{ padding: 24, textAlign: "center", opacity: 0.5, fontSize: 13 }}>読み込み中…</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+                <SkeletonCard rows={5} /><SkeletonCard rows={5} />
+                <SkeletonCard rows={4} /><SkeletonCard rows={4} />
+              </div>
             ) : (
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
                 {/* ① PV & ユニーク訪問者 */}
@@ -1862,7 +1888,7 @@ export default function AnalyticsPage() {
                   <div className="small" style={{ opacity: 0.5, marginTop: 2 }}>utm_source またはリファラー</div>
                 </div>
                 {journeyLoading ? (
-                  <div className="small" style={{ opacity: 0.55 }}>読み込み中...</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}><SkeletonBar width="80%" /><SkeletonBar width="60%" /><SkeletonBar width="70%" /></div>
                 ) : referrerData.length === 0 ? (
                   <div className="small" style={{ opacity: 0.55 }}>データなし</div>
                 ) : (
@@ -1881,7 +1907,7 @@ export default function AnalyticsPage() {
                   <div className="small" style={{ opacity: 0.5, marginTop: 2 }}>セッションの最後に見たページ</div>
                 </div>
                 {journeyLoading ? (
-                  <div className="small" style={{ opacity: 0.55 }}>読み込み中...</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}><SkeletonBar width="75%" /><SkeletonBar width="55%" /><SkeletonBar width="65%" /></div>
                 ) : exitData.length === 0 ? (
                   <div className="small" style={{ opacity: 0.55 }}>データなし</div>
                 ) : (
@@ -1900,7 +1926,7 @@ export default function AnalyticsPage() {
                   <div className="small" style={{ opacity: 0.5, marginTop: 2 }}>PV数の多い順</div>
                 </div>
                 {journeyLoading ? (
-                  <div className="small" style={{ opacity: 0.55 }}>読み込み中...</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}><SkeletonBar width="90%" /><SkeletonBar width="70%" /><SkeletonBar width="80%" /></div>
                 ) : pageData.length === 0 ? (
                   <div className="small" style={{ opacity: 0.55 }}>データなし</div>
                 ) : (
@@ -2044,7 +2070,7 @@ export default function AnalyticsPage() {
                   訪問者を選択すると行動タイムラインが表示されます
                 </div>
               </div>
-              {journeyLoading && <div className="small" style={{ opacity: 0.5 }}>読み込み中...</div>}
+              {journeyLoading && <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}><SkeletonBar width="100%" height={14} /><SkeletonBar width="80%" height={14} /><SkeletonBar width="90%" height={14} /><SkeletonBar width="60%" height={14} /></div>}
             </div>
 
             {/* フィルターバー */}
