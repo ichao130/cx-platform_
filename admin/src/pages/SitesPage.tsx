@@ -136,6 +136,15 @@ export default function SitesPage() {
   const [currentUid, setCurrentUid] = useState('');
   const [copyMessage, setCopyMessage] = useState('');
   const [copyPixelMessage, setCopyPixelMessage] = useState('');
+  const [copyingKey, setCopyingKey] = useState('');
+
+  async function copyText(text: string, key: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyingKey(key);
+      window.setTimeout(() => setCopyingKey(''), 2000);
+    } catch { /* ignore */ }
+  }
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [tagMode, setTagMode] = useState<'shopify' | 'direct' | 'gtm'>('direct');
   const [shopifyManualExpanded, setShopifyManualExpanded] = useState(false);
@@ -771,22 +780,6 @@ export default function SitesPage() {
                         ))}
                       </div>
                     </div>
-                    <button
-                      className="btn btn--primary"
-                      onClick={copyEmbedTag}
-                      style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6 }}
-                    >
-                      {copyMessage === '埋め込みタグをコピーしました' ? (
-                        <>✓ コピーしました</>
-                      ) : (
-                        <>
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                            <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-                          </svg>
-                          コピー
-                        </>
-                      )}
-                    </button>
                   </div>
                   {/* 説明文 */}
                   {tagMode === 'shopify' ? (
@@ -901,7 +894,11 @@ export default function SitesPage() {
                         : 'GTM の「カスタムHTML」タグとして貼り付けてください'}
                     </div>
                   )}
-                  {tagMode !== 'shopify' || shopifyManualExpanded ? <pre style={{
+                  {tagMode !== 'shopify' || shopifyManualExpanded ? <div style={{ position: 'relative' }}>
+                    <button onClick={() => copyText(embedTag, 'embed')} style={{ position: 'absolute', top: 8, right: 8, zIndex: 1, fontSize: 10, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(255,255,255,.2)', background: 'rgba(255,255,255,.1)', color: '#e2f0f5', cursor: 'pointer', fontWeight: 600 }}>
+                      {copyingKey === 'embed' ? '✓ コピー済み' : 'コピー'}
+                    </button>
+                    <pre style={{
                     margin: 0,
                     padding: '16px',
                     background: '#1a2a3a',
@@ -937,12 +934,7 @@ export default function SitesPage() {
                         <span style={{ color: '#7ec8e3' }}>&lt;/script&gt;</span>
                       </>
                     )}
-                  </pre> : null}
-                  {copyMessage === 'コピーに失敗しました' && (
-                    <div className="small" style={{ marginTop: 8, color: 'var(--danger)' }}>
-                      クリップボードへのコピーに失敗しました。上のコードを直接選択してコピーしてください。
-                    </div>
-                  )}
+                  </pre></div> : null}
 
                   {tagMode === 'shopify' && (
                     <div style={{ marginTop: 16 }}>
@@ -966,14 +958,19 @@ export default function SitesPage() {
                             カート属性に <code>_cx_vid</code> を書き込んでおくと、チェックアウトを通じて確実に訪問者IDを引き継げます。<br />
                             <b>{'<head>'}</b> の閉じタグ直前（MOKKEDAスクリプトの直後）に追加してください。
                           </div>
-                          <pre style={{
-                            margin: 0, padding: '12px', background: '#1a2a3a', color: '#e2f0f5',
-                            borderRadius: 8, fontSize: 11, lineHeight: 1.7, overflowX: 'auto',
-                            whiteSpace: 'pre', userSelect: 'all', cursor: 'text',
-                            border: '1px solid rgba(255,255,255,.06)',
-                          }}>
-                            {`<script>\nfunction writeCxVidToCart() {\n  var vid = null;\n  try {\n    var m = document.cookie.match(/cx_vid=([^;]+)/);\n    vid = m ? m[1] : localStorage.getItem("cx_vid");\n  } catch(e) {}\n  if (!vid) return;\n  fetch("/cart/update.js", {\n    method: "POST",\n    headers: { "Content-Type": "application/json" },\n    body: JSON.stringify({ attributes: { "_cx_vid": vid } }),\n  });\n}\n\n// SDK初期化後を待って実行（初回訪問対応）\nsetTimeout(writeCxVidToCart, 2000);\n\n// カート更新時にも実行\ndocument.addEventListener("cart:updated", writeCxVidToCart);\n</script>`}
-                          </pre>
+                          {(() => {
+                            const cartCode = `<script>\nfunction writeCxVidToCart() {\n  var vid = null;\n  try {\n    var m = document.cookie.match(/cx_vid=([^;]+)/);\n    vid = m ? m[1] : localStorage.getItem("cx_vid");\n  } catch(e) {}\n  if (!vid) return;\n  fetch("/cart/update.js", {\n    method: "POST",\n    headers: { "Content-Type": "application/json" },\n    body: JSON.stringify({ attributes: { "_cx_vid": vid } }),\n  });\n}\n\nsetTimeout(writeCxVidToCart, 2000);\ndocument.addEventListener("cart:updated", writeCxVidToCart);\n</script>`;
+                            return (
+                              <div style={{ position: 'relative' }}>
+                                <button onClick={() => copyText(cartCode, 'cart')} style={{ position: 'absolute', top: 6, right: 6, zIndex: 1, fontSize: 10, padding: '2px 7px', borderRadius: 4, border: '1px solid rgba(255,255,255,.2)', background: 'rgba(255,255,255,.1)', color: '#e2f0f5', cursor: 'pointer', fontWeight: 600 }}>
+                                  {copyingKey === 'cart' ? '✓' : 'コピー'}
+                                </button>
+                                <pre style={{ margin: 0, padding: '12px', background: '#1a2a3a', color: '#e2f0f5', borderRadius: 8, fontSize: 11, lineHeight: 1.7, overflowX: 'auto', whiteSpace: 'pre', userSelect: 'all', cursor: 'text', border: '1px solid rgba(255,255,255,.06)' }}>
+                                  {cartCode}
+                                </pre>
+                              </div>
+                            );
+                          })()}
                         </div>
 
                         {/* Step 2: Web Pixel */}
@@ -982,6 +979,10 @@ export default function SitesPage() {
                             ② Web Pixel コード（設定 → Customer events → カスタムピクセルを追加）
                           </div>
                         </div>
+                        <div style={{ position: 'relative' }}>
+                          <button onClick={copyPixelCode} style={{ position: 'absolute', top: 6, right: 6, zIndex: 1, fontSize: 10, padding: '2px 7px', borderRadius: 4, border: '1px solid rgba(255,255,255,.2)', background: 'rgba(255,255,255,.1)', color: '#e2f0f5', cursor: 'pointer', fontWeight: 600 }}>
+                            {copyPixelMessage ? '✓' : 'コピー'}
+                          </button>
                         <pre style={{
                           margin: 0,
                           padding: '14px',
@@ -997,12 +998,7 @@ export default function SitesPage() {
                           border: '1px solid rgba(255,255,255,.06)',
                         }}>
                           {`analytics.subscribe("checkout_completed", async (event) => {\n  const checkout = event.data.checkout;\n  const revenue = parseFloat(String(checkout.totalPrice?.amount || "0")) || 0;\n  const orderId = String(checkout.order?.id || checkout.token || "");\n  const currency = String(checkout.totalPrice?.currencyCode || "JPY");\n  const _attrs = Array.isArray(checkout.attributes) ? checkout.attributes : [];\n  const _vidRaw = await browser.cookie.get("cx_vid");\n  const vidFromCookie = _vidRaw && typeof _vidRaw === "object" ? String(_vidRaw.value || "") : String(_vidRaw || "");\n  const vid = vidFromCookie || String((_attrs.find(function(a){return a.key==="_cx_vid";}) || {}).value || "");\n  const _sidRaw = await browser.cookie.get("cx_sid_${String(id || '').trim()}");\n  const sidFromCookie = _sidRaw && typeof _sidRaw === "object" ? String(_sidRaw.value || "") : String(_sidRaw || "");\n  const sid = sidFromCookie || String((_attrs.find(function(a){return a.key==="_cx_sid";}) || {}).value || "");\n  const scenarioId = String((_attrs.find(function(a){return a.key==="_cx_scenario_id";}) || {}).value || "") || null;\n  let items = [];\n  try {\n    items = Array.from(checkout.lineItems || []).map((item) => ({\n      title: String(item.title || item.variant?.product?.title || ""),\n      qty: Number(item.quantity) || 1,\n      price: (() => { var q = Number(item.quantity) || 1; var t = parseFloat(String(item.discountedTotalPrice?.amount || item.originalTotalPrice?.amount || item.variant?.price?.amount || "0")); return t > 0 ? parseFloat((t / q).toFixed(2)) : 0; })(),\n    }));\n  } catch (e) {}\n\n  browser.sendBeacon(\n    "https://asia-northeast1-cx-platform-v1.cloudfunctions.net/api/v1/log",\n    JSON.stringify({\n      site_id: "${String(id || '').trim()}",\n      event: "purchase",\n      revenue: revenue,\n      order_id: orderId,\n      currency: currency,\n      vid: vid,\n      sid: sid,\n      scenario_id: scenarioId,\n      items: items,\n    })\n  );\n});`}
-                        </pre>
-                        <div style={{ marginTop: 8, textAlign: 'right' }}>
-                          <button className="btn btn--primary" onClick={copyPixelCode} style={{ fontSize: 12, padding: '5px 14px' }}>
-                            {copyPixelMessage ? `✓ ${copyPixelMessage}` : '📋 コピー'}
-                          </button>
-                        </div>
+                        </pre></div>
                       </div>
 
                       <div className="small" style={{ fontWeight: 700, marginBottom: 6, opacity: 0.9 }}>
@@ -1011,6 +1007,10 @@ export default function SitesPage() {
                       <div className="small" style={{ opacity: 0.7, marginBottom: 8 }}>
                         カートに商品が追加されたタイミングでシナリオを起動したい場合は、上のスクリプトの直後に追加してください。「これと一緒によく買われています」などのアップセル訴求に使えます。
                       </div>
+                      <div style={{ position: 'relative' }}>
+                        <button onClick={() => copyText(`/* Mokkeda: Shopify カートイベントフック */\ndocument.addEventListener('DOMContentLoaded', function() {\n  var _fetch = window.fetch;\n  window.fetch = function(url, opts) {\n    var res = _fetch.apply(this, arguments);\n    if (typeof url === 'string' && url.indexOf('/cart/add') > -1) {\n      res.then(function(r) {\n        if (r.ok) window.dispatchEvent(new CustomEvent('cx:cart:add'));\n      });\n    }\n    return res;\n  };\n});`, 'cartHook')} style={{ position: 'absolute', top: 6, right: 6, zIndex: 1, fontSize: 10, padding: '2px 7px', borderRadius: 4, border: '1px solid rgba(255,255,255,.2)', background: 'rgba(255,255,255,.1)', color: '#e2f0f5', cursor: 'pointer', fontWeight: 600 }}>
+                          {copyingKey === 'cartHook' ? '✓' : 'コピー'}
+                        </button>
                       <pre style={{
                         margin: 0,
                         padding: '14px',
@@ -1038,7 +1038,7 @@ export default function SitesPage() {
                         <span style={{ color: '#94a3b8' }}>{'    return res;'}</span>{'\n'}
                         <span style={{ color: '#94a3b8' }}>{'  };'}</span>{'\n'}
                         <span style={{ color: '#94a3b8' }}>{'});'}</span>
-                      </pre>
+                      </pre></div>
                     </div>
                   )}
 
