@@ -1223,21 +1223,16 @@ export default function ScenariosPage() {
                     <td style={{ whiteSpace: "nowrap" }}>
                       <button
                         className="btn"
-                        onClick={() => navigate(`/scenarios/${r.id}/review`)}
-                      >
-                        AIレビュー
-                      </button>
-                      <span style={{ width: 6, display: "inline-block" }} />
-                      <button
-                        className="btn"
+                        style={{ fontSize: 11 }}
                         onClick={() => navigate(`/scenarios/${r.id}/ai`)}
                       >
-                        AI
+                        AIインサイト
                       </button>
                     </td>
                     <td style={{ whiteSpace: "nowrap" }}>
                       <button
                         className="btn"
+                        style={{ fontSize: 11 }}
                         onClick={() => openEditModal(r.id, r.data)}
                       >
                         編集
@@ -1245,6 +1240,7 @@ export default function ScenariosPage() {
                       <span style={{ width: 8, display: "inline-block" }} />
                       <button
                         className="btn"
+                        style={{ fontSize: 11 }}
                         onClick={async () => {
                           const newId = genId("scn");
                           const copy = { ...r.data, name: `${r.data?.name || r.id} のコピー`, status: "paused", createdAt: new Date().toISOString() };
@@ -1258,6 +1254,7 @@ export default function ScenariosPage() {
                       {r.data.status !== "active" && (
                         <button
                           className="btn btn--danger"
+                          style={{ fontSize: 11 }}
                           onClick={() => setDeleteTarget({ id: r.id, name: String(r.data?.name || r.id) })}
                         >
                           削除
