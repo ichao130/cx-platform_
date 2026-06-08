@@ -1690,7 +1690,7 @@ export default function AnalyticsPage() {
                       <Area yAxisId="left" type="monotone" dataKey="pv" name="ページビュー" stroke="#2563eb" strokeWidth={2} fill="url(#gradPv)" dot={{ r: 3, fill: "#2563eb", strokeWidth: 0 }} activeDot={{ r: 5 }} />
                       <Area yAxisId="left" type="monotone" dataKey="session" name="セッション数" stroke="#7c3aed" strokeWidth={2} fill="url(#gradSession)" dot={{ r: 3, fill: "#7c3aed", strokeWidth: 0 }} activeDot={{ r: 5 }} />
                       <Area yAxisId="left" type="monotone" dataKey="uv" name="ユニーク訪問者" stroke="#0891b2" strokeWidth={2} fill="url(#gradUv)" dot={{ r: 3, fill: "#0891b2", strokeWidth: 0 }} activeDot={{ r: 5 }} />
-                      <Line yAxisId="right" type="monotone" dataKey="revenue" name="売上" stroke="#16a34a" strokeWidth={2} strokeDasharray="4 2" dot={{ r: 3, fill: "#16a34a", strokeWidth: 0 }} activeDot={{ r: 5 }} />
+                      <Bar yAxisId="right" dataKey="revenue" name="売上" fill="#86efac" fillOpacity={0.6} radius={[3, 3, 0, 0]} maxBarSize={20} />
                     </ComposedChart>
                   </ResponsiveContainer>
                 </div>
