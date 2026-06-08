@@ -583,6 +583,7 @@ export default function ActionsPage() {
   // toast / delete confirm
   const [toast, setToast] = useState<{ msg: string; type: "success" | "error" } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+  const [actionListTab, setActionListTab] = useState<"active" | "archived">("active");
 
   useEffect(() => {
     return onAuthStateChanged(getAuth(), (user) => {
@@ -1111,6 +1112,15 @@ export default function ActionsPage() {
           </div>
         </div>
 
+        {/* アクティブ / アーカイブ タブ */}
+        <div style={{ display: "flex", gap: 0, marginBottom: 12, border: "1px solid rgba(15,23,42,.12)", borderRadius: 8, overflow: "hidden", width: "fit-content" }}>
+          {([["active", `アクティブ (${rows.filter(r => !(r.data as any).archived).length})`], ["archived", `アーカイブ (${rows.filter(r => (r.data as any).archived).length})`]] as const).map(([tab, label]) => (
+            <button key={tab} type="button" onClick={() => setActionListTab(tab)} style={{ padding: "6px 16px", border: "none", fontSize: 13, fontWeight: actionListTab === tab ? 700 : 500, background: actionListTab === tab ? "#1f6573" : "transparent", color: actionListTab === tab ? "#fff" : "inherit", cursor: "pointer" }}>
+              {label}
+            </button>
+          ))}
+        </div>
+
         <div className="liquid-scroll-x">
           <table className="table">
             <thead>
@@ -1124,7 +1134,7 @@ export default function ActionsPage() {
               </tr>
             </thead>
             <tbody>
-            {rows.map((r) => {
+            {rows.filter(r => actionListTab === "archived" ? (r.data as any).archived : !(r.data as any).archived).map((r) => {
               const ids = Array.isArray(r.data.mediaIds) ? r.data.mediaIds : [];
               const thumbIds = ids.slice(0, 4);
               const selectorText = r.data.mount?.selector || r.data.selector || "body";
@@ -1226,23 +1236,27 @@ export default function ActionsPage() {
                         複製
                       </button>
                       <span style={{ width: 8, display: 'inline-block' }} />
-                      <button
-                        className="btn btn--danger"
-                        onClick={() => {
+                      {(r.data as any).archived ? (
+                        <>
+                          <button className="btn" onClick={async () => {
+                            await setDoc(doc(db, "actions", r.id), { archived: false }, { merge: true });
+                            showToast("アクティブに戻しました");
+                          }}>戻す</button>
+                          <span style={{ width: 8, display: "inline-block" }} />
+                          <button className="btn btn--danger" onClick={() => setDeleteTarget({ id: r.id, name: String(r.data?.creative?.title || r.id) })}>削除</button>
+                        </>
+                      ) : (
+                        <button className="btn" onClick={async () => {
                           const used = actionUsageMap[r.id] || [];
                           if (used.length) {
-                            const lines = used
-                              .slice(0, 30)
-                              .map((x) => `- ${x.scenarioId}${x.name ? `（${x.name}）` : ""}`)
-                              .join(", ");
-                            showToast(`このActionはScenarioで使用中なので削除できません: ${lines}${used.length > 30 ? "..." : ""}`, "error");
+                            const lines = used.slice(0, 5).map((x) => `${x.name || x.scenarioId}`).join("、");
+                            showToast(`施策「${lines}」で使用中のためアーカイブできません`, "error");
                             return;
                           }
-                          setDeleteTarget({ id: r.id, name: String(r.data?.creative?.title || r.id) });
-                        }}
-                      >
-                        削除
-                      </button>
+                          await setDoc(doc(db, "actions", r.id), { archived: true }, { merge: true });
+                          showToast("アーカイブしました");
+                        }}>アーカイブ</button>
+                      )}
                     </td>
                   </tr>
                 </React.Fragment>

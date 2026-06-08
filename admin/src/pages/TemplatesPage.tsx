@@ -238,6 +238,7 @@ export default function TemplatesPage() {
   const [saveError, setSaveError] = useState('');
   const [saveMessage, setSaveMessage] = useState('');
   const [savedPayloadStr, setSavedPayloadStr] = useState<string | null>(null);
+  const [templateListTab, setTemplateListTab] = useState<'active' | 'archived'>('active');
 
   const [sample, setSample] = useState<SampleData>({
     title: 'テスト表示',
@@ -472,6 +473,15 @@ export default function TemplatesPage() {
           </div>
         </div>
 
+        {/* アクティブ / アーカイブ タブ */}
+        <div style={{ display: "flex", gap: 0, marginBottom: 12, border: "1px solid rgba(15,23,42,.12)", borderRadius: 8, overflow: "hidden", width: "fit-content" }}>
+          {([['active', `アクティブ (${filteredRows.filter(r => !(r.data as any).archived).length})`], ['archived', `アーカイブ (${filteredRows.filter(r => (r.data as any).archived).length})`]] as const).map(([tab, label]) => (
+            <button key={tab} type="button" onClick={() => setTemplateListTab(tab)} style={{ padding: "6px 16px", border: "none", fontSize: 13, fontWeight: templateListTab === tab ? 700 : 500, background: templateListTab === tab ? "#1f6573" : "transparent", color: templateListTab === tab ? "#fff" : "inherit", cursor: "pointer" }}>
+              {label}
+            </button>
+          ))}
+        </div>
+
         <div className="liquid-scroll-x">
           <table className="table">
             <thead>
@@ -485,7 +495,7 @@ export default function TemplatesPage() {
               </tr>
             </thead>
             <tbody>
-            {filteredRows.map((r) => {
+            {filteredRows.filter(r => templateListTab === 'archived' ? (r.data as any).archived : !(r.data as any).archived).map((r) => {
               const rowSite = sites.find((s) => s.id === r.data.siteId);
               return (
                 <tr key={r.id}>
@@ -521,7 +531,15 @@ export default function TemplatesPage() {
                       複製
                     </button>
                     <span style={{ width: 8, display: 'inline-block' }} />
-                    <button className="btn btn--danger" onClick={() => deleteDoc(doc(db, 'templates', r.id))}>削除</button>
+                    {(r.data as any).archived ? (
+                      <>
+                        <button className="btn" onClick={async () => { await setDoc(doc(db, 'templates', r.id), { archived: false }, { merge: true }); }}>戻す</button>
+                        <span style={{ width: 8, display: 'inline-block' }} />
+                        <button className="btn btn--danger" onClick={() => deleteDoc(doc(db, 'templates', r.id))}>削除</button>
+                      </>
+                    ) : (
+                      <button className="btn" onClick={async () => { await setDoc(doc(db, 'templates', r.id), { archived: true }, { merge: true }); }}>アーカイブ</button>
+                    )}
                   </td>
                 </tr>
               );

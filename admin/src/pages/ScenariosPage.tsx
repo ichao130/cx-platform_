@@ -1257,6 +1257,8 @@ export default function ScenariosPage() {
                       <span style={{ width: 8, display: "inline-block" }} />
                       <button
                         className="btn btn--danger"
+                        disabled={r.data.status === "active"}
+                        title={r.data.status === "active" ? "アクティブな施策は削除できません。先にアーカイブしてください。" : ""}
                         onClick={() => setDeleteTarget({ id: r.id, name: String(r.data?.name || r.id) })}
                       >
                         削除
