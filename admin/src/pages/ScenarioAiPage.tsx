@@ -51,7 +51,10 @@ export default function ScenarioAiPage() {
   const [dayTo, setDayTo] = useState<string>(() => isoDay(new Date()));
   const [variantId, setVariantId] = useState<string>("na");
 
-  const [loading, setLoading] = useState<string>("");
+  const [loadingSet, setLoadingSet] = useState<Set<string>>(new Set());
+  const loading = loadingSet.size > 0 ? Array.from(loadingSet).join("+") : "";
+  const setLoading = (key: string, on = true) =>
+    setLoadingSet((prev) => { const s = new Set(prev); on ? s.add(key) : s.delete(key); return s; });
   const [err, setErr] = useState<string>("");
 
   const [review, setReview] = useState<any | null>(null);
@@ -240,7 +243,7 @@ export default function ScenarioAiPage() {
   async function runReview(forceRefresh = false) {
     if (!siteId || !scenarioId || !dayFrom || !dayTo) return;
     setErr("");
-    setLoading("review");
+    setLoading("review", true);
     try {
       const data = await apiPostJson(
         "/v1/ai/review",
@@ -259,7 +262,7 @@ export default function ScenarioAiPage() {
       console.error(e);
       setErr(`AIレビュー失敗: ${e?.message || String(e)}`);
     } finally {
-      setLoading("");
+      setLoading("review", false);
     }
   }
 
@@ -320,7 +323,7 @@ export default function ScenarioAiPage() {
   async function runInsight(forceRefresh = false) {
     if (!siteId || !scenarioId || !dayFrom || !dayTo) return;
     setErr("");
-    setLoading("insight");
+    setLoading("insight", true);
     try {
       // まず stats/summary で counts を取る（日付レンジ全体を集計・全バリアント合計）
       const sum = await apiPostJson(
@@ -365,7 +368,7 @@ export default function ScenarioAiPage() {
       console.error(e);
       setErr(`AI運用アシスタント失敗: ${e?.message || String(e)}`);
     } finally {
-      setLoading("");
+      setLoading("insight", false);
     }
   }
 
@@ -451,13 +454,20 @@ export default function ScenarioAiPage() {
         <div style={{ height: 12 }} />
 
         <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <button onClick={() => runReview()} disabled={loading !== "" || visionLoading}>
-            {loading === "review" ? "生成中..." : "AIレビュー生成"}
+          <button
+            className="btn btn--primary"
+            onClick={() => { runReview(); runInsight(); }}
+            disabled={loading !== "" || visionLoading}
+          >
+            {loading !== "" ? "AI分析中..." : "🤖 AI分析を実行"}
           </button>
-          <button onClick={() => runReview(true)} disabled={loading !== "" || visionLoading}
-            title="キャッシュを無視して再生成（テンプレート変更後に使用）"
-            style={{ fontSize: 12, opacity: 0.8 }}>
-            {loading === "review" ? "生成中..." : "↺ 再生成"}
+          <button
+            onClick={() => { runReview(true); runInsight(true); }}
+            disabled={loading !== "" || visionLoading}
+            title="キャッシュを無視して再生成"
+            style={{ fontSize: 12, opacity: 0.8 }}
+          >
+            {loading !== "" ? "生成中..." : "↺ 再生成"}
           </button>
           <button
             className="btn btn--primary"
@@ -468,14 +478,6 @@ export default function ScenarioAiPage() {
             {visionLoading
               ? visionStatus === "capturing" ? "📷 キャプチャ中..." : "🔍 Vision分析中..."
               : "📷 ビジュアルAIレビュー"}
-          </button>
-          <button onClick={() => runInsight()} disabled={loading !== "" || visionLoading}>
-            {loading === "insight" ? "生成中..." : "AI運用アシスタント生成"}
-          </button>
-          <button onClick={() => runInsight(true)} disabled={loading !== "" || visionLoading}
-            title="キャッシュを無視して再生成"
-            style={{ fontSize: 12, opacity: 0.8 }}>
-            {loading === "insight" ? "生成中..." : "↺ 再生成（アシスタント）"}
           </button>
         </div>
       </div>
