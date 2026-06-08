@@ -1389,232 +1389,7 @@ export default function AnalyticsPage() {
 
       {siteId && (
         <>
-          <div className="card" style={{ marginBottom: 24, padding: 18, background: "linear-gradient(180deg,#ffffff,#f8fbff)" }}>
-            <SectionLead
-              title="まず見る3指標"
-              description="最初に変化を追いやすい数値だけを前に出しています。詳しい分析はこの下で見られます。"
-              meta={<span>{selectedSiteName || "サイト未選択"} / {dateRangeLabel}</span>}
-            />
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
-              {focusCards.map((card) => (
-                <div key={card.key} style={{ border: "1px solid rgba(15,23,42,.08)", borderRadius: 14, padding: 16, background: "#fff" }}>
-                  <div className="small" style={{ opacity: 0.68 }}>{card.label}</div>
-                  <div style={{ fontSize: 28, fontWeight: 800, lineHeight: 1.1, marginTop: 8, letterSpacing: "-.03em", color: card.accent, minHeight: 34 }}>
-                    {statsLoading
-                      ? <SkeletonBar width="65%" height={26} radius={5} />
-                      : typeof card.numericValue === "number"
-                        ? <CountUp value={card.numericValue} formatter={card.formatter || ((n) => n.toLocaleString("ja-JP"))} />
-                        : card.value}
-                  </div>
-                  <div className="small" style={{ opacity: 0.58, marginTop: 6 }}>
-                    {statsLoading ? <SkeletonBar width="50%" height={10} radius={3} /> : card.sub}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* ===== Section 1: リアルタイム ===== */}
-          <div style={{ marginBottom: 32 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-              <LiveDot />
-              <SectionLead
-                title="リアルタイム"
-                description="直近30分の動きです。今まさに反応があるかだけを確認できます。"
-                meta="過去30分"
-              />
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }}>
-              <StatCard label="アクティブ訪問者" value={fmtInt(activeVisitors)} sub="ユニーク訪問者数" accent="#22c55e" loading={journeyLoading} />
-              <StatCard label="今日のPV" value={fmtInt(todayPvCount)} sub="ページビュー" loading={statsLoading} />
-              <StatCard label="今日の施策表示" value={fmtInt(todayImpCount)} sub="インプレッション" accent="#2563eb" loading={statsLoading} />
-              <StatCard label="今日のCV" value={fmtInt(todayCvCount)} sub="コンバージョン" accent="#f59e0b" loading={statsLoading} />
-              <StatCard label="今日の売上" value="—" numericValue={todayRevenue} sub="購入合計" accent="#16a34a" loading={purchaseLoading} formatter={(n) => n > 0 ? `¥${Math.round(n).toLocaleString()}` : "—"} />
-            </div>
-            {/* タブ: 直近のイベント / セッション行動 */}
-            <TabBar
-              tabs={[{ key: "events", label: "直近のイベント" }, { key: "sessions", label: "セッション行動" }]}
-              active={realtimeTab}
-              onChange={(k) => setRealtimeTab(k as "events" | "sessions")}
-            />
-            {realtimeTab === "events" && (
-              <div className="card" style={{ padding: 18, background: "#fff" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                  <div className="small" style={{ fontWeight: 700 }}>直近のイベント</div>
-                  <div className="small" style={{ opacity: 0.5 }}>{recentLogs.length} 件</div>
-                </div>
-                {recentLogs.length === 0 ? (
-                  <div className="small" style={{ opacity: 0.55, textAlign: "center", padding: "12px 0" }}>
-                    直近30分のイベントはありません
-                  </div>
-                ) : (
-                  <div style={{ maxHeight: 260, overflowY: "auto" }}>
-                    {recentLogs.slice(0, 30).map((ev) => (
-                      <RecentEventRow key={ev.id} ev={ev} />
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-            {realtimeTab === "sessions" && (
-              <>
-                {sessionData.length === 0 ? (
-                  <div className="card" style={{ padding: 20, opacity: 0.7 }}>
-                    <div className="small">直近30分のセッションデータがありません</div>
-                  </div>
-                ) : (
-                  <div style={{ display: "grid", gap: 10 }}>
-                    {sessionData.map((s) => {
-                      const hasConversion = s.events.includes("conversion");
-                      const hasImpression = s.events.includes("impression");
-                      return (
-                        <div key={s.sid} className="card" style={{ padding: 14, background: "#fff", display: "flex", alignItems: "flex-start", gap: 14 }}>
-                          <div style={{ flex: "0 0 auto" }}>
-                            <div style={{ width: 36, height: 36, borderRadius: 99, background: hasConversion ? "rgba(22,163,74,.12)" : hasImpression ? "rgba(37,99,235,.1)" : "rgba(15,23,42,.06)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>
-                              {hasConversion ? "✅" : hasImpression ? "👤" : "👁"}
-                            </div>
-                          </div>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
-                              {hasConversion && <span className="badge" style={{ background: "rgba(22,163,74,.12)", color: "#16a34a" }}>CV済み</span>}
-                              {hasImpression && !hasConversion && <span className="badge" style={{ background: "rgba(37,99,235,.08)", color: "#2563eb" }}>施策表示</span>}
-                              <span className="badge">{s.events.filter((e) => e === "pageview").length} PV</span>
-                              <span className="small" style={{ opacity: 0.5, alignSelf: "center" }}>
-                                {s.last ? new Date(s.last).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }) : ""}
-                              </span>
-                            </div>
-                            <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
-                              {s.pages.map((p, i) => (
-                                <React.Fragment key={i}>
-                                  <span className="small" style={{ background: "rgba(15,23,42,.05)", borderRadius: 6, padding: "2px 8px", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={p}>
-                                    {p}
-                                  </span>
-                                  {i < s.pages.length - 1 && <span style={{ opacity: 0.35, fontSize: 11 }}>→</span>}
-                                </React.Fragment>
-                              ))}
-                            </div>
-                            {s.ref && (
-                              <div className="small" style={{ opacity: 0.5, marginTop: 5 }}>
-                                🔗 流入元: <span style={{ fontWeight: 600 }}>{formatRef(s.ref)}</span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-
-          {/* ===== Section 1.5: 売上計測 ===== */}
-          {(purchaseLogs.length > 0 || purchaseLoading) && (
-            <div style={{ marginBottom: 32 }}>
-              <div className="h2" style={{ marginBottom: 14 }}>
-                💰 売上計測 <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel} · Shopify Web Pixel）</span>
-              </div>
-              {purchaseLoading ? (
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }}>
-                  <SkeletonCard rows={3} /><SkeletonCard rows={3} /><SkeletonCard rows={3} />
-                </div>
-              ) : (
-                <>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }}>
-                    <StatCard label="売上合計" value="—" numericValue={Math.round(totalRevenue)} sub={`${purchaseCount}件の購入`} accent="#22c55e" loading={statsLoading} formatter={(n) => `¥${n.toLocaleString()}`} />
-                    <StatCard label="平均注文額" value="—" numericValue={Math.round(avgOrderValue)} sub="AOV" accent="#0891b2" loading={statsLoading} formatter={(n) => `¥${n.toLocaleString()}`} />
-                    <StatCard label="購入件数" value={fmtInt(purchaseCount)} numericValue={purchaseCount} sub="ユニーク注文" accent="#7c3aed" loading={statsLoading} />
-                  </div>
-                  {/* デバッグ: 購入ログのvid確認 */}
-                  <details style={{ marginBottom: 10 }}>
-                    <summary style={{ fontSize: 11, color: "#94a3b8", cursor: "pointer" }}>開発確認用（帰属確認が必要なときだけ開く）</summary>
-                    <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12, marginTop: 6, fontSize: 11, fontFamily: "monospace" }}>
-                      <div style={{ fontWeight: 700, marginBottom: 6 }}>📦 直近の購入ログ（vid が空なら cookie未取得）</div>
-                      {purchaseLogs.slice(0, 5).map((l, i) => (
-                        <div key={i} style={{ marginBottom: 4, color: l.vid ? "#16a34a" : "#dc2626" }}>
-                          {l.vid ? "✅" : "❌"} vid: <b>{l.vid || "（空）"}</b> / order: {l.order_id || "—"} / {String(l.createdAt || "").slice(0, 16)}
-                        </div>
-                      ))}
-                      <div style={{ fontWeight: 700, margin: "10px 0 6px" }}>📺 直近のimpression（scenario_id必須）</div>
-                      {journeyLogs.filter((l: any) => l.event === "impression" && l.scenario_id).slice(0, 5).map((l: any, i: number) => (
-                        <div key={i} style={{ marginBottom: 4, color: "#0891b2" }}>
-                          vid: <b>{l.vid || "（空）"}</b> / scenario: {l.scenario_id}
-                        </div>
-                      ))}
-                      {journeyLogs.filter((l: any) => l.event === "impression" && l.scenario_id).length === 0 && (
-                        <div style={{ color: "#dc2626" }}>❌ impressionログなし（シナリオが表示されていないか、ログが取れていない）</div>
-                      )}
-                    </div>
-                  </details>
-                  {revenueByProduct.length > 0 && (
-                    <div className="card" style={{ padding: 18, background: "#fff", marginTop: 12 }}>
-                      <div className="small" style={{ fontWeight: 700, marginBottom: 12 }}>🛍️ 商品別売上</div>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                        {revenueByProduct.map((r) => {
-                          const maxRev = revenueByProduct[0]?.revenue || 1;
-                          const barPct = (r.revenue / maxRev) * 100;
-                          const attrPct = r.qty > 0 ? Math.round((r.qtyAttributed / r.qty) * 100) : 0;
-                          const isExpanded = expandedProducts.has(r.title);
-                          const hasBreakdown = r.scenarioBreakdown.length > 0;
-                          return (
-                            <div key={r.title} style={{ borderRadius: 10, overflow: "hidden", border: isExpanded ? "1px solid #e2e8f0" : "1px solid transparent", marginBottom: 6 }}>
-                              {/* メイン行 */}
-                              <div
-                                style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", cursor: hasBreakdown ? "pointer" : "default", background: isExpanded ? "#f8fafc" : "transparent", borderRadius: isExpanded ? "10px 10px 0 0" : 10 }}
-                                onClick={() => {
-                                  if (!hasBreakdown) return;
-                                  setExpandedProducts((prev) => {
-                                    const next = new Set(prev);
-                                    if (next.has(r.title)) next.delete(r.title); else next.add(r.title);
-                                    return next;
-                                  });
-                                }}
-                              >
-                                {hasBreakdown && (
-                                  <span style={{ fontSize: 11, color: "#94a3b8", userSelect: "none", transition: "transform .2s", display: "inline-block", transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
-                                )}
-                                <div style={{ minWidth: 160, fontSize: 13, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: "0 0 160px" }}>{r.title}</div>
-                                <div style={{ flex: 1, height: 8, background: "rgba(15,23,42,.07)", borderRadius: 99, overflow: "hidden" }}>
-                                  <div style={{ height: "100%", width: `${barPct}%`, background: "#f59e0b", borderRadius: 99, transition: "width .4s ease" }} />
-                                </div>
-                                <div style={{ minWidth: 100, fontSize: 13, fontWeight: 600, textAlign: "right" }}>¥{Math.round(r.revenue).toLocaleString()}</div>
-                                <div style={{ minWidth: 50, fontSize: 12, color: "#94a3b8", textAlign: "right" }}>{r.qty}個</div>
-                                {r.qtyAttributed > 0 && (
-                                  <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: "#dcfce7", color: "#15803d", whiteSpace: "nowrap" }}>施策貢献 {attrPct}%</span>
-                                )}
-                              </div>
-                              {/* アコーディオン: シナリオ別内訳 */}
-                              {isExpanded && (
-                                <div style={{ background: "#f8fafc", borderTop: "1px solid #e2e8f0", padding: "10px 16px 12px 32px", display: "flex", flexDirection: "column", gap: 7 }}>
-                                  <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, marginBottom: 2 }}>施策別内訳</div>
-                                  {r.scenarioBreakdown.map((bd) => {
-                                    const sc = scenarios.find((s) => s.id === bd.id);
-                                    const scName = sc ? String(sc.data?.name || sc.id) : bd.id;
-                                    const bdPct = r.qtyAttributed > 0 ? Math.round((bd.qty / r.qtyAttributed) * 100) : 0;
-                                    return (
-                                      <div key={bd.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                        <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#6366f1", flexShrink: 0 }} />
-                                        <div style={{ flex: 1, fontSize: 12, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{scName}</div>
-                                        <div style={{ fontSize: 12, color: "#64748b", whiteSpace: "nowrap" }}>{bd.qty}個</div>
-                                        <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", whiteSpace: "nowrap", minWidth: 80, textAlign: "right" }}>¥{Math.round(bd.revenue).toLocaleString()}</div>
-                                        <span style={{ fontSize: 11, padding: "1px 6px", borderRadius: 20, background: "#ede9fe", color: "#6d28d9", whiteSpace: "nowrap" }}>{bdPct}%</span>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          )}
-
-          {/* ===== Section 1.5: 日別トレンド ===== */}
+          {/* ===== 日別トレンド（最上部） ===== */}
           <div style={{ marginBottom: 32 }}>
             <div className="h2" style={{ marginBottom: 14 }}>
               日別トレンド <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel}）</span>
@@ -1847,6 +1622,231 @@ export default function AnalyticsPage() {
               </>
             )}
           </div>
+
+          <div className="card" style={{ marginBottom: 24, padding: 18, background: "linear-gradient(180deg,#ffffff,#f8fbff)" }}>
+            <SectionLead
+              title="まず見る3指標"
+              description="最初に変化を追いやすい数値だけを前に出しています。詳しい分析はこの下で見られます。"
+              meta={<span>{selectedSiteName || "サイト未選択"} / {dateRangeLabel}</span>}
+            />
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+              {focusCards.map((card) => (
+                <div key={card.key} style={{ border: "1px solid rgba(15,23,42,.08)", borderRadius: 14, padding: 16, background: "#fff" }}>
+                  <div className="small" style={{ opacity: 0.68 }}>{card.label}</div>
+                  <div style={{ fontSize: 28, fontWeight: 800, lineHeight: 1.1, marginTop: 8, letterSpacing: "-.03em", color: card.accent, minHeight: 34 }}>
+                    {statsLoading
+                      ? <SkeletonBar width="65%" height={26} radius={5} />
+                      : typeof card.numericValue === "number"
+                        ? <CountUp value={card.numericValue} formatter={card.formatter || ((n) => n.toLocaleString("ja-JP"))} />
+                        : card.value}
+                  </div>
+                  <div className="small" style={{ opacity: 0.58, marginTop: 6 }}>
+                    {statsLoading ? <SkeletonBar width="50%" height={10} radius={3} /> : card.sub}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* ===== Section 1: リアルタイム ===== */}
+          <div style={{ marginBottom: 32 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+              <LiveDot />
+              <SectionLead
+                title="リアルタイム"
+                description="直近30分の動きです。今まさに反応があるかだけを確認できます。"
+                meta="過去30分"
+              />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }}>
+              <StatCard label="アクティブ訪問者" value={fmtInt(activeVisitors)} sub="ユニーク訪問者数" accent="#22c55e" loading={journeyLoading} />
+              <StatCard label="今日のPV" value={fmtInt(todayPvCount)} sub="ページビュー" loading={statsLoading} />
+              <StatCard label="今日の施策表示" value={fmtInt(todayImpCount)} sub="インプレッション" accent="#2563eb" loading={statsLoading} />
+              <StatCard label="今日のCV" value={fmtInt(todayCvCount)} sub="コンバージョン" accent="#f59e0b" loading={statsLoading} />
+              <StatCard label="今日の売上" value="—" numericValue={todayRevenue} sub="購入合計" accent="#16a34a" loading={purchaseLoading} formatter={(n) => n > 0 ? `¥${Math.round(n).toLocaleString()}` : "—"} />
+            </div>
+            {/* タブ: 直近のイベント / セッション行動 */}
+            <TabBar
+              tabs={[{ key: "events", label: "直近のイベント" }, { key: "sessions", label: "セッション行動" }]}
+              active={realtimeTab}
+              onChange={(k) => setRealtimeTab(k as "events" | "sessions")}
+            />
+            {realtimeTab === "events" && (
+              <div className="card" style={{ padding: 18, background: "#fff" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                  <div className="small" style={{ fontWeight: 700 }}>直近のイベント</div>
+                  <div className="small" style={{ opacity: 0.5 }}>{recentLogs.length} 件</div>
+                </div>
+                {recentLogs.length === 0 ? (
+                  <div className="small" style={{ opacity: 0.55, textAlign: "center", padding: "12px 0" }}>
+                    直近30分のイベントはありません
+                  </div>
+                ) : (
+                  <div style={{ maxHeight: 260, overflowY: "auto" }}>
+                    {recentLogs.slice(0, 30).map((ev) => (
+                      <RecentEventRow key={ev.id} ev={ev} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {realtimeTab === "sessions" && (
+              <>
+                {sessionData.length === 0 ? (
+                  <div className="card" style={{ padding: 20, opacity: 0.7 }}>
+                    <div className="small">直近30分のセッションデータがありません</div>
+                  </div>
+                ) : (
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {sessionData.map((s) => {
+                      const hasConversion = s.events.includes("conversion");
+                      const hasImpression = s.events.includes("impression");
+                      return (
+                        <div key={s.sid} className="card" style={{ padding: 14, background: "#fff", display: "flex", alignItems: "flex-start", gap: 14 }}>
+                          <div style={{ flex: "0 0 auto" }}>
+                            <div style={{ width: 36, height: 36, borderRadius: 99, background: hasConversion ? "rgba(22,163,74,.12)" : hasImpression ? "rgba(37,99,235,.1)" : "rgba(15,23,42,.06)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>
+                              {hasConversion ? "✅" : hasImpression ? "👤" : "👁"}
+                            </div>
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
+                              {hasConversion && <span className="badge" style={{ background: "rgba(22,163,74,.12)", color: "#16a34a" }}>CV済み</span>}
+                              {hasImpression && !hasConversion && <span className="badge" style={{ background: "rgba(37,99,235,.08)", color: "#2563eb" }}>施策表示</span>}
+                              <span className="badge">{s.events.filter((e) => e === "pageview").length} PV</span>
+                              <span className="small" style={{ opacity: 0.5, alignSelf: "center" }}>
+                                {s.last ? new Date(s.last).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }) : ""}
+                              </span>
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                              {s.pages.map((p, i) => (
+                                <React.Fragment key={i}>
+                                  <span className="small" style={{ background: "rgba(15,23,42,.05)", borderRadius: 6, padding: "2px 8px", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={p}>
+                                    {p}
+                                  </span>
+                                  {i < s.pages.length - 1 && <span style={{ opacity: 0.35, fontSize: 11 }}>→</span>}
+                                </React.Fragment>
+                              ))}
+                            </div>
+                            {s.ref && (
+                              <div className="small" style={{ opacity: 0.5, marginTop: 5 }}>
+                                🔗 流入元: <span style={{ fontWeight: 600 }}>{formatRef(s.ref)}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* ===== Section 1.5: 売上計測 ===== */}
+          {(purchaseLogs.length > 0 || purchaseLoading) && (
+            <div style={{ marginBottom: 32 }}>
+              <div className="h2" style={{ marginBottom: 14 }}>
+                💰 売上計測 <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel} · Shopify Web Pixel）</span>
+              </div>
+              {purchaseLoading ? (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }}>
+                  <SkeletonCard rows={3} /><SkeletonCard rows={3} /><SkeletonCard rows={3} />
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }}>
+                    <StatCard label="売上合計" value="—" numericValue={Math.round(totalRevenue)} sub={`${purchaseCount}件の購入`} accent="#22c55e" loading={statsLoading} formatter={(n) => `¥${n.toLocaleString()}`} />
+                    <StatCard label="平均注文額" value="—" numericValue={Math.round(avgOrderValue)} sub="AOV" accent="#0891b2" loading={statsLoading} formatter={(n) => `¥${n.toLocaleString()}`} />
+                    <StatCard label="購入件数" value={fmtInt(purchaseCount)} numericValue={purchaseCount} sub="ユニーク注文" accent="#7c3aed" loading={statsLoading} />
+                  </div>
+                  {/* デバッグ: 購入ログのvid確認 */}
+                  <details style={{ marginBottom: 10 }}>
+                    <summary style={{ fontSize: 11, color: "#94a3b8", cursor: "pointer" }}>開発確認用（帰属確認が必要なときだけ開く）</summary>
+                    <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12, marginTop: 6, fontSize: 11, fontFamily: "monospace" }}>
+                      <div style={{ fontWeight: 700, marginBottom: 6 }}>📦 直近の購入ログ（vid が空なら cookie未取得）</div>
+                      {purchaseLogs.slice(0, 5).map((l, i) => (
+                        <div key={i} style={{ marginBottom: 4, color: l.vid ? "#16a34a" : "#dc2626" }}>
+                          {l.vid ? "✅" : "❌"} vid: <b>{l.vid || "（空）"}</b> / order: {l.order_id || "—"} / {String(l.createdAt || "").slice(0, 16)}
+                        </div>
+                      ))}
+                      <div style={{ fontWeight: 700, margin: "10px 0 6px" }}>📺 直近のimpression（scenario_id必須）</div>
+                      {journeyLogs.filter((l: any) => l.event === "impression" && l.scenario_id).slice(0, 5).map((l: any, i: number) => (
+                        <div key={i} style={{ marginBottom: 4, color: "#0891b2" }}>
+                          vid: <b>{l.vid || "（空）"}</b> / scenario: {l.scenario_id}
+                        </div>
+                      ))}
+                      {journeyLogs.filter((l: any) => l.event === "impression" && l.scenario_id).length === 0 && (
+                        <div style={{ color: "#dc2626" }}>❌ impressionログなし（シナリオが表示されていないか、ログが取れていない）</div>
+                      )}
+                    </div>
+                  </details>
+                  {revenueByProduct.length > 0 && (
+                    <div className="card" style={{ padding: 18, background: "#fff", marginTop: 12 }}>
+                      <div className="small" style={{ fontWeight: 700, marginBottom: 12 }}>🛍️ 商品別売上</div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                        {revenueByProduct.map((r) => {
+                          const maxRev = revenueByProduct[0]?.revenue || 1;
+                          const barPct = (r.revenue / maxRev) * 100;
+                          const attrPct = r.qty > 0 ? Math.round((r.qtyAttributed / r.qty) * 100) : 0;
+                          const isExpanded = expandedProducts.has(r.title);
+                          const hasBreakdown = r.scenarioBreakdown.length > 0;
+                          return (
+                            <div key={r.title} style={{ borderRadius: 10, overflow: "hidden", border: isExpanded ? "1px solid #e2e8f0" : "1px solid transparent", marginBottom: 6 }}>
+                              {/* メイン行 */}
+                              <div
+                                style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", cursor: hasBreakdown ? "pointer" : "default", background: isExpanded ? "#f8fafc" : "transparent", borderRadius: isExpanded ? "10px 10px 0 0" : 10 }}
+                                onClick={() => {
+                                  if (!hasBreakdown) return;
+                                  setExpandedProducts((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(r.title)) next.delete(r.title); else next.add(r.title);
+                                    return next;
+                                  });
+                                }}
+                              >
+                                {hasBreakdown && (
+                                  <span style={{ fontSize: 11, color: "#94a3b8", userSelect: "none", transition: "transform .2s", display: "inline-block", transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
+                                )}
+                                <div style={{ minWidth: 160, fontSize: 13, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: "0 0 160px" }}>{r.title}</div>
+                                <div style={{ flex: 1, height: 8, background: "rgba(15,23,42,.07)", borderRadius: 99, overflow: "hidden" }}>
+                                  <div style={{ height: "100%", width: `${barPct}%`, background: "#f59e0b", borderRadius: 99, transition: "width .4s ease" }} />
+                                </div>
+                                <div style={{ minWidth: 100, fontSize: 13, fontWeight: 600, textAlign: "right" }}>¥{Math.round(r.revenue).toLocaleString()}</div>
+                                <div style={{ minWidth: 50, fontSize: 12, color: "#94a3b8", textAlign: "right" }}>{r.qty}個</div>
+                                {r.qtyAttributed > 0 && (
+                                  <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: "#dcfce7", color: "#15803d", whiteSpace: "nowrap" }}>施策貢献 {attrPct}%</span>
+                                )}
+                              </div>
+                              {/* アコーディオン: シナリオ別内訳 */}
+                              {isExpanded && (
+                                <div style={{ background: "#f8fafc", borderTop: "1px solid #e2e8f0", padding: "10px 16px 12px 32px", display: "flex", flexDirection: "column", gap: 7 }}>
+                                  <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, marginBottom: 2 }}>施策別内訳</div>
+                                  {r.scenarioBreakdown.map((bd) => {
+                                    const sc = scenarios.find((s) => s.id === bd.id);
+                                    const scName = sc ? String(sc.data?.name || sc.id) : bd.id;
+                                    const bdPct = r.qtyAttributed > 0 ? Math.round((bd.qty / r.qtyAttributed) * 100) : 0;
+                                    return (
+                                      <div key={bd.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                        <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#6366f1", flexShrink: 0 }} />
+                                        <div style={{ flex: 1, fontSize: 12, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{scName}</div>
+                                        <div style={{ fontSize: 12, color: "#64748b", whiteSpace: "nowrap" }}>{bd.qty}個</div>
+                                        <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", whiteSpace: "nowrap", minWidth: 80, textAlign: "right" }}>¥{Math.round(bd.revenue).toLocaleString()}</div>
+                                        <span style={{ fontSize: 11, padding: "1px 6px", borderRadius: 20, background: "#ede9fe", color: "#6d28d9", whiteSpace: "nowrap" }}>{bdPct}%</span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
 
           {/* ===== Section 2: 流入元 ===== */}
           <div style={{ marginBottom: 32 }}>

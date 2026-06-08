@@ -539,6 +539,38 @@ export default function DashboardPage() {
         )}
       </div>
 
+      {/* 日別トレンドチャート */}
+      <div className="card" style={{ marginBottom: 14, padding: 20 }}>
+        <div className="h2" style={{ marginBottom: 4 }}>日別トレンド：表示回数 × CVR%</div>
+        <div className="small" style={{ opacity: 0.65, marginBottom: 16 }}>
+          棒グラフ（左軸）= 表示回数　折れ線（右軸）= CVR%。量と質を同時に確認できます。
+        </div>
+        {rowsLoading ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "8px 0" }}>
+            <SkeletonBar width="100%" height={140} radius={8} />
+          </div>
+        ) : trendData.length === 0 ? (
+          <div className="small" style={{ opacity: 0.55, padding: "32px 0", textAlign: "center" }}>
+            {siteId ? "データがまだありません" : "サイトを選択してください"}
+          </div>
+        ) : (
+          <div style={{ height: 280, width: "100%" }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={trendData} margin={{ top: 4, right: 40, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,.06)" />
+                <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                <YAxis yAxisId="left" tick={{ fontSize: 11 }} />
+                <YAxis yAxisId="right" orientation="right" unit="%" tick={{ fontSize: 11 }} />
+                <Tooltip formatter={(value: any, name: string) => name === "CVR%" ? `${value}%` : fmtInt(value)} />
+                <Legend />
+                <Bar yAxisId="left" dataKey="impression" name="表示回数" fill="rgba(89,183,198,.5)" radius={[3, 3, 0, 0]} maxBarSize={40} />
+                <Line yAxisId="right" type="monotone" dataKey="cvr" name="CVR%" stroke="#16a34a" strokeWidth={2} dot={false} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </div>
+
       <div className="card" style={{ marginBottom: 14, padding: 18 }}>
         <div className="page-header" style={{ marginBottom: 14, paddingBottom: 12 }}>
           <div className="page-header__meta">
@@ -613,38 +645,6 @@ export default function DashboardPage() {
           />
         </div>
       )}
-
-      {/* 日別トレンドチャート */}
-      <div className="card" style={{ marginBottom: 14, padding: 20 }}>
-        <div className="h2" style={{ marginBottom: 4 }}>日別トレンド：表示回数 × CVR%</div>
-        <div className="small" style={{ opacity: 0.65, marginBottom: 16 }}>
-          棒グラフ（左軸）= 表示回数　折れ線（右軸）= CVR%。量と質を同時に確認できます。
-        </div>
-        {rowsLoading ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "8px 0" }}>
-            <SkeletonBar width="100%" height={140} radius={8} />
-          </div>
-        ) : trendData.length === 0 ? (
-          <div className="small" style={{ opacity: 0.55, padding: "32px 0", textAlign: "center" }}>
-            {siteId ? "データがまだありません" : "サイトを選択してください"}
-          </div>
-        ) : (
-          <div style={{ height: 280, width: "100%" }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={trendData} margin={{ top: 4, right: 40, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,.06)" />
-                <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                <YAxis yAxisId="left" tick={{ fontSize: 11 }} />
-                <YAxis yAxisId="right" orientation="right" unit="%" tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(value: any, name: string) => name === "CVR%" ? `${value}%` : fmtInt(value)} />
-                <Legend />
-                <Bar yAxisId="left" dataKey="impression" name="表示回数" fill="rgba(89,183,198,.5)" radius={[3, 3, 0, 0]} maxBarSize={40} />
-                <Line yAxisId="right" type="monotone" dataKey="cvr" name="CVR%" stroke="#16a34a" strokeWidth={2} dot={false} />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-        )}
-      </div>
 
       {/* シナリオ別比較チャート */}
       {scenarioStats.length > 1 && (
