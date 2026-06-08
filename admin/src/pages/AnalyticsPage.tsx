@@ -1389,7 +1389,32 @@ export default function AnalyticsPage() {
 
       {siteId && (
         <>
-          {/* ===== 日別トレンド（最上部） ===== */}
+          <div className="card" style={{ marginBottom: 24, padding: 18, background: "linear-gradient(180deg,#ffffff,#f8fbff)" }}>
+            <SectionLead
+              title="まず見る3指標"
+              description="最初に変化を追いやすい数値だけを前に出しています。詳しい分析はこの下で見られます。"
+              meta={<span>{selectedSiteName || "サイト未選択"} / {dateRangeLabel}</span>}
+            />
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+              {focusCards.map((card) => (
+                <div key={card.key} style={{ border: "1px solid rgba(15,23,42,.08)", borderRadius: 14, padding: 16, background: "#fff" }}>
+                  <div className="small" style={{ opacity: 0.68 }}>{card.label}</div>
+                  <div style={{ fontSize: 28, fontWeight: 800, lineHeight: 1.1, marginTop: 8, letterSpacing: "-.03em", color: card.accent, minHeight: 34 }}>
+                    {statsLoading
+                      ? <SkeletonBar width="65%" height={26} radius={5} />
+                      : typeof card.numericValue === "number"
+                        ? <CountUp value={card.numericValue} formatter={card.formatter || ((n) => n.toLocaleString("ja-JP"))} />
+                        : card.value}
+                  </div>
+                  <div className="small" style={{ opacity: 0.58, marginTop: 6 }}>
+                    {statsLoading ? <SkeletonBar width="50%" height={10} radius={3} /> : card.sub}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* ===== 日別トレンド ===== */}
           <div style={{ marginBottom: 32 }}>
             <div className="h2" style={{ marginBottom: 14 }}>
               日別トレンド <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel}）</span>
@@ -1621,31 +1646,6 @@ export default function AnalyticsPage() {
               </div>
               </>
             )}
-          </div>
-
-          <div className="card" style={{ marginBottom: 24, padding: 18, background: "linear-gradient(180deg,#ffffff,#f8fbff)" }}>
-            <SectionLead
-              title="まず見る3指標"
-              description="最初に変化を追いやすい数値だけを前に出しています。詳しい分析はこの下で見られます。"
-              meta={<span>{selectedSiteName || "サイト未選択"} / {dateRangeLabel}</span>}
-            />
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
-              {focusCards.map((card) => (
-                <div key={card.key} style={{ border: "1px solid rgba(15,23,42,.08)", borderRadius: 14, padding: 16, background: "#fff" }}>
-                  <div className="small" style={{ opacity: 0.68 }}>{card.label}</div>
-                  <div style={{ fontSize: 28, fontWeight: 800, lineHeight: 1.1, marginTop: 8, letterSpacing: "-.03em", color: card.accent, minHeight: 34 }}>
-                    {statsLoading
-                      ? <SkeletonBar width="65%" height={26} radius={5} />
-                      : typeof card.numericValue === "number"
-                        ? <CountUp value={card.numericValue} formatter={card.formatter || ((n) => n.toLocaleString("ja-JP"))} />
-                        : card.value}
-                  </div>
-                  <div className="small" style={{ opacity: 0.58, marginTop: 6 }}>
-                    {statsLoading ? <SkeletonBar width="50%" height={10} radius={3} /> : card.sub}
-                  </div>
-                </div>
-              ))}
-            </div>
           </div>
 
           {/* ===== Section 1: リアルタイム ===== */}
