@@ -15,7 +15,7 @@ shop_deletion_url = "https://api-o56523at7q-an.a.run.app/shopify/webhook/shop/re
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_fulfillment_constraint_rules,read_script_tags,write_script_tags"
+scopes = "read_fulfillment_constraint_rules,read_script_tags,write_script_tags,write_pixels"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 

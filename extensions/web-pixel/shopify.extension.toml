@@ -1,0 +1,27 @@
+api_version = "2024-01"
+
+[[extensions]]
+uid = "1b340d5e-c51e-e537-2f3f-8d5b73481472668bbfc5"
+type = "web_pixel"
+name = "MOKKEDA Tracker"
+handle = "mokkeda-tracker"
+runtime_context = "strict"
+
+[extensions.customer_privacy]
+analytics = true
+marketing = true
+preferences = false
+sale_of_data = "enabled"
+
+[extensions.settings]
+type = "object"
+
+[extensions.settings.fields.siteId]
+name = "Site ID"
+description = "MOKKEDA site ID"
+type = "single_line_text_field"
+
+[extensions.settings.fields.siteKey]
+name = "Site Key"
+description = "MOKKEDA site key"
+type = "single_line_text_field"

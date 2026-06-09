@@ -91,6 +91,7 @@ const LogReqSchema = z.object({
     qty: z.number().nonnegative(),
     price: z.number().nonnegative(),
   })).max(100).nullable().optional(),
+  discount_codes: z.array(z.string().max(100)).max(20).nullable().optional(),
 });
 
 const AiInsightReqSchema = z.object({
@@ -3709,6 +3710,7 @@ export function registerV1Routes(app: Express) {
         logPayload.order_id = body.order_id ?? null;
         logPayload.currency = body.currency ?? "JPY";
         logPayload.items = body.items ?? null;
+        logPayload.discount_codes = body.discount_codes ?? [];
       }
 
       // ---- stats_daily (集計) ----

@@ -41,9 +41,17 @@ function daysAgo(n: number) {
 }
 
 // UTC ISO文字列をJST日付文字列に変換（UTC+9）
+// NOTE: +9h 後は getUTC* で読む。getDate() は local time を返すため
+//       JST ブラウザでは +9h が二重適用されてしまう。
 function utcIsoToJstDay(createdAt: string): string {
   if (!createdAt) return "";
-  return isoDay(new Date(new Date(createdAt).getTime() + 9 * 60 * 60 * 1000));
+  const ms = new Date(createdAt).getTime();
+  if (isNaN(ms)) return "";
+  const jst = new Date(ms + 9 * 60 * 60 * 1000);
+  const y  = jst.getUTCFullYear();
+  const m  = String(jst.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(jst.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
 }
 
 // createdAt フィールドをミリ秒に変換（ISO文字列・Firestore Timestamp・数値に対応）
@@ -187,12 +195,25 @@ function FunnelStep({
 }
 
 // ---- StatCard ----
-function StatCard({ label, value, sub, accent, loading, numericValue, formatter }: {
+function StatCard({ label, value, sub, accent, loading, numericValue, formatter, delta, compLabel }: {
   label: string; value: string | number; sub?: string; accent?: string;
   loading?: boolean; numericValue?: number; formatter?: (n: number) => string;
+  delta?: number; compLabel?: string;
 }) {
   const str = String(value);
   const fontSize = str.length > 10 ? 18 : str.length > 8 ? 22 : str.length > 6 ? 26 : 30;
+  const deltaEl = delta !== undefined ? (() => {
+    const up = delta >= 0;
+    const abs = Math.abs(delta);
+    const color = up ? "#16a34a" : "#dc2626";
+    const arrow = up ? "↑" : "↓";
+    const pct = abs >= 1000 ? ">999%" : abs < 1 ? `${abs.toFixed(1)}%` : `${Math.round(abs)}%`;
+    return (
+      <span style={{ fontSize: 11, fontWeight: 700, color, marginLeft: 6, letterSpacing: 0 }}>
+        {arrow}{pct} {compLabel}
+      </span>
+    );
+  })() : null;
   return (
     <div className="card" style={{ padding: 18, background: "#fff", border: "1px solid rgba(15,23,42,.08)", minWidth: 0 }}>
       <div className="small" style={{ opacity: 0.68 }}>{label}</div>
@@ -206,8 +227,8 @@ function StatCard({ label, value, sub, accent, loading, numericValue, formatter 
         )}
       </div>
       {sub && (
-        <div className="small" style={{ opacity: 0.6, marginTop: 6 }}>
-          {loading ? <SkeletonBar width="50%" height={10} radius={3} /> : sub}
+        <div className="small" style={{ opacity: 0.6, marginTop: 6, display: "flex", alignItems: "center", flexWrap: "wrap", gap: 2 }}>
+          {loading ? <SkeletonBar width="50%" height={10} radius={3} /> : <>{sub}{deltaEl}</>}
         </div>
       )}
     </div>
@@ -408,6 +429,7 @@ export default function AnalyticsPage() {
   const [siteId, setSiteId] = useState<string>("");
   const [scenarios, setScenarios] = useState<Array<{ id: string; data: any }>>([]);
   const [dateRange, setDateRange] = useState<7 | 14 | 30 | "custom">(14);
+  const [comparison, setComparison] = useState<"none" | "day" | "month" | "year">("none");
 
   const [customFrom, setCustomFrom] = useState<string>(isoDay(daysAgo(13))); // 2週間前
   const [customTo, setCustomTo] = useState<string>(isoDay(new Date()));
@@ -453,6 +475,26 @@ export default function AnalyticsPage() {
     return f === t ? f : `${f}〜${t}`;
   }, [dateRange, customFrom, customTo]);
 
+  // ---- 比較期間 ----
+  const { compFrom, compTo } = useMemo(() => {
+    if (comparison === "none") return { compFrom: null, compTo: null };
+    const shiftDate = (d: Date, type: "day" | "month" | "year") => {
+      const r = new Date(d);
+      if (type === "day")   r.setDate(r.getDate() - 1);
+      if (type === "month") r.setMonth(r.getMonth() - 1);
+      if (type === "year")  r.setFullYear(r.getFullYear() - 1);
+      return r;
+    };
+    return { compFrom: shiftDate(effectiveFrom, comparison), compTo: shiftDate(effectiveTo, comparison) };
+  }, [comparison, effectiveFrom, effectiveTo]);
+
+  const compLabel = useMemo(() => {
+    if (comparison === "day")   return "前日比";
+    if (comparison === "month") return "前月比";
+    if (comparison === "year")  return "昨年比";
+    return "";
+  }, [comparison]);
+
   // scenarioTab 廃止 → isScenarioInPeriod で期間内シナリオを自動表示
   const [realtimeTab, setRealtimeTab] = useState<"events" | "sessions">("events");
 
@@ -471,6 +513,10 @@ export default function AnalyticsPage() {
   // ---- 購入ログ（売上計測） ----
   const [purchaseLogs, setPurchaseLogs] = useState<any[]>([]);
   const [purchaseLoading, setPurchaseLoading] = useState(false);
+
+  // ---- 比較期間データ ----
+  const [compStatRows, setCompStatRows] = useState<any[]>([]);
+  const [compPurchaseLogs, setCompPurchaseLogs] = useState<any[]>([]);
   const [selectedVid, setSelectedVid] = useState<string | null>(null);
 
   // ---- 商品別売上アコーディオン ----
@@ -480,6 +526,7 @@ export default function AnalyticsPage() {
   const [visitorFilter, setVisitorFilter] = useState<"all" | "purchase" | "scenario_purchase" | "cv" | "new" | "repeat">("all");
   // journeyFilterFrom/To は削除 → 上部の期間指定（effectiveFrom/To）に統一
   const [utmFilter, setUtmFilter] = useState<string>(""); // UTMフィルター（utm_source）
+  const [couponFilter, setCouponFilter] = useState<string>(""); // クーポンコードフィルター
   const [visitorDisplayLimit, setVisitorDisplayLimit] = useState<number>(100); // 表示件数
 
   // auth
@@ -548,6 +595,7 @@ export default function AnalyticsPage() {
   useEffect(() => {
     setVisitorFilter("all");
     setUtmFilter("");
+    setCouponFilter("");
     setSelectedVid(null);
   }, [siteId]);
 
@@ -592,7 +640,17 @@ export default function AnalyticsPage() {
         limit(1000)
       ),
       (snap) => {
-        setPurchaseLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((l) => (l.createdAt || "") <= to));
+        const raw = snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((l) => (l.createdAt || "") <= to);
+        // order_id で重複排除（同一注文が複数回ログされてもカウント1回）
+        const seen = new Set<string>();
+        const deduped = raw.filter((l: any) => {
+          const key = l.order_id;
+          if (!key) return true;
+          if (seen.has(String(key))) return false;
+          seen.add(String(key));
+          return true;
+        });
+        setPurchaseLogs(deduped);
         setPurchaseLoading(false);
       },
       (err) => {
@@ -622,6 +680,50 @@ export default function AnalyticsPage() {
     });
   }, [siteId, effectiveFrom, effectiveTo]);
 
+  // ---- 比較期間 stats_daily ----
+  useEffect(() => {
+    if (!siteId || !compFrom || !compTo) { setCompStatRows([]); return; }
+    const fromStr = isoDay(new Date(compFrom));
+    const toStr   = isoDay(new Date(compTo));
+    const q = query(
+      collection(db, "stats_daily"),
+      where("siteId", "==", siteId),
+      where("day", ">=", fromStr),
+      where("day", "<=", toStr)
+    );
+    return onSnapshot(q, (snap) => {
+      setCompStatRows(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    });
+  }, [siteId, compFrom, compTo]);
+
+  // ---- 比較期間 purchaseLogs ----
+  useEffect(() => {
+    if (!siteId || !compFrom || !compTo) { setCompPurchaseLogs([]); return; }
+    const since = compFrom.toISOString();
+    const to    = compTo.toISOString();
+    const unsub = onSnapshot(
+      query(
+        collection(db, "logs"),
+        where("site_id", "==", siteId),
+        where("event", "==", "purchase"),
+        where("createdAt", ">", since),
+        limit(1000)
+      ),
+      (snap) => {
+        const raw = snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((l) => (l.createdAt || "") <= to);
+        const seen = new Set<string>();
+        setCompPurchaseLogs(raw.filter((l: any) => {
+          const key = l.order_id;
+          if (!key) return true;
+          if (seen.has(String(key))) return false;
+          seen.add(String(key));
+          return true;
+        }));
+      }
+    );
+    return unsub;
+  }, [siteId, compFrom, compTo]);
+
   // pvLogs は journeyLogs から派生（pageview のみ）
   const pvLogs = useMemo(() => journeyLogs.filter((l: any) => l.event === "pageview"), [journeyLogs]);
 
@@ -645,14 +747,78 @@ export default function AnalyticsPage() {
   // ---- computed: 売上 ----
   // 合計・件数・AOV は purchaseLogs ベース（raw データで正確に集計）
   const todayRevenue = useMemo(() => {
-    const todayStart = todayStr + "T00:00:00";
     return purchaseLogs
-      .filter((l) => (l.createdAt || "") >= todayStart)
+      .filter((l) => utcIsoToJstDay(l.createdAt || "") === todayStr)
       .reduce((s, l) => s + (typeof l.revenue === "number" ? l.revenue : 0), 0);
   }, [purchaseLogs, todayStr]);
   const totalRevenue = useMemo(() => purchaseLogs.reduce((s, l) => s + (typeof l.revenue === "number" ? l.revenue : 0), 0), [purchaseLogs]);
   const purchaseCount = useMemo(() => purchaseLogs.length, [purchaseLogs]);
   const avgOrderValue = useMemo(() => purchaseCount > 0 ? totalRevenue / purchaseCount : 0, [totalRevenue, purchaseCount]);
+
+  // ---- computed: 比較期間の集計値 ----
+  const compTodayStr = useMemo(() => {
+    if (!compFrom) return "";
+    // 比較期間の「今日」= compFrom と compTo の差を考慮した同一相対日
+    // シンプルに: 比較期間の終日（compTo の JST日）を比較対象の「今日」とする
+    return isoDay(compTo ? new Date(compTo) : new Date(compFrom));
+  }, [compFrom, compTo]);
+
+  const compTodayPv = useMemo(() => {
+    if (!compTodayStr) return null;
+    return compStatRows.filter((r) => r.day === compTodayStr && r.event === "pageview").reduce((s: number, r: any) => s + safeNum(r.count), 0);
+  }, [compStatRows, compTodayStr]);
+  const compTodayImp = useMemo(() => {
+    if (!compTodayStr) return null;
+    return compStatRows.filter((r) => r.day === compTodayStr && r.event === "impression").reduce((s, r) => s + safeNum(r.count), 0);
+  }, [compStatRows, compTodayStr]);
+  const compTodayCv = useMemo(() => {
+    if (!compTodayStr) return null;
+    return compStatRows.filter((r) => r.day === compTodayStr && r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
+  }, [compStatRows, compTodayStr]);
+  const compTodayRevenue = useMemo(() => {
+    if (!compTodayStr) return null;
+    return compPurchaseLogs
+      .filter((l) => utcIsoToJstDay(l.createdAt || "") === compTodayStr)
+      .reduce((s, l) => s + (typeof l.revenue === "number" ? l.revenue : 0), 0);
+  }, [compPurchaseLogs, compTodayStr]);
+  const compTotalRevenue = useMemo(() => {
+    if (!compFrom) return null;
+    return compPurchaseLogs.reduce((s, l) => s + (typeof l.revenue === "number" ? l.revenue : 0), 0);
+  }, [compPurchaseLogs, compFrom]);
+  const compPurchaseCount = useMemo(() => {
+    if (!compFrom) return null;
+    return compPurchaseLogs.length;
+  }, [compPurchaseLogs, compFrom]);
+  const compAvgOrderValue = useMemo(() => {
+    if (compPurchaseCount === null || compPurchaseCount === 0) return null;
+    return (compTotalRevenue ?? 0) / compPurchaseCount;
+  }, [compTotalRevenue, compPurchaseCount]);
+
+  // delta計算ヘルパー: (current - comp) / comp * 100
+  const calcDelta = (current: number, comp: number | null): number | undefined => {
+    if (comp === null || comp === 0) return undefined;
+    return ((current - comp) / comp) * 100;
+  };
+
+  // ---- computed: クーポン別集計 ----
+  const couponStats = useMemo(() => {
+    const map = new Map<string, { code: string; revenue: number; count: number; vids: Set<string> }>();
+    for (const l of purchaseLogs) {
+      const codes: string[] = Array.isArray(l.discount_codes) ? l.discount_codes : [];
+      if (codes.length === 0) continue;
+      for (const code of codes) {
+        if (!code) continue;
+        if (!map.has(code)) map.set(code, { code, revenue: 0, count: 0, vids: new Set() });
+        const s = map.get(code)!;
+        s.revenue += typeof l.revenue === "number" ? l.revenue : 0;
+        s.count++;
+        if (l.vid) s.vids.add(l.vid);
+      }
+    }
+    return Array.from(map.values())
+      .sort((a, b) => b.revenue - a.revenue)
+      .map((s) => ({ ...s, vids: Array.from(s.vids) }));
+  }, [purchaseLogs]);
 
   // シナリオが選択期間内に稼働していたか判定
   // スケジュールなし → 常時稼働 → true
@@ -1130,8 +1296,12 @@ export default function AnalyticsPage() {
     if (visitorFilter === "new") list = list.filter((v) => v.isNew === true);
     if (visitorFilter === "repeat") list = list.filter((v) => v.isNew === false);
     if (utmFilter) list = list.filter((v: any) => v.utmSource === utmFilter);
+    if (couponFilter) {
+      const couponVids = new Set(couponStats.find((c) => c.code === couponFilter)?.vids || []);
+      list = list.filter((v) => couponVids.has(v.vid));
+    }
     return list.slice(0, visitorDisplayLimit);
-  }, [visitorList, visitorFilter, scenarioPurchaseVids, utmFilter, visitorDisplayLimit]);
+  }, [visitorList, visitorFilter, scenarioPurchaseVids, utmFilter, couponFilter, couponStats, visitorDisplayLimit]);
 
   // ---- computed: 選択中訪問者のイベント一覧（購入ログ含む） ----
   const selectedJourney = useMemo(() => {
@@ -1193,9 +1363,12 @@ export default function AnalyticsPage() {
   }, [sites, siteId]);
 
   const focusCards = useMemo(() => {
-    const pvTotal = dailyTrend.reduce((sum, d) => sum + safeNum(d.pv), 0);
+    const pvTotal  = dailyTrend.reduce((sum, d) => sum + safeNum(d.pv), 0);
     const impTotal = dailyTrend.reduce((sum, d) => sum + safeNum(d.imp), 0);
-    const cvTotal = dailyTrend.reduce((sum, d) => sum + safeNum(d.cv), 0);
+    const cvTotal  = dailyTrend.reduce((sum, d) => sum + safeNum(d.cv), 0);
+    const compPvTotal  = compFrom ? compStatRows.filter((r) => r.event === "pageview") .reduce((s: number, r: any) => s + safeNum(r.count), 0) : null;
+    const compImpTotal = compFrom ? compStatRows.filter((r) => r.event === "impression").reduce((s: number, r: any) => s + safeNum(r.count), 0) : null;
+    const compCvTotal  = compFrom ? compStatRows.filter((r) => r.event === "conversion").reduce((s: number, r: any) => s + safeNum(r.count), 0) : null;
     const cards = [
       {
         key: "pv",
@@ -1205,6 +1378,7 @@ export default function AnalyticsPage() {
         formatter: (n: number) => n.toLocaleString("ja-JP"),
         sub: `${dateRangeLabel} の閲覧量`,
         accent: "#2563eb",
+        delta: calcDelta(pvTotal, compPvTotal),
       },
       {
         key: "imp",
@@ -1214,6 +1388,7 @@ export default function AnalyticsPage() {
         formatter: (n: number) => n.toLocaleString("ja-JP"),
         sub: "シナリオ表示回数",
         accent: "#7c3aed",
+        delta: calcDelta(impTotal, compImpTotal),
       },
       purchaseLogs.length > 0
         ? {
@@ -1224,6 +1399,7 @@ export default function AnalyticsPage() {
             formatter: (n: number) => `¥${n.toLocaleString("ja-JP")}`,
             sub: `${purchaseCount}件の購入`,
             accent: "#16a34a",
+            delta: calcDelta(totalRevenue, compTotalRevenue),
           }
         : {
             key: "cv",
@@ -1233,10 +1409,11 @@ export default function AnalyticsPage() {
             formatter: (n: number) => n.toLocaleString("ja-JP"),
             sub: "期間内のCV数",
             accent: "#f59e0b",
+            delta: calcDelta(cvTotal, compCvTotal),
           },
     ];
     return cards;
-  }, [dailyTrend, dateRangeLabel, purchaseCount, purchaseLogs.length, totalRevenue]);
+  }, [dailyTrend, dateRangeLabel, purchaseCount, purchaseLogs.length, totalRevenue, compFrom, compStatRows, compTotalRevenue]);
 
   // サイトのドメイン（URLリンク生成用）
   const siteDomain = useMemo(() => {
@@ -1342,6 +1519,29 @@ export default function AnalyticsPage() {
               </div>
             )}
           </div>
+          {/* 比較選択 */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span className="small" style={{ opacity: 0.5, whiteSpace: "nowrap" }}>比較:</span>
+            <div style={{ display: "flex", border: "1px solid rgba(15,23,42,.12)", borderRadius: 10, overflow: "hidden" }}>
+              {([ ["none", "なし"], ["day", "前日"], ["month", "前月"], ["year", "昨年"] ] as const).map(([val, label]) => (
+                <button
+                  key={val}
+                  type="button"
+                  onClick={() => setComparison(val)}
+                  style={{
+                    padding: "7px 12px",
+                    border: "none",
+                    borderLeft: val !== "none" ? "1px solid rgba(15,23,42,.08)" : undefined,
+                    background: comparison === val ? "#374151" : "transparent",
+                    color: comparison === val ? "#fff" : "inherit",
+                    fontWeight: comparison === val ? 700 : 500,
+                    cursor: "pointer",
+                    fontSize: 12,
+                  }}
+                >{label}</button>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1406,8 +1606,18 @@ export default function AnalyticsPage() {
                         ? <CountUp value={card.numericValue} formatter={card.formatter || ((n) => n.toLocaleString("ja-JP"))} />
                         : card.value}
                   </div>
-                  <div className="small" style={{ opacity: 0.58, marginTop: 6 }}>
-                    {statsLoading ? <SkeletonBar width="50%" height={10} radius={3} /> : card.sub}
+                  <div className="small" style={{ opacity: 0.58, marginTop: 6, display: "flex", alignItems: "center", flexWrap: "wrap", gap: 2 }}>
+                    {statsLoading ? <SkeletonBar width="50%" height={10} radius={3} /> : (
+                      <>
+                        {card.sub}
+                        {card.delta !== undefined && (() => {
+                          const up = card.delta >= 0;
+                          const abs = Math.abs(card.delta);
+                          const pct = abs >= 1000 ? ">999%" : abs < 1 ? `${abs.toFixed(1)}%` : `${Math.round(abs)}%`;
+                          return <span style={{ fontSize: 11, fontWeight: 700, color: up ? "#16a34a" : "#dc2626", marginLeft: 6 }}>{up ? "↑" : "↓"}{pct} {compLabel}</span>;
+                        })()}
+                      </>
+                    )}
                   </div>
                 </div>
               ))}
@@ -1660,10 +1870,10 @@ export default function AnalyticsPage() {
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }}>
               <StatCard label="アクティブ訪問者" value={fmtInt(activeVisitors)} sub="ユニーク訪問者数" accent="#22c55e" loading={journeyLoading} />
-              <StatCard label="今日のPV" value={fmtInt(todayPvCount)} sub="ページビュー" loading={statsLoading} />
-              <StatCard label="今日の施策表示" value={fmtInt(todayImpCount)} sub="インプレッション" accent="#2563eb" loading={statsLoading} />
-              <StatCard label="今日のCV" value={fmtInt(todayCvCount)} sub="コンバージョン" accent="#f59e0b" loading={statsLoading} />
-              <StatCard label="今日の売上" value="—" numericValue={todayRevenue} sub="購入合計" accent="#16a34a" loading={purchaseLoading} formatter={(n) => n > 0 ? `¥${Math.round(n).toLocaleString()}` : "—"} />
+              <StatCard label="今日のPV" value={fmtInt(todayPvCount)} sub="ページビュー" loading={statsLoading} delta={calcDelta(todayPvCount, compTodayPv)} compLabel={compLabel} />
+              <StatCard label="今日の施策表示" value={fmtInt(todayImpCount)} sub="インプレッション" accent="#2563eb" loading={statsLoading} delta={calcDelta(todayImpCount, compTodayImp)} compLabel={compLabel} />
+              <StatCard label="今日のCV" value={fmtInt(todayCvCount)} sub="コンバージョン" accent="#f59e0b" loading={statsLoading} delta={calcDelta(todayCvCount, compTodayCv)} compLabel={compLabel} />
+              <StatCard label="今日の売上" value="—" numericValue={todayRevenue} sub="購入合計" accent="#16a34a" loading={purchaseLoading} formatter={(n) => n > 0 ? `¥${Math.round(n).toLocaleString()}` : "—"} delta={calcDelta(todayRevenue, compTodayRevenue)} compLabel={compLabel} />
             </div>
             {/* タブ: 直近のイベント / セッション行動 */}
             <TabBar
@@ -1755,9 +1965,9 @@ export default function AnalyticsPage() {
               ) : (
                 <>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }}>
-                    <StatCard label="売上合計" value="—" numericValue={Math.round(totalRevenue)} sub={`${purchaseCount}件の購入`} accent="#22c55e" loading={statsLoading} formatter={(n) => `¥${n.toLocaleString()}`} />
-                    <StatCard label="平均注文額" value="—" numericValue={Math.round(avgOrderValue)} sub="AOV" accent="#0891b2" loading={statsLoading} formatter={(n) => `¥${n.toLocaleString()}`} />
-                    <StatCard label="購入件数" value={fmtInt(purchaseCount)} numericValue={purchaseCount} sub="ユニーク注文" accent="#7c3aed" loading={statsLoading} />
+                    <StatCard label="売上合計" value="—" numericValue={Math.round(totalRevenue)} sub={`${purchaseCount}件の購入`} accent="#22c55e" loading={statsLoading} formatter={(n) => `¥${n.toLocaleString()}`} delta={calcDelta(totalRevenue, compTotalRevenue)} compLabel={compLabel} />
+                    <StatCard label="平均注文額" value="—" numericValue={Math.round(avgOrderValue)} sub="AOV" accent="#0891b2" loading={statsLoading} formatter={(n) => `¥${n.toLocaleString()}`} delta={calcDelta(avgOrderValue, compAvgOrderValue)} compLabel={compLabel} />
+                    <StatCard label="購入件数" value={fmtInt(purchaseCount)} numericValue={purchaseCount} sub="ユニーク注文" accent="#7c3aed" loading={statsLoading} delta={calcDelta(purchaseCount, compPurchaseCount)} compLabel={compLabel} />
                   </div>
                   {/* デバッグ: 購入ログのvid確認 */}
                   <details style={{ marginBottom: 10 }}>
@@ -1845,6 +2055,61 @@ export default function AnalyticsPage() {
                   )}
                 </>
               )}
+            </div>
+          )}
+
+          {/* ===== Section 1.6: クーポン分析 ===== */}
+          {couponStats.length > 0 && (
+            <div style={{ marginBottom: 32 }}>
+              <div className="h2" style={{ marginBottom: 14 }}>
+                🎟️ クーポン分析 <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel} · 購入ログに discount_codes が記録された件数）</span>
+              </div>
+              <div className="card" style={{ padding: 18, background: "#fff" }}>
+                {/* ヘッダー行 */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 80px 80px 120px", gap: 8, padding: "4px 8px", marginBottom: 8 }}>
+                  <div className="small" style={{ fontWeight: 700, opacity: 0.5 }}>クーポンコード</div>
+                  <div className="small" style={{ fontWeight: 700, opacity: 0.5, textAlign: "right" }}>売上合計</div>
+                  <div className="small" style={{ fontWeight: 700, opacity: 0.5, textAlign: "right" }}>件数</div>
+                  <div className="small" style={{ fontWeight: 700, opacity: 0.5, textAlign: "right" }}>訪問者数</div>
+                  <div className="small" style={{ fontWeight: 700, opacity: 0.5, textAlign: "center" }}>ジャーニー追跡</div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {couponStats.map((c) => {
+                    const maxRev = couponStats[0]?.revenue || 1;
+                    const barPct = (c.revenue / maxRev) * 100;
+                    const isActive = couponFilter === c.code;
+                    return (
+                      <div key={c.code} style={{ display: "grid", gridTemplateColumns: "1fr 120px 80px 80px 120px", gap: 8, alignItems: "center", padding: "8px", borderRadius: 8, background: isActive ? "#f0fdf4" : "rgba(15,23,42,.02)", border: isActive ? "1px solid #86efac" : "1px solid transparent" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, fontFamily: "monospace", color: "#1f6573", minWidth: 120 }}>{c.code}</div>
+                          <div style={{ flex: 1, height: 6, background: "rgba(15,23,42,.07)", borderRadius: 99, overflow: "hidden" }}>
+                            <div style={{ height: "100%", width: `${barPct}%`, background: "#34d399", borderRadius: 99, transition: "width .4s ease" }} />
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 13, fontWeight: 700, textAlign: "right", color: "#16a34a" }}>¥{Math.round(c.revenue).toLocaleString()}</div>
+                        <div style={{ fontSize: 13, textAlign: "right", color: "#374151" }}>{c.count}件</div>
+                        <div style={{ fontSize: 13, textAlign: "right", color: "#374151" }}>{c.vids.length}人</div>
+                        <div style={{ textAlign: "center" }}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCouponFilter(isActive ? "" : c.code);
+                              setSelectedVid(null);
+                              // ジャーニーセクションまでスクロール
+                              setTimeout(() => {
+                                document.getElementById("journey-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                              }, 100);
+                            }}
+                            style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 20, border: "none", background: isActive ? "#16a34a" : "#e0f2fe", color: isActive ? "#fff" : "#0369a1", cursor: "pointer", whiteSpace: "nowrap" }}
+                          >
+                            {isActive ? "✓ 追跡中" : "👣 追跡する"}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           )}
 
@@ -2033,7 +2298,7 @@ export default function AnalyticsPage() {
           </div>
 
           {/* ===== Section 6: 訪問者ジャーニー ===== */}
-          <div style={{ marginBottom: 32 }}>
+          <div id="journey-section" style={{ marginBottom: 32 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
               <div>
                 <div className="h2" style={{ margin: 0 }}>
@@ -2068,6 +2333,19 @@ export default function AnalyticsPage() {
                   </select>
                   {utmFilter && (
                     <button type="button" onClick={() => setUtmFilter("")} style={{ fontSize: 11, padding: "4px 7px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 6, background: "transparent", cursor: "pointer", opacity: 0.6 }}>✕</button>
+                  )}
+                </div>
+              )}
+              {/* クーポンフィルター */}
+              {couponStats.length > 0 && (
+                <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+                  <span className="small" style={{ opacity: 0.6, whiteSpace: "nowrap" }}>🎟️ クーポン</span>
+                  <select value={couponFilter} onChange={(e) => { setCouponFilter(e.target.value); setSelectedVid(null); }} style={{ fontSize: 12, padding: "5px 7px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 7, background: couponFilter ? "#f0fdf4" : "#fff", cursor: "pointer", maxWidth: 160, fontWeight: couponFilter ? 700 : 400, color: couponFilter ? "#16a34a" : "inherit" }}>
+                    <option value="">すべて</option>
+                    {couponStats.map((c) => <option key={c.code} value={c.code}>{c.code}（{c.vids.length}人）</option>)}
+                  </select>
+                  {couponFilter && (
+                    <button type="button" onClick={() => { setCouponFilter(""); setSelectedVid(null); }} style={{ fontSize: 11, padding: "4px 7px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 6, background: "transparent", cursor: "pointer", opacity: 0.6 }}>✕</button>
                   )}
                 </div>
               )}
@@ -2108,13 +2386,13 @@ export default function AnalyticsPage() {
                           新しい動きから順に表示
                         </div>
                       </div>
-                      {(visitorFilter !== "all" || utmFilter) && (
+                      {(visitorFilter !== "all" || utmFilter || couponFilter) && (
                         <button
                           type="button"
-                          onClick={() => { setVisitorFilter("all"); setUtmFilter(""); setSelectedVid(null); }}
-                          style={{ fontSize: 11, padding: "3px 8px", border: "none", borderRadius: 20, background: "#fde68a", color: "#92400e", cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}
+                          onClick={() => { setVisitorFilter("all"); setUtmFilter(""); setCouponFilter(""); setSelectedVid(null); }}
+                          style={{ fontSize: 11, padding: "3px 8px", border: "none", borderRadius: 20, background: couponFilter ? "#dcfce7" : "#fde68a", color: couponFilter ? "#15803d" : "#92400e", cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}
                         >
-                          {utmFilter ? `📡 ${utmFilter} ×` : visitorFilter === "purchase" ? "💰 購入フィルター中 ×" : visitorFilter === "scenario_purchase" ? "🎯 施策経由購入フィルター中 ×" : visitorFilter === "cv" ? "✅ CVフィルター中 ×" : visitorFilter === "new" ? "🆕 新規フィルター中 ×" : "🔁 リピートフィルター中 ×"}
+                          {couponFilter ? `🎟️ ${couponFilter} ×` : utmFilter ? `📡 ${utmFilter} ×` : visitorFilter === "purchase" ? "💰 購入フィルター中 ×" : visitorFilter === "scenario_purchase" ? "🎯 施策経由購入フィルター中 ×" : visitorFilter === "cv" ? "✅ CVフィルター中 ×" : visitorFilter === "new" ? "🆕 新規フィルター中 ×" : "🔁 リピートフィルター中 ×"}
                         </button>
                       )}
                     </div>
@@ -2415,6 +2693,13 @@ export default function AnalyticsPage() {
                                             )}
                                             {ev.currency && ev.currency !== "JPY" && (
                                               <div className="small" style={{ opacity: 0.6 }}>{ev.currency}</div>
+                                            )}
+                                            {Array.isArray(ev.discount_codes) && ev.discount_codes.length > 0 && (
+                                              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                                                {ev.discount_codes.map((code: string) => (
+                                                  <span key={code} style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: "#dcfce7", color: "#15803d", fontFamily: "monospace" }}>🎟️ {code}</span>
+                                                ))}
+                                              </div>
                                             )}
                                           </div>
                                           {Array.isArray(ev.items) && ev.items.length > 0 && (
