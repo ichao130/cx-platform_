@@ -41,7 +41,8 @@ type AccessKey =
   | "ai"
   | "members"
   | "billing"
-  | "rms";
+  | "rms"
+  | "push";
 
 type AccessMatrix = Record<RoleKey, Partial<Record<AccessKey, boolean>>>;
 
@@ -64,6 +65,7 @@ const ACCESS_KEYS: AccessKey[] = [
   "members",
   "billing",
   "rms",
+  "push",
 ];
 
 function defaultAccessMatrix(): AccessMatrix {
@@ -81,6 +83,7 @@ function defaultAccessMatrix(): AccessMatrix {
       members: true,
       billing: true,
       rms: true,
+      push: true,
     },
     admin: {
       dashboard: true,
@@ -95,6 +98,7 @@ function defaultAccessMatrix(): AccessMatrix {
       members: true,
       billing: false,
       rms: true,
+      push: true,
     },
     member: {
       dashboard: true,
@@ -109,6 +113,7 @@ function defaultAccessMatrix(): AccessMatrix {
       members: false,
       billing: false,
       rms: true,
+      push: true,
     },
     viewer: {
       dashboard: true,
@@ -123,6 +128,7 @@ function defaultAccessMatrix(): AccessMatrix {
       members: false,
       billing: false,
       rms: false,
+      push: false,
     },
   };
 }
@@ -867,6 +873,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
             {canShow(canAccess, "analytics") && <SidebarLink to="/analytics">流入計測</SidebarLink>}
             {canShow(canAccess, "ai") && <SidebarLink to="/ai">AIインサイト</SidebarLink>}
             {canShow(canAccess, "ai") && <SidebarLink to="/ai/optimize">配信最適化</SidebarLink>}
+            {canShow(canAccess, "push") && <SidebarLink to="/push">Webプッシュ</SidebarLink>}
           </div>
         </div>
 

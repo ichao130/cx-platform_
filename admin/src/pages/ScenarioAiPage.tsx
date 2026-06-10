@@ -61,6 +61,7 @@ export default function ScenarioAiPage() {
   const [review, setReview] = useState<any | null>(null);
   const [insight, setInsight] = useState<any | null>(null);
   const [summaryData, setSummaryData] = useState<any | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
   const [visionLoading, setVisionLoading] = useState(false);
   const [visionStatus, setVisionStatus] = useState<"idle" | "capturing" | "analyzing">("idle");
   const previewRef = useRef<HTMLDivElement | null>(null);
@@ -236,12 +237,16 @@ export default function ScenarioAiPage() {
   // シナリオ・期間が変わったら自動でサマリ取得
   useEffect(() => {
     if (!siteId || !scenarioId || !dayFrom || !dayTo) return;
-    setSummaryData(null);
+    setSummaryLoading(true);
+    let cancelled = false;
     apiPostJson(
       "/v1/stats/summary",
       { site_id: siteId, day_from: dayFrom, day_to: dayTo, scope: "scenario", scope_id: scenarioId },
       { siteId }
-    ).then((d) => setSummaryData(d)).catch(() => {});
+    ).then((d) => { if (!cancelled) setSummaryData(d); })
+     .catch(() => {})
+     .finally(() => { if (!cancelled) setSummaryLoading(false); });
+    return () => { cancelled = true; };
   }, [siteId, scenarioId, dayFrom, dayTo]);
 
 
@@ -496,10 +501,10 @@ export default function ScenarioAiPage() {
           gap: 12,
         }}
       >
-        <MiniStat label="表示回数" value={formatInt(stats.impressions)} loading={summaryData === null && !!siteId} />
-        <MiniStat label="クリック数" value={formatInt(stats.clicks)} loading={summaryData === null && !!siteId} />
-        <MiniStat label="閉じる操作" value={formatInt(stats.closes)} loading={summaryData === null && !!siteId} />
-        <MiniStat label="コンバージョン" value={formatInt(stats.conversions)} loading={summaryData === null && !!siteId} />
+        <MiniStat label="表示回数" value={formatInt(stats.impressions)} loading={summaryLoading} />
+        <MiniStat label="クリック数" value={formatInt(stats.clicks)} loading={summaryLoading} />
+        <MiniStat label="閉じる操作" value={formatInt(stats.closes)} loading={summaryLoading} />
+        <MiniStat label="コンバージョン" value={formatInt(stats.conversions)} loading={summaryLoading} />
       </div>
 
       <div style={{ height: 14 }} />

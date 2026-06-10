@@ -17,6 +17,7 @@ import AcceptInvitePage from "./pages/AcceptInvitePage";
 import AnalyticsPage from "./pages/AnalyticsPage";
 import OptimizePage from "./pages/OptimizePage";
 import RmsPage from "./pages/RmsPage";
+import PushPage from "./pages/PushPage";
 
 type AccessKey =
   | "dashboard"
@@ -30,7 +31,8 @@ type AccessKey =
   | "ai"
   | "members"
   | "billing"
-  | "rms";
+  | "rms"
+  | "push";
 
 type AppRoutesProps = {
   canAccess?: (key: AccessKey) => boolean;
@@ -84,6 +86,7 @@ export default function AppRoutes({ canAccess, workspaceRole, isPlatformAdmin, w
         <Route path="/ai" element={<Guard allow={canShow(canAccess, "ai")} title="AIインサイト"><ScenarioAiPage /></Guard>} />
         <Route path="/ai/optimize" element={<Guard allow={canShow(canAccess, "ai")} title="配信最適化"><OptimizePage /></Guard>} />
         <Route path="/rms" element={<Guard allow={canShow(canAccess, "rms")} title="楽天RMS"><RmsPage siteId={siteId || ""} /></Guard>} />
+        <Route path="/push" element={<Guard allow={canShow(canAccess, "push")} title="Webプッシュ"><PushPage /></Guard>} />
 
         {/* ワークスペース関連 */}
         <Route path="/workspace/members" element={<Guard allow={canShow(canAccess, "members")} title="メンバー"><WorkspaceMembersPage /></Guard>} />

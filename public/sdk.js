@@ -1873,4 +1873,70 @@
   } else {
     main();
   }
+
+  // ─── Web Push ─────────────────────────────────────────────────────────
+  var PUSH_BRIDGE_ORIGIN = "https://push.mokkeda.jp";
+  var _pushIframe = null;
+  var _pushCallbacks = {};
+
+  function _pushBridgeUrl(mode) {
+    var script = getCurrentScript();
+    var sid = script ? (script.getAttribute("data-site-id") || "") : "";
+    var sk  = script ? (script.getAttribute("data-site-key") || "") : "";
+    var url = PUSH_BRIDGE_ORIGIN + "/sw-bridge.html"
+      + "?siteId=" + encodeURIComponent(sid)
+      + "&siteKey=" + encodeURIComponent(sk)
+      + "&mode=" + encodeURIComponent(mode || "subscribe");
+    return url;
+  }
+
+  function _ensurePushIframe(mode, cb) {
+    // メッセージ受信リスナー（1回だけ登録）
+    if (!window.__cxPushListener) {
+      window.__cxPushListener = true;
+      window.addEventListener("message", function (ev) {
+        if (ev.origin !== PUSH_BRIDGE_ORIGIN) return;
+        var data = ev.data || {};
+        if (data.type && _pushCallbacks[data.type]) {
+          var fn = _pushCallbacks[data.type];
+          delete _pushCallbacks[data.type];
+          fn(data);
+        }
+      });
+    }
+
+    // iframe 作成
+    var iframe = document.createElement("iframe");
+    iframe.src = _pushBridgeUrl(mode);
+    iframe.style.cssText = "display:none;width:0;height:0;border:none;position:absolute;";
+    iframe.setAttribute("sandbox", "allow-scripts allow-same-origin");
+    document.body.appendChild(iframe);
+    return iframe;
+  }
+
+  /**
+   * プッシュ通知の購読リクエスト。
+   * 許可ダイアログを表示し、結果をコールバックで返す。
+   * @param {function} onResult - ({ status: "subscribed"|"denied"|"dismissed"|"unsupported"|"error" }) => void
+   */
+  function cxRequestPush(onResult) {
+    try {
+      var cb = onResult || function () {};
+      _pushCallbacks["cx_push_subscribed"]    = function () { cb({ status: "subscribed" }); };
+      _pushCallbacks["cx_push_denied"]        = function () { cb({ status: "denied" }); };
+      _pushCallbacks["cx_push_dismissed"]     = function () { cb({ status: "dismissed" }); };
+      _pushCallbacks["cx_push_unsupported"]   = function () { cb({ status: "unsupported" }); };
+      _pushCallbacks["cx_push_error"]         = function (d) { cb({ status: "error", error: d.error }); };
+      _ensurePushIframe("subscribe");
+    } catch (e) {
+      try { onResult && onResult({ status: "error", error: String(e) }); } catch (e2) {}
+    }
+  }
+
+  // グローバル公開（シナリオアクションや手動呼び出し用）
+  try {
+    window.mokkeda = window.mokkeda || {};
+    window.mokkeda.push = { requestPermission: cxRequestPush };
+  } catch (e) {}
+  // ──────────────────────────────────────────────────────────────────────
 })();

@@ -50,6 +50,7 @@ const params_1 = require("firebase-functions/params");
 const stripe_1 = __importDefault(require("stripe"));
 const misoca_1 = require("../services/misoca");
 const backup_1 = require("../services/backup");
+const web_push_1 = __importDefault(require("web-push"));
 /* =========================================
    Schemas
 ========================================= */
@@ -111,6 +112,7 @@ const LogReqSchema = zod_1.z.object({
         qty: zod_1.z.number().nonnegative(),
         price: zod_1.z.number().nonnegative(),
     })).max(100).nullable().optional(),
+    discount_codes: zod_1.z.array(zod_1.z.string().max(100)).max(20).nullable().optional(),
 });
 const AiInsightReqSchema = zod_1.z.object({
     site_id: zod_1.z.string().min(1),
@@ -3263,6 +3265,7 @@ function registerV1Routes(app) {
                 logPayload.order_id = body.order_id ?? null;
                 logPayload.currency = body.currency ?? "JPY";
                 logPayload.items = body.items ?? null;
+                logPayload.discount_codes = body.discount_codes ?? [];
             }
             // ---- stats_daily (集計) ----
             // 重要: docId に variantId を含めないと A/B が上書きされる
@@ -3886,7 +3889,7 @@ function registerV1Routes(app) {
                     .slice(0, 600); // AIに渡すテキストは最大600文字
             }
             const actions = actionSnaps
-                .filter((snap) => snap.exists)
+                .filter((snap) => snap.exists && !snap.data()?.archived)
                 .map((snap) => {
                 const d = (snap.data() || {});
                 const actionType = String(d.type || "modal");
@@ -5558,4 +5561,182 @@ function registerV1Routes(app) {
         }
     });
     app.options("/v1/ops/backfill-purchase-attribution", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /* =========================================
+       Web Push
+    ========================================= */
+    const VAPID_PUBLIC_KEY = "BHHAw9e5rSVttkuLfz1TRvebwIRP4UT_SNWneI22hxdvbn_q4eOFrqojYby2mRsgtYR_5yp2mljlCc2-u9pCcSU";
+    const VAPID_PRIVATE_KEY = (0, params_1.defineSecret)("VAPID_PRIVATE_KEY");
+    function initWebPush() {
+        web_push_1.default.setVapidDetails("mailto:hello@mokkeda.com", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY.value());
+    }
+    // POST /v1/push/subscribe  (公開エンドポイント: sdk.js から呼ぶ)
+    app.post("/v1/push/subscribe", async (req, res) => {
+        try {
+            // CORS: push.mokkeda.jp からのリクエストを許可
+            const origin = req.header("Origin") || "";
+            if (origin) {
+                res.setHeader("Access-Control-Allow-Origin", origin);
+                res.setHeader("Vary", "Origin");
+            }
+            const { site_id, site_key, subscription, ua } = req.body || {};
+            if (!site_id || !subscription)
+                return res.status(400).json({ ok: false, error: "missing_params" });
+            // site_key でサイトの正当性を確認
+            const db = (0, admin_1.adminDb)();
+            const siteDoc = await db.collection("sites").doc(site_id).get();
+            if (!siteDoc.exists)
+                return res.status(404).json({ ok: false, error: "site_not_found" });
+            const siteData = siteDoc.data() || {};
+            if (siteData.siteKey && siteData.siteKey !== site_key) {
+                return res.status(403).json({ ok: false, error: "invalid_site_key" });
+            }
+            // endpoint をトークンIDに使う（重複登録防止）
+            let subObj;
+            try {
+                subObj = typeof subscription === "string" ? JSON.parse(subscription) : subscription;
+            }
+            catch {
+                return res.status(400).json({ ok: false, error: "invalid_subscription" });
+            }
+            const endpoint = subObj.endpoint || "";
+            if (!endpoint)
+                return res.status(400).json({ ok: false, error: "missing_endpoint" });
+            const tokenId = Buffer.from(endpoint).toString("base64url").slice(0, 64);
+            await db.collection("push_subscriptions").doc(site_id)
+                .collection("tokens").doc(tokenId).set({
+                subscription: typeof subscription === "string" ? subscription : JSON.stringify(subscription),
+                ua: ua || "",
+                siteId: site_id,
+                active: true,
+                createdAt: firestore_1.FieldValue.serverTimestamp(),
+                updatedAt: firestore_1.FieldValue.serverTimestamp(),
+            }, { merge: true });
+            return res.json({ ok: true });
+        }
+        catch (e) {
+            console.error("[/v1/push/subscribe]", e);
+            return res.status(500).json({ ok: false, error: e?.message });
+        }
+    });
+    app.options("/v1/push/subscribe", (req, res) => {
+        const origin = req.header("Origin") || "";
+        if (origin) {
+            res.setHeader("Access-Control-Allow-Origin", origin);
+            res.setHeader("Vary", "Origin");
+        }
+        res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+        res.status(204).send("");
+    });
+    // POST /v1/push/send  (管理画面専用)
+    app.post("/v1/push/send", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const uid = await (0, admin_1.requireAuthUid)(req);
+            const { site_id, title, body, url, icon } = req.body || {};
+            if (!site_id || !title)
+                return res.status(400).json({ ok: false, error: "missing_params" });
+            // サイトアクセス権確認
+            const db = (0, admin_1.adminDb)();
+            const siteDoc = await db.collection("sites").doc(site_id).get();
+            if (!siteDoc.exists)
+                return res.status(404).json({ ok: false, error: "site_not_found" });
+            const siteData = siteDoc.data() || {};
+            const wsId = siteData.workspaceId || "";
+            await (0, site_1.assertWorkspaceRole)({ workspaceId: wsId, uid, allowedRoles: ["owner", "admin", "member"] });
+            initWebPush();
+            // トークン一覧取得
+            const tokensSnap = await db.collection("push_subscriptions").doc(site_id)
+                .collection("tokens").where("active", "==", true).get();
+            const payload = JSON.stringify({ title, body: body || "", url: url || "/", icon: icon || "" });
+            let sent = 0, failed = 0;
+            const batch = db.batch();
+            await Promise.all(tokensSnap.docs.map(async (d) => {
+                const sub = d.data().subscription;
+                try {
+                    let subObj = typeof sub === "string" ? JSON.parse(sub) : sub;
+                    await web_push_1.default.sendNotification(subObj, payload);
+                    sent++;
+                }
+                catch (e) {
+                    console.warn("[push/send] failed for token", d.id, e?.statusCode, e?.message);
+                    if (e?.statusCode === 410 || e?.statusCode === 404) {
+                        // 無効なトークンを無効化
+                        batch.update(d.ref, { active: false });
+                    }
+                    failed++;
+                }
+            }));
+            await batch.commit();
+            // キャンペーン記録
+            const campaignRef = db.collection("push_campaigns").doc();
+            await campaignRef.set({
+                siteId: site_id,
+                title,
+                body: body || "",
+                url: url || "/",
+                icon: icon || "",
+                status: "sent",
+                sentAt: firestore_1.FieldValue.serverTimestamp(),
+                stats: { sent, failed },
+                createdBy: uid,
+            });
+            return res.json({ ok: true, sent, failed, campaignId: campaignRef.id });
+        }
+        catch (e) {
+            console.error("[/v1/push/send]", e);
+            return res.status(500).json({ ok: false, error: e?.message });
+        }
+    });
+    app.options("/v1/push/send", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    // POST /v1/push/subscribers/count  (管理画面: 購読者数)
+    app.post("/v1/push/subscribers/count", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const uid = await (0, admin_1.requireAuthUid)(req);
+            const { site_id } = req.body || {};
+            if (!site_id)
+                return res.status(400).json({ ok: false, error: "missing_site_id" });
+            const db = (0, admin_1.adminDb)();
+            const siteDoc = await db.collection("sites").doc(site_id).get();
+            if (!siteDoc.exists)
+                return res.status(404).json({ ok: false, error: "site_not_found" });
+            const siteData = siteDoc.data() || {};
+            await (0, site_1.assertWorkspaceRole)({ workspaceId: siteData.workspaceId || "", uid, allowedRoles: ["owner", "admin", "member", "viewer"] });
+            const snap = await db.collection("push_subscriptions").doc(site_id)
+                .collection("tokens").where("active", "==", true).count().get();
+            return res.json({ ok: true, count: snap.data().count });
+        }
+        catch (e) {
+            return res.status(500).json({ ok: false, error: e?.message });
+        }
+    });
+    app.options("/v1/push/subscribers/count", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    // POST /v1/push/campaigns/list  (管理画面: 送信履歴)
+    app.post("/v1/push/campaigns/list", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            const uid = await (0, admin_1.requireAuthUid)(req);
+            const { site_id } = req.body || {};
+            if (!site_id)
+                return res.status(400).json({ ok: false, error: "missing_site_id" });
+            const db = (0, admin_1.adminDb)();
+            const siteDoc = await db.collection("sites").doc(site_id).get();
+            if (!siteDoc.exists)
+                return res.status(404).json({ ok: false, error: "site_not_found" });
+            const siteData = siteDoc.data() || {};
+            await (0, site_1.assertWorkspaceRole)({ workspaceId: siteData.workspaceId || "", uid, allowedRoles: ["owner", "admin", "member", "viewer"] });
+            const snap = await db.collection("push_campaigns")
+                .where("siteId", "==", site_id)
+                .orderBy("sentAt", "desc")
+                .limit(50)
+                .get();
+            const campaigns = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+            return res.json({ ok: true, campaigns });
+        }
+        catch (e) {
+            return res.status(500).json({ ok: false, error: e?.message });
+        }
+    });
+    app.options("/v1/push/campaigns/list", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
 }

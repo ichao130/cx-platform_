@@ -28,6 +28,7 @@ import {
   listBackupRuns,
   upsertBackupSettings,
 } from "../services/backup";
+import webpush from "web-push";
 /* =========================================
    Schemas
 ========================================= */
@@ -6204,5 +6205,192 @@ export function registerV1Routes(app: Express) {
     }
   });
   app.options("/v1/ops/backfill-purchase-attribution", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /* =========================================
+     Web Push
+  ========================================= */
+
+  const VAPID_PUBLIC_KEY  = "BHHAw9e5rSVttkuLfz1TRvebwIRP4UT_SNWneI22hxdvbn_q4eOFrqojYby2mRsgtYR_5yp2mljlCc2-u9pCcSU";
+  const VAPID_PRIVATE_KEY = defineSecret("VAPID_PRIVATE_KEY");
+
+  function initWebPush() {
+    webpush.setVapidDetails(
+      "mailto:hello@mokkeda.com",
+      VAPID_PUBLIC_KEY,
+      VAPID_PRIVATE_KEY.value()
+    );
+  }
+
+  // POST /v1/push/subscribe  (公開エンドポイント: sdk.js から呼ぶ)
+  app.post("/v1/push/subscribe", async (req, res) => {
+    try {
+      // CORS: push.mokkeda.jp からのリクエストを許可
+      const origin = req.header("Origin") || "";
+      if (origin) {
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Vary", "Origin");
+      }
+
+      const { site_id, site_key, subscription, ua } = req.body || {};
+      if (!site_id || !subscription) return res.status(400).json({ ok: false, error: "missing_params" });
+
+      // site_key でサイトの正当性を確認
+      const db = adminDb();
+      const siteDoc = await db.collection("sites").doc(site_id).get();
+      if (!siteDoc.exists) return res.status(404).json({ ok: false, error: "site_not_found" });
+      const siteData = siteDoc.data() || {};
+      if (siteData.siteKey && siteData.siteKey !== site_key) {
+        return res.status(403).json({ ok: false, error: "invalid_site_key" });
+      }
+
+      // endpoint をトークンIDに使う（重複登録防止）
+      let subObj: any;
+      try { subObj = typeof subscription === "string" ? JSON.parse(subscription) : subscription; } catch { return res.status(400).json({ ok: false, error: "invalid_subscription" }); }
+
+      const endpoint: string = subObj.endpoint || "";
+      if (!endpoint) return res.status(400).json({ ok: false, error: "missing_endpoint" });
+      const tokenId = Buffer.from(endpoint).toString("base64url").slice(0, 64);
+
+      await db.collection("push_subscriptions").doc(site_id)
+        .collection("tokens").doc(tokenId).set({
+          subscription: typeof subscription === "string" ? subscription : JSON.stringify(subscription),
+          ua: ua || "",
+          siteId: site_id,
+          active: true,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
+
+      return res.json({ ok: true });
+    } catch (e: any) {
+      console.error("[/v1/push/subscribe]", e);
+      return res.status(500).json({ ok: false, error: e?.message });
+    }
+  });
+  app.options("/v1/push/subscribe", (req, res) => {
+    const origin = req.header("Origin") || "";
+    if (origin) { res.setHeader("Access-Control-Allow-Origin", origin); res.setHeader("Vary", "Origin"); }
+    res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.status(204).send("");
+  });
+
+  // POST /v1/push/send  (管理画面専用)
+  app.post("/v1/push/send", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      const uid = await requireAuthUid(req);
+
+      const { site_id, title, body, url, icon } = req.body || {};
+      if (!site_id || !title) return res.status(400).json({ ok: false, error: "missing_params" });
+
+      // サイトアクセス権確認
+      const db = adminDb();
+      const siteDoc = await db.collection("sites").doc(site_id).get();
+      if (!siteDoc.exists) return res.status(404).json({ ok: false, error: "site_not_found" });
+      const siteData = siteDoc.data() || {};
+      const wsId: string = siteData.workspaceId || "";
+      await assertWorkspaceRole({ workspaceId: wsId, uid, allowedRoles: ["owner", "admin", "member"] });
+
+      initWebPush();
+
+      // トークン一覧取得
+      const tokensSnap = await db.collection("push_subscriptions").doc(site_id)
+        .collection("tokens").where("active", "==", true).get();
+
+      const payload = JSON.stringify({ title, body: body || "", url: url || "/", icon: icon || "" });
+      let sent = 0, failed = 0;
+      const batch = db.batch();
+
+      await Promise.all(tokensSnap.docs.map(async (d) => {
+        const sub = d.data().subscription;
+        try {
+          let subObj = typeof sub === "string" ? JSON.parse(sub) : sub;
+          await webpush.sendNotification(subObj, payload);
+          sent++;
+        } catch (e: any) {
+          console.warn("[push/send] failed for token", d.id, e?.statusCode, e?.message);
+          if (e?.statusCode === 410 || e?.statusCode === 404) {
+            // 無効なトークンを無効化
+            batch.update(d.ref, { active: false });
+          }
+          failed++;
+        }
+      }));
+
+      await batch.commit();
+
+      // キャンペーン記録
+      const campaignRef = db.collection("push_campaigns").doc();
+      await campaignRef.set({
+        siteId: site_id,
+        title,
+        body: body || "",
+        url: url || "/",
+        icon: icon || "",
+        status: "sent",
+        sentAt: FieldValue.serverTimestamp(),
+        stats: { sent, failed },
+        createdBy: uid,
+      });
+
+      return res.json({ ok: true, sent, failed, campaignId: campaignRef.id });
+    } catch (e: any) {
+      console.error("[/v1/push/send]", e);
+      return res.status(500).json({ ok: false, error: e?.message });
+    }
+  });
+  app.options("/v1/push/send", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  // POST /v1/push/subscribers/count  (管理画面: 購読者数)
+  app.post("/v1/push/subscribers/count", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      const uid = await requireAuthUid(req);
+      const { site_id } = req.body || {};
+      if (!site_id) return res.status(400).json({ ok: false, error: "missing_site_id" });
+
+      const db = adminDb();
+      const siteDoc = await db.collection("sites").doc(site_id).get();
+      if (!siteDoc.exists) return res.status(404).json({ ok: false, error: "site_not_found" });
+      const siteData = siteDoc.data() || {};
+      await assertWorkspaceRole({ workspaceId: siteData.workspaceId || "", uid, allowedRoles: ["owner", "admin", "member", "viewer"] });
+
+      const snap = await db.collection("push_subscriptions").doc(site_id)
+        .collection("tokens").where("active", "==", true).count().get();
+      return res.json({ ok: true, count: snap.data().count });
+    } catch (e: any) {
+      return res.status(500).json({ ok: false, error: e?.message });
+    }
+  });
+  app.options("/v1/push/subscribers/count", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  // POST /v1/push/campaigns/list  (管理画面: 送信履歴)
+  app.post("/v1/push/campaigns/list", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      const uid = await requireAuthUid(req);
+      const { site_id } = req.body || {};
+      if (!site_id) return res.status(400).json({ ok: false, error: "missing_site_id" });
+
+      const db = adminDb();
+      const siteDoc = await db.collection("sites").doc(site_id).get();
+      if (!siteDoc.exists) return res.status(404).json({ ok: false, error: "site_not_found" });
+      const siteData = siteDoc.data() || {};
+      await assertWorkspaceRole({ workspaceId: siteData.workspaceId || "", uid, allowedRoles: ["owner", "admin", "member", "viewer"] });
+
+      const snap = await db.collection("push_campaigns")
+        .where("siteId", "==", site_id)
+        .orderBy("sentAt", "desc")
+        .limit(50)
+        .get();
+
+      const campaigns = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      return res.json({ ok: true, campaigns });
+    } catch (e: any) {
+      return res.status(500).json({ ok: false, error: e?.message });
+    }
+  });
+  app.options("/v1/push/campaigns/list", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
 
 }
