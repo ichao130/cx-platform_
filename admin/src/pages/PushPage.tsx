@@ -1,10 +1,17 @@
 // admin/src/pages/PushPage.tsx
 import React, { useEffect, useState, useCallback } from "react";
-import { collection, onSnapshot, query, where, orderBy } from "firebase/firestore";
+import { collection, onSnapshot, query, where } from "firebase/firestore";
+import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { db, apiPostJson } from "../firebase";
 
 // ─── 型 ─────────────────────────────────────────────────────────────────
 type Site = { id: string; name?: string; workspaceId?: string };
+
+function workspaceKeyForUid(uid: string) { return `cx_admin_workspace_id:${uid}`; }
+function readSelectedWorkspaceId(uid?: string) {
+  if (!uid) return "";
+  try { return localStorage.getItem(workspaceKeyForUid(uid)) || ""; } catch { return ""; }
+}
 
 type Campaign = {
   id: string;
@@ -28,6 +35,10 @@ function formatTs(ts: any): string {
 
 // ─── コンポーネント ───────────────────────────────────────────────────────
 export default function PushPage() {
+  // ワークスペース・ユーザー
+  const [currentUid, setCurrentUid] = useState("");
+  const [workspaceId, setWorkspaceId] = useState("");
+
   // サイト選択
   const [sites, setSites] = useState<Site[]>([]);
   const [siteId, setSiteId] = useState("");
@@ -49,16 +60,45 @@ export default function PushPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [campaignsLoading, setCampaignsLoading] = useState(false);
 
-  // ワークスペースからサイト一覧取得
+  // 認証状態 + ワークスペース選択
   useEffect(() => {
-    const q = query(collection(db, "sites"));
+    return onAuthStateChanged(getAuth(), (user) => {
+      const uid = user?.uid || "";
+      setCurrentUid(uid);
+      setWorkspaceId(readSelectedWorkspaceId(uid));
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!currentUid) return;
+    const onWsChanged = (e?: Event) => {
+      const next = (e as CustomEvent | undefined)?.detail?.workspaceId;
+      setWorkspaceId(typeof next === "string" ? next : readSelectedWorkspaceId(currentUid));
+    };
+    window.addEventListener("cx_admin_workspace_changed", onWsChanged as EventListener);
+    window.addEventListener("storage", () => onWsChanged());
+    return () => {
+      window.removeEventListener("cx_admin_workspace_changed", onWsChanged as EventListener);
+      window.removeEventListener("storage", () => onWsChanged());
+    };
+  }, [currentUid]);
+
+  // ワークスペース内のサイト一覧取得（memberUids で権限絞り）
+  useEffect(() => {
+    if (!currentUid || !workspaceId) { setSites([]); setSiteId(""); return; }
+    const q = query(
+      collection(db, "sites"),
+      where("memberUids", "array-contains", currentUid)
+    );
     const unsub = onSnapshot(q, (snap) => {
-      const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+      const list = snap.docs
+        .filter((d) => d.data().workspaceId === workspaceId)
+        .map((d) => ({ id: d.id, ...(d.data() as any) }));
       setSites(list);
-      if (!siteId && list.length > 0) setSiteId(list[0].id);
+      setSiteId((prev) => (list.find((s) => s.id === prev) ? prev : list[0]?.id || ""));
     });
     return unsub;
-  }, []);
+  }, [currentUid, workspaceId]);
 
   // 購読者数
   const loadCount = useCallback(async (sid: string) => {
