@@ -1875,69 +1875,110 @@
   }
 
   // ─── Web Push ─────────────────────────────────────────────────────────
-  var PUSH_BRIDGE_ORIGIN = "https://push.mokkeda.com";
-  var _pushIframe = null;
-  var _pushCallbacks = {};
+  var PUSH_VAPID_PUBLIC_KEY = "BHHAw9e5rSVttkuLfz1TRvebwIRP4UT_SNWneI22hxdvbn_q4eOFrqojYby2mRsgtYR_5yp2mljlCc2-u9pCcSU";
+  var PUSH_API_BASE = "https://asia-northeast1-cx-platform-v1.cloudfunctions.net/api";
+  var PUSH_SW_PATH = "/push-sw.js";
 
-  function _pushBridgeUrl(mode) {
-    var script = getCurrentScript();
-    var sid = script ? (script.getAttribute("data-site-id") || "") : "";
-    var sk  = script ? (script.getAttribute("data-site-key") || "") : "";
-    var url = PUSH_BRIDGE_ORIGIN + "/sw-bridge.html"
-      + "?siteId=" + encodeURIComponent(sid)
-      + "&siteKey=" + encodeURIComponent(sk)
-      + "&mode=" + encodeURIComponent(mode || "subscribe");
-    return url;
+  function _urlBase64ToUint8Array(base64String) {
+    var padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+    var base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+    var rawData = atob(base64);
+    var arr = new Uint8Array(rawData.length);
+    for (var i = 0; i < rawData.length; i++) arr[i] = rawData.charCodeAt(i);
+    return arr;
+  }
+
+  function _getPushSiteId() {
+    try {
+      var script = getCurrentScript();
+      return script ? (script.getAttribute("data-site-id") || "") : "";
+    } catch (e) { return ""; }
+  }
+
+  function _getPushSiteKey() {
+    try {
+      var script = getCurrentScript();
+      return script ? (script.getAttribute("data-site-key") || "") : "";
+    } catch (e) { return ""; }
   }
 
   /**
    * プッシュ通知の購読リクエスト。
-   * ポップアップウィンドウ経由で許可を求め、結果をコールバックで返す。
-   * @param {function} onResult - ({ status: "subscribed"|"denied"|"dismissed"|"unsupported"|"error"|"popup_blocked" }) => void
+   * お客様サイトのドメインで直接許可を求める。
+   * ※ サイトルートに /push-sw.js を設置する必要あり。
+   * ※ ユーザー操作（クリックイベント）から呼び出すこと。
+   * @param {function} onResult - ({ status: "subscribed"|"already"|"denied"|"dismissed"|"unsupported"|"error" }) => void
    */
   function cxRequestPush(onResult) {
     try {
       var cb = onResult || function () {};
-      var timer = null;
-      var popup = null;
 
-      var handler = function (ev) {
-        if (ev.origin !== PUSH_BRIDGE_ORIGIN) return;
-        var data = ev.data || {};
-        if (!data.type || !data.type.startsWith("cx_push_")) return;
-
-        window.removeEventListener("message", handler);
-        if (timer) clearTimeout(timer);
-        try { if (popup && !popup.closed) popup.close(); } catch (e) {}
-
-        var status = data.type.replace("cx_push_", "");
-        cb({ status: status, error: data.error });
-      };
-
-      window.addEventListener("message", handler);
-
-      // ポップアップを画面中央に開く（ユーザー操作から呼ばれるので許可される）
-      var w = 480, h = 620;
-      var left = Math.max(0, Math.round(window.screenX + (window.outerWidth - w) / 2));
-      var top  = Math.max(0, Math.round(window.screenY + (window.outerHeight - h) / 2));
-      popup = window.open(
-        _pushBridgeUrl("subscribe"),
-        "cx_push_bridge",
-        "width=" + w + ",height=" + h + ",left=" + left + ",top=" + top + ",toolbar=no,menubar=no,scrollbars=no"
-      );
-
-      if (!popup) {
-        window.removeEventListener("message", handler);
-        cb({ status: "popup_blocked" });
-        return;
+      if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+        return cb({ status: "unsupported" });
       }
 
-      // タイムアウト（30秒でポップアップが閉じられた場合など）
-      timer = setTimeout(function () {
-        window.removeEventListener("message", handler);
-        try { if (!popup.closed) popup.close(); } catch (e) {}
-        cb({ status: "dismissed" });
-      }, 30000);
+      var currentPerm = Notification.permission;
+      if (currentPerm === "denied") {
+        return cb({ status: "denied" });
+      }
+
+      function doSubscribe(reg) {
+        reg.pushManager.getSubscription().then(function (existing) {
+          if (existing) {
+            // すでに購読済み → APIに再送して完了
+            return fetch(PUSH_API_BASE + "/v1/push/subscribe", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                site_id: _getPushSiteId(),
+                site_key: _getPushSiteKey(),
+                subscription: JSON.stringify(existing.toJSON()),
+                ua: navigator.userAgent || ""
+              })
+            }).then(function () { cb({ status: "already" }); });
+          }
+          return reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: _urlBase64ToUint8Array(PUSH_VAPID_PUBLIC_KEY)
+          }).then(function (sub) {
+            return fetch(PUSH_API_BASE + "/v1/push/subscribe", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                site_id: _getPushSiteId(),
+                site_key: _getPushSiteKey(),
+                subscription: JSON.stringify(sub.toJSON()),
+                ua: navigator.userAgent || ""
+              })
+            });
+          }).then(function (res) {
+            if (!res.ok) throw new Error("api_error_" + res.status);
+            cb({ status: "subscribed" });
+          });
+        }).catch(function (e) {
+          cb({ status: "error", error: String(e) });
+        });
+      }
+
+      // Service Worker 登録（お客様サイトのルートに /push-sw.js が必要）
+      navigator.serviceWorker.register(PUSH_SW_PATH).then(function (reg) {
+        return navigator.serviceWorker.ready.then(function () { return reg; });
+      }).then(function (reg) {
+        if (currentPerm === "granted") {
+          doSubscribe(reg);
+          return;
+        }
+        // ユーザー操作から呼ばれた場合のみ許可ダイアログが表示される
+        Notification.requestPermission().then(function (perm) {
+          if (perm === "granted") {
+            doSubscribe(reg);
+          } else {
+            cb({ status: perm === "denied" ? "denied" : "dismissed" });
+          }
+        });
+      }).catch(function (e) {
+        cb({ status: "error", error: String(e) });
+      });
 
     } catch (e) {
       try { onResult && onResult({ status: "error", error: String(e) }); } catch (e2) {}

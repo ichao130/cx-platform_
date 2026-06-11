@@ -4,9 +4,88 @@
   <meta charset="utf-8" />
   <meta name="robots" content="noindex" />
   <title>MOKKEDA Push Bridge</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f8fafc;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.10);
+      padding: 40px 32px 32px;
+      max-width: 360px;
+      width: 100%;
+      text-align: center;
+    }
+    .icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+    h1 {
+      font-size: 18px;
+      font-weight: 700;
+      color: #0f172a;
+      margin-bottom: 10px;
+    }
+    p {
+      font-size: 14px;
+      color: #64748b;
+      line-height: 1.6;
+      margin-bottom: 28px;
+    }
+    .btn {
+      display: inline-block;
+      width: 100%;
+      padding: 14px 24px;
+      background: #2563eb;
+      color: #fff;
+      font-size: 15px;
+      font-weight: 600;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn:hover { background: #1d4ed8; }
+    .btn:disabled { background: #94a3b8; cursor: default; }
+    .btn-secondary {
+      margin-top: 10px;
+      background: transparent;
+      color: #64748b;
+      font-size: 13px;
+      font-weight: 400;
+      padding: 8px;
+    }
+    .btn-secondary:hover { background: #f1f5f9; color: #334155; }
+    #msg { font-size: 14px; color: #64748b; margin-top: 16px; min-height: 20px; }
+    #initial { display: block; }
+    #loading { display: none; }
+  </style>
 </head>
-<body style="margin:0;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f8fafc;">
-<div id="msg" style="text-align:center;color:#64748b;font-size:15px;padding:32px;">通知の設定を確認中…</div>
+<body>
+<div class="card">
+  <div class="icon">🔔</div>
+  <h1>プッシュ通知を受け取る</h1>
+  <p>お得なセール情報や新着商品をいち早くお知らせします。<br>許可するとブラウザから通知が届きます。</p>
+
+  <div id="initial">
+    <button class="btn" id="allowBtn" onclick="doSubscribe()">通知を許可する</button>
+    <button class="btn btn-secondary" onclick="doDecline()">今はしない</button>
+  </div>
+  <div id="loading">
+    <button class="btn" disabled>設定中…</button>
+  </div>
+  <div id="msg"></div>
+  <div id="debug" style="margin-top:20px;font-size:11px;color:#94a3b8;word-break:break-all;text-align:left;background:#f8fafc;border-radius:6px;padding:8px;"></div>
+</div>
+
 <script>
 (function () {
   "use strict";
@@ -23,10 +102,9 @@
 
   function postToParent(msg) {
     try {
-      // ポップアップ: opener に送って自分を閉じる
       if (window.opener && window.opener !== window) {
         window.opener.postMessage(msg, "*");
-        setTimeout(function () { window.close(); }, 300);
+        setTimeout(function () { window.close(); }, 500);
       } else {
         window.parent.postMessage(msg, "*");
       }
@@ -44,26 +122,81 @@
     return arr;
   }
 
+  function showLoading() {
+    document.getElementById("initial").style.display = "none";
+    document.getElementById("loading").style.display = "block";
+  }
+
+  function showMsg(text) {
+    document.getElementById("msg").textContent = text;
+  }
+
+  function dbg(text) {
+    var el = document.getElementById("debug");
+    if (el) el.textContent += text + "\n";
+    console.log("[cx-bridge]", text);
+  }
+
   var siteId  = getParam("siteId");
   var siteKey = getParam("siteKey");
-  var mode    = getParam("mode"); // "subscribe" | "check"
+  var mode    = getParam("mode");
 
-  // 必要な API が無い環境では即終了
-  if (!siteId || !("serviceWorker" in navigator) || !("PushManager" in window)) {
-    postToParent({ type: "cx_push_unsupported" });
+  dbg("permission: " + Notification.permission);
+  dbg("siteId: " + (siteId || "(none)"));
+  dbg("SW support: " + ("serviceWorker" in navigator));
+  dbg("Push support: " + ("PushManager" in window));
+
+  // check モード: UIなし、すぐに現在の購読状態を返す
+  if (mode === "check") {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+      postToParent({ type: "cx_push_unsupported" });
+    } else {
+      navigator.serviceWorker.register(SW_URL).then(function (reg) {
+        return reg.pushManager.getSubscription().then(function (sub) {
+          postToParent({ type: "cx_push_status", subscribed: !!sub });
+        });
+      }).catch(function (e) {
+        postToParent({ type: "cx_push_error", error: String(e) });
+      });
+    }
     return;
   }
 
-  navigator.serviceWorker.register(SW_URL).then(function (reg) {
-    // check モード: 現在の購読状態だけ返す
-    if (mode === "check") {
-      return reg.pushManager.getSubscription().then(function (sub) {
-        postToParent({ type: "cx_push_status", subscribed: !!sub });
-      });
-    }
+  // 非対応環境では即終了
+  if (!siteId || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+    document.getElementById("initial").style.display = "none";
+    showMsg("このブラウザはプッシュ通知に対応していません。");
+    setTimeout(function () {
+      postToParent({ type: "cx_push_unsupported" });
+    }, 1500);
+    return;
+  }
 
-    // subscribe モード: 許可を求めて購読
-    return Notification.requestPermission().then(function (permission) {
+  // すでに許可済みの場合は直接購読処理へ
+  if (Notification.permission === "granted") {
+    document.getElementById("initial").style.display = "none";
+    showLoading();
+    doSubscribeInternal();
+    return;
+  }
+
+  // 既にブロック済みの場合
+  if (Notification.permission === "denied") {
+    document.getElementById("initial").style.display = "none";
+    showMsg("通知がブロックされています。ブラウザの設定から許可してください。");
+    setTimeout(function () {
+      postToParent({ type: "cx_push_denied" });
+    }, 2000);
+    return;
+  }
+
+  // ボタンクリックで呼ばれる（ユーザージェスチャー必須）
+  window.doSubscribe = function () {
+    dbg("button clicked");
+    showLoading();
+    dbg("calling requestPermission...");
+    Notification.requestPermission().then(function (permission) {
+      dbg("permission result: " + permission);
       if (permission === "denied") {
         postToParent({ type: "cx_push_denied" });
         return;
@@ -72,33 +205,48 @@
         postToParent({ type: "cx_push_dismissed" });
         return;
       }
+      doSubscribeInternal();
+    }).catch(function (e) {
+      postToParent({ type: "cx_push_error", error: String(e) });
+    });
+  };
 
-      return reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
-      }).then(function (sub) {
-        var subJson = JSON.stringify(sub.toJSON());
-        var ua = "";
-        try { ua = navigator.userAgent || ""; } catch (e) {}
+  window.doDecline = function () {
+    postToParent({ type: "cx_push_dismissed" });
+  };
 
-        return fetch(API_BASE + "/v1/push/subscribe", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            site_id: siteId,
-            site_key: siteKey,
-            subscription: subJson,
-            ua: ua,
-          }),
-        }).then(function (res) {
-          if (!res.ok) throw new Error("subscribe_api_failed: " + res.status);
-          postToParent({ type: "cx_push_subscribed" });
+  function doSubscribeInternal() {
+    showMsg("購読情報を登録中…");
+    navigator.serviceWorker.register(SW_URL).then(function (reg) {
+      return navigator.serviceWorker.ready.then(function () {
+        return reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
         });
       });
+    }).then(function (sub) {
+      var subJson = JSON.stringify(sub.toJSON());
+      var ua = "";
+      try { ua = navigator.userAgent || ""; } catch (e) {}
+
+      return fetch(API_BASE + "/v1/push/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          site_id: siteId,
+          site_key: siteKey,
+          subscription: subJson,
+          ua: ua,
+        }),
+      });
+    }).then(function (res) {
+      if (!res.ok) throw new Error("subscribe_api_failed: " + res.status);
+      showMsg("✓ 登録が完了しました");
+      postToParent({ type: "cx_push_subscribed" });
+    }).catch(function (e) {
+      postToParent({ type: "cx_push_error", error: String(e) });
     });
-  }).catch(function (e) {
-    postToParent({ type: "cx_push_error", error: String(e) });
-  });
+  }
 })();
 </script>
 </body>
