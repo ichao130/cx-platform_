@@ -3,6 +3,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { db, apiPostJson } from "../firebase";
+import RightDrawer from "../components/RightDrawer";
 
 // ─── 型 ─────────────────────────────────────────────────────────────────
 type Site = { id: string; name?: string; workspaceId?: string; domains?: string[] };
@@ -43,25 +44,24 @@ function siteIconUrl(site?: Site): string {
   } catch { return ""; }
 }
 
+function localDatetimeMin() {
+  const d = new Date(Date.now() + 60000);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
 // ─── コンポーネント ───────────────────────────────────────────────────────
 export default function PushPage() {
-  // ワークスペース・ユーザー
   const [currentUid, setCurrentUid] = useState("");
   const [workspaceId, setWorkspaceId] = useState("");
-
-  // サイト選択
   const [sites, setSites] = useState<Site[]>([]);
   const [siteId, setSiteId] = useState("");
-
-  // 購読者数
   const [subCount, setSubCount] = useState<number | null>(null);
-
-  // タブ
   const [tab, setTab] = useState<"scheduled" | "sent">("scheduled");
-
-  // キャンペーン一覧
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [campaignsLoading, setCampaignsLoading] = useState(false);
+
+  // ドロワー
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   // フォーム
   const [title, setTitle] = useState("");
@@ -74,7 +74,7 @@ export default function PushPage() {
   const [sendResult, setSendResult] = useState<{ sent?: number; failed?: number; scheduled?: boolean } | null>(null);
   const [sendErr, setSendErr] = useState("");
 
-  // 認証状態 + ワークスペース選択
+  // 認証 + ワークスペース
   useEffect(() => {
     return onAuthStateChanged(getAuth(), (user) => {
       const uid = user?.uid || "";
@@ -97,7 +97,7 @@ export default function PushPage() {
     };
   }, [currentUid]);
 
-  // ワークスペース内のサイト一覧
+  // サイト一覧
   useEffect(() => {
     if (!currentUid) { setSites([]); setSiteId(""); return; }
     const q = query(collection(db, "sites"), where("memberUids", "array-contains", currentUid));
@@ -141,6 +141,19 @@ export default function PushPage() {
     setIcon(siteIconUrl(site));
   }, [siteId, sites]);
 
+  const openDrawer = () => {
+    setSendResult(null);
+    setSendErr("");
+    setTitle("");
+    setBody("");
+    setUrl("");
+    setScheduleMode("now");
+    setScheduledAt("");
+    const site = sites.find((s) => s.id === siteId);
+    setIcon(siteIconUrl(site));
+    setDrawerOpen(true);
+  };
+
   // 送信
   const handleSend = async () => {
     if (!siteId || !title.trim()) return;
@@ -161,17 +174,10 @@ export default function PushPage() {
       }
       const res = await apiPostJson<{ ok: boolean; sent?: number; failed?: number; scheduled?: boolean }>("/v1/push/send", payload);
       setSendResult({ sent: res.sent, failed: res.failed, scheduled: res.scheduled });
-      setTitle("");
-      setBody("");
-      setUrl("");
-      setScheduledAt("");
-      setScheduleMode("now");
-      const site = sites.find((s) => s.id === siteId);
-      setIcon(siteIconUrl(site));
       loadCount(siteId);
       loadCampaigns(siteId);
-      // 送信済なら送信済タブへ、予約なら予約タブへ
       setTab(res.scheduled ? "scheduled" : "sent");
+      setDrawerOpen(false);
     } catch (e: any) {
       setSendErr(e?.message || "送信に失敗しました");
     } finally {
@@ -179,143 +185,163 @@ export default function PushPage() {
     }
   };
 
-  const scheduledCampaigns = campaigns.filter((c) => c.status === "scheduled" || c.status === "sending");
-  const sentCampaigns = campaigns.filter((c) => c.status === "sent");
-
-  const tabCampaigns = tab === "scheduled" ? scheduledCampaigns : sentCampaigns;
+  const scheduledList = campaigns.filter((c) => c.status === "scheduled" || c.status === "sending");
+  const sentList = campaigns.filter((c) => c.status === "sent");
+  const tabList = tab === "scheduled" ? scheduledList : sentList;
+  const selectedSite = sites.find((s) => s.id === siteId);
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(300px, 480px) minmax(360px, 1fr)", minHeight: "100vh", gap: 0 }}>
+    <div className="container liquid-page">
+      {/* ページヘッダー */}
+      <div className="page-header">
+        <div className="page-header__meta">
+          <div className="small" style={{ marginBottom: 6, opacity: 0.7 }}>MOKKEDA / Push</div>
+          <h1 className="h1">Webプッシュ通知</h1>
+          <div className="small">購読者へプッシュ通知を送信・予約できます。</div>
+        </div>
+        <div className="page-header__actions">
+          <button className="btn btn--primary" onClick={openDrawer} disabled={!siteId}>
+            通知を作成
+          </button>
+        </div>
+      </div>
 
-      {/* 左: リスト */}
-      <div style={{ borderRight: "1px solid var(--border, #e2e8f0)", padding: "28px 24px", overflowY: "auto" }}>
-
-        {/* サイト選択 + 購読者数 */}
-        <div style={{ marginBottom: 20 }}>
-          <select
-            className="input"
-            value={siteId}
-            onChange={(e) => setSiteId(e.target.value)}
-            style={{ width: "100%", marginBottom: 10 }}
-          >
-            {sites.map((s) => (
-              <option key={s.id} value={s.id}>{s.name || s.id}</option>
-            ))}
-          </select>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span className="small" style={{ opacity: 0.6 }}>購読者数</span>
-            <span style={{ fontWeight: 700, fontSize: 18 }}>{subCount ?? "—"}</span>
-            <button className="btn-ghost" style={{ fontSize: 11, padding: "1px 8px", marginLeft: 4 }} onClick={() => loadCount(siteId)}>更新</button>
+      <div className="card" style={{ marginBottom: 14 }}>
+        {/* ツールバー */}
+        <div className="list-toolbar">
+          <div className="list-toolbar__filters" style={{ flex: 1 }}>
+            <div style={{ minWidth: 280, flex: "1 1 320px" }}>
+              <div className="h2">サイト</div>
+              <select className="input" value={siteId} onChange={(e) => setSiteId(e.target.value)}>
+                {sites.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name || s.id}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ paddingTop: 20 }}>
+              <span className="small" style={{ opacity: 0.6 }}>購読者数：</span>
+              <b>{subCount ?? "—"}</b>
+              <button className="btn" style={{ marginLeft: 8, fontSize: 11, padding: "2px 10px" }} onClick={() => loadCount(siteId)}>更新</button>
+            </div>
+          </div>
+          <div className="list-toolbar__actions">
+            <button className="btn" onClick={openDrawer} disabled={!siteId}>作成</button>
           </div>
         </div>
 
         {/* タブ */}
-        <div style={{ display: "flex", borderBottom: "2px solid var(--border, #e2e8f0)", marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 4, marginBottom: 14 }}>
           {([
-            { key: "scheduled", label: "配信予定", count: scheduledCampaigns.length },
-            { key: "sent",      label: "配信済み", count: sentCampaigns.length },
-          ] as const).map((t) => (
+            { key: "scheduled" as const, label: `配信予定 (${scheduledList.length})` },
+            { key: "sent" as const,      label: `配信済み (${sentList.length})` },
+          ]).map((t) => (
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
               style={{
-                padding: "8px 16px", fontSize: 13, fontWeight: tab === t.key ? 700 : 400,
-                border: "none", background: "transparent", cursor: "pointer",
-                borderBottom: tab === t.key ? "2px solid var(--accent, #6366f1)" : "2px solid transparent",
-                marginBottom: -2, color: tab === t.key ? "var(--accent, #6366f1)" : "inherit",
+                padding: "5px 16px", borderRadius: 20, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer",
+                background: tab === t.key ? "#0f172a" : "rgba(15,23,42,.07)",
+                color: tab === t.key ? "#fff" : "#64748b",
               }}
             >
               {t.label}
-              {t.count > 0 && (
-                <span style={{ marginLeft: 6, fontSize: 11, background: tab === t.key ? "var(--accent, #6366f1)" : "#e2e8f0", color: tab === t.key ? "#fff" : "#555", borderRadius: 10, padding: "1px 6px" }}>
-                  {t.count}
-                </span>
-              )}
             </button>
           ))}
         </div>
 
-        {/* キャンペーン一覧 */}
-        {campaignsLoading ? (
-          <div className="small" style={{ opacity: 0.5, padding: "20px 0" }}>読み込み中…</div>
-        ) : tabCampaigns.length === 0 ? (
-          <div className="small" style={{ opacity: 0.5, padding: "20px 0" }}>
-            {tab === "scheduled" ? "配信予定の通知はありません" : "配信済みの通知はありません"}
-          </div>
-        ) : (
-          <div style={{ display: "grid", gap: 8 }}>
-            {tabCampaigns.map((c) => (
-              <div key={c.id} className="card" style={{ padding: "12px 14px", cursor: "default" }}>
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-                  {c.icon && (
-                    <img src={c.icon} alt="" style={{ width: 28, height: 28, borderRadius: 4, objectFit: "cover", flexShrink: 0, marginTop: 2 }}
-                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                  )}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.title}</div>
-                    {c.body && <div className="small" style={{ opacity: 0.6, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.body}</div>}
-                    <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
-                      {c.status === "scheduled" && (
-                        <span style={{ fontSize: 11, padding: "1px 7px", borderRadius: 10, background: "#e0e7ff", color: "#4338ca", fontWeight: 600 }}>予約中</span>
-                      )}
-                      {c.status === "sending" && (
-                        <span style={{ fontSize: 11, padding: "1px 7px", borderRadius: 10, background: "#fef3c7", color: "#92400e", fontWeight: 600 }}>送信中</span>
-                      )}
-                      {c.status === "sent" && (
-                        <span style={{ fontSize: 11, padding: "1px 7px", borderRadius: 10, background: "#dcfce7", color: "#15803d", fontWeight: 600 }}>送信済</span>
-                      )}
-                      <span className="small" style={{ opacity: 0.5 }}>
-                        {c.status === "scheduled" ? formatTs(c.scheduledAt) : formatTs(c.sentAt)}
-                      </span>
-                      {c.status === "sent" && c.stats && (
-                        <span className="small" style={{ opacity: 0.5 }}>{c.stats.sent}件</span>
-                      )}
+        {/* テーブル */}
+        <div className="liquid-scroll-x">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>タイトル</th>
+                <th>本文</th>
+                <th>URL</th>
+                <th>状態</th>
+                <th>送信数</th>
+                <th>{tab === "scheduled" ? "配信予定日時" : "配信日時"}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {campaignsLoading ? (
+                <tr><td colSpan={6} style={{ textAlign: "center", opacity: 0.5, padding: 24 }}>読み込み中…</td></tr>
+              ) : tabList.length === 0 ? (
+                <tr><td colSpan={6} style={{ textAlign: "center", opacity: 0.5, padding: 24 }}>
+                  {tab === "scheduled" ? "配信予定の通知はありません" : "配信済みの通知はありません"}
+                </td></tr>
+              ) : tabList.map((c) => (
+                <tr key={c.id}>
+                  <td>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      {c.icon && <img src={c.icon} alt="" style={{ width: 20, height: 20, borderRadius: 3, objectFit: "cover", flexShrink: 0 }}
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />}
+                      <span style={{ fontWeight: 700 }}>{c.title}</span>
                     </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+                  </td>
+                  <td className="small" style={{ opacity: 0.72 }}>{c.body || "—"}</td>
+                  <td className="small" style={{ opacity: 0.72, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.url || "—"}</td>
+                  <td>
+                    {c.status === "scheduled" && <span className="badge" style={{ background: "#e0e7ff", color: "#4338ca", borderColor: "#c7d2fe" }}>予約中</span>}
+                    {c.status === "sending"   && <span className="badge" style={{ background: "#fef3c7", color: "#92400e", borderColor: "#fcd34d" }}>送信中</span>}
+                    {c.status === "sent"      && <span className="badge" style={{ background: "#dcfce7", color: "#15803d", borderColor: "#bbf7d0" }}>送信済</span>}
+                  </td>
+                  <td style={{ textAlign: "center" }}>{c.stats?.sent ?? "—"}</td>
+                  <td className="small" style={{ opacity: 0.72, whiteSpace: "nowrap" }}>
+                    {c.status === "scheduled" ? formatTs(c.scheduledAt) : formatTs(c.sentAt)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      {/* 右: 作成フォーム */}
-      <div style={{ padding: "28px 32px", overflowY: "auto" }}>
-        <div style={{ marginBottom: 20 }}>
-          <div className="h1" style={{ marginBottom: 4 }}>通知を作成</div>
-          <div className="small" style={{ opacity: 0.6 }}>購読者 {subCount ?? "—"} 人に送信されます</div>
+      {/* 送信結果トースト */}
+      {sendResult && (
+        <div className="card" style={{ marginBottom: 14, background: "#f0fdf4", borderColor: "#bbf7d0" }}>
+          <span style={{ color: "#15803d", fontWeight: 600 }}>
+            {sendResult.scheduled ? "✓ 予約完了 — 指定日時に自動送信されます" : `✓ 送信完了 — ${sendResult.sent}件送信しました`}
+          </span>
         </div>
+      )}
 
-        <div style={{ display: "grid", gap: 16, maxWidth: 520 }}>
+      {/* 作成ドロワー */}
+      <RightDrawer
+        open={drawerOpen}
+        width={560}
+        title="通知を作成"
+        description="タイトルと本文を入力して、購読者へ通知を送信します。"
+        onClose={() => setDrawerOpen(false)}
+      >
+        <div style={{ display: "grid", gap: 16 }}>
           <div>
-            <label className="small" style={{ display: "block", marginBottom: 4, fontWeight: 600 }}>
-              タイトル <span style={{ color: "#e53e3e" }}>*</span>
-            </label>
+            <div className="h2">サイト</div>
+            <div className="small" style={{ opacity: 0.72 }}>{selectedSite?.name || siteId} / 購読者数: {subCount ?? "—"}</div>
+          </div>
+
+          <div>
+            <div className="h2">タイトル <span style={{ color: "#e53e3e" }}>*</span></div>
             <input className="input" value={title} onChange={(e) => setTitle(e.target.value)}
               placeholder="例: セール開催中！" maxLength={100} />
           </div>
 
           <div>
-            <label className="small" style={{ display: "block", marginBottom: 4, fontWeight: 600 }}>本文</label>
+            <div className="h2">本文</div>
             <input className="input" value={body} onChange={(e) => setBody(e.target.value)}
               placeholder="例: 本日23:59まで全品20%OFF" maxLength={200} />
           </div>
 
           <div>
-            <label className="small" style={{ display: "block", marginBottom: 4, fontWeight: 600 }}>クリック先URL</label>
+            <div className="h2">クリック先URL</div>
             <input className="input" value={url} onChange={(e) => setUrl(e.target.value)}
               placeholder="例: https://example.com/sale" />
           </div>
 
           <div>
-            <label className="small" style={{ display: "block", marginBottom: 4, fontWeight: 600 }}>
-              アイコン <span style={{ opacity: 0.6, fontWeight: 400 }}>(自動取得・上書き可)</span>
-            </label>
+            <div className="h2">アイコン <span className="small" style={{ opacity: 0.6, fontWeight: 400 }}>(自動取得・上書き可)</span></div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              {icon && (
-                <img src={icon} alt="" style={{ width: 32, height: 32, borderRadius: 4, objectFit: "cover", flexShrink: 0, border: "1px solid var(--border, #e2e8f0)" }}
-                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-              )}
+              {icon && <img src={icon} alt="" style={{ width: 32, height: 32, borderRadius: 4, objectFit: "cover", flexShrink: 0, border: "1px solid rgba(0,0,0,.1)" }}
+                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />}
               <input className="input" value={icon} onChange={(e) => setIcon(e.target.value)}
                 placeholder="https://..." style={{ flex: 1 }} />
             </div>
@@ -323,7 +349,7 @@ export default function PushPage() {
 
           {/* プレビュー */}
           {(title || body) && (
-            <div style={{ padding: "12px 16px", background: "var(--bg-surface, #f8f9fa)", borderRadius: 8, border: "1px solid var(--border, #e2e8f0)" }}>
+            <div style={{ padding: "12px 16px", background: "#f8fafc", borderRadius: 8, border: "1px solid #e2e8f0" }}>
               <div className="small" style={{ opacity: 0.5, marginBottom: 8 }}>プレビュー</div>
               <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
                 {icon && <img src={icon} alt="" style={{ width: 40, height: 40, borderRadius: 6, objectFit: "cover", flexShrink: 0 }}
@@ -337,17 +363,14 @@ export default function PushPage() {
             </div>
           )}
 
-          {/* 配信タイミング */}
           <div>
-            <label className="small" style={{ display: "block", marginBottom: 8, fontWeight: 600 }}>配信タイミング</label>
+            <div className="h2">配信タイミング</div>
             <div style={{ display: "flex", gap: 8, marginBottom: scheduleMode === "scheduled" ? 10 : 0 }}>
               {(["now", "scheduled"] as const).map((m) => (
                 <button key={m} onClick={() => setScheduleMode(m)} style={{
-                  padding: "6px 16px", borderRadius: 6, fontSize: 13, cursor: "pointer", border: "1px solid",
-                  borderColor: scheduleMode === m ? "var(--accent, #6366f1)" : "var(--border, #e2e8f0)",
-                  background: scheduleMode === m ? "var(--accent, #6366f1)" : "transparent",
-                  color: scheduleMode === m ? "#fff" : "inherit",
-                  fontWeight: scheduleMode === m ? 600 : 400,
+                  padding: "5px 16px", borderRadius: 20, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer",
+                  background: scheduleMode === m ? "#0f172a" : "rgba(15,23,42,.07)",
+                  color: scheduleMode === m ? "#fff" : "#64748b",
                 }}>
                   {m === "now" ? "今すぐ送信" : "日時指定"}
                 </button>
@@ -356,36 +379,23 @@ export default function PushPage() {
             {scheduleMode === "scheduled" && (
               <input type="datetime-local" className="input" value={scheduledAt}
                 onChange={(e) => setScheduledAt(e.target.value)}
-                min={(() => { const d = new Date(Date.now() + 60000); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); })()}
+                min={localDatetimeMin()}
                 style={{ maxWidth: 260 }} />
             )}
           </div>
 
-          {/* 送信ボタン */}
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <button className="btn-primary" onClick={handleSend}
+          <div style={{ display: "flex", gap: 12, alignItems: "center", paddingTop: 8 }}>
+            <button className="btn btn--primary" onClick={handleSend}
               disabled={sending || !title.trim() || !siteId || (scheduleMode === "scheduled" && !scheduledAt)}>
               {sending
                 ? (scheduleMode === "scheduled" ? "予約中…" : "送信中…")
                 : scheduleMode === "scheduled" ? "予約する" : `今すぐ送信（${subCount ?? "—"}人）`}
             </button>
-            {sendResult && (
-              <span style={{ fontSize: 13, color: "#16a34a" }}>
-                {sendResult.scheduled ? "✓ 予約完了" : `✓ 送信完了 — ${sendResult.sent}件`}
-              </span>
-            )}
+            <button className="btn btn--ghost" onClick={() => setDrawerOpen(false)}>キャンセル</button>
             {sendErr && <span style={{ fontSize: 13, color: "#e53e3e" }}>⚠ {sendErr}</span>}
           </div>
-
-          {/* 使い方メモ */}
-          <div style={{ marginTop: 8, padding: "14px 16px", background: "var(--bg-surface, #f8f9fa)", borderRadius: 8, border: "1px solid var(--border, #e2e8f0)" }}>
-            <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 6 }}>📋 購読してもらうには</div>
-            <div style={{ fontSize: 12, opacity: 0.7, lineHeight: 1.7 }}>
-              シナリオのボタンクリック時に <code style={{ background: "#eee", padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>window.mokkeda.push.requestPermission()</code> を呼ぶと許可ダイアログが表示されます。
-            </div>
-          </div>
         </div>
-      </div>
+      </RightDrawer>
     </div>
   );
 }
