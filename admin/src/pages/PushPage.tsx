@@ -5,7 +5,16 @@ import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { db, apiPostJson } from "../firebase";
 
 // ─── 型 ─────────────────────────────────────────────────────────────────
-type Site = { id: string; name?: string; workspaceId?: string };
+type Site = { id: string; name?: string; workspaceId?: string; domains?: string[] };
+
+function siteIconUrl(site?: Site): string {
+  const domain = site?.domains?.[0];
+  if (!domain) return "";
+  try {
+    const host = new URL(domain.startsWith("http") ? domain : `https://${domain}`).hostname;
+    return `https://www.google.com/s2/favicons?domain=${host}&sz=64`;
+  } catch { return ""; }
+}
 
 function workspaceKeyForUid(uid: string) { return `cx_admin_workspace_id:${uid}`; }
 function readSelectedWorkspaceId(uid?: string) {
@@ -129,7 +138,10 @@ export default function PushPage() {
     loadCampaigns(siteId);
     setSendResult(null);
     setSendErr("");
-  }, [siteId]);
+    // サイトのファビコンをアイコンに自動セット
+    const site = sites.find((s) => s.id === siteId);
+    setIcon(siteIconUrl(site));
+  }, [siteId, sites]);
 
   // 送信
   const handleSend = async () => {
@@ -244,14 +256,25 @@ export default function PushPage() {
 
           <div>
             <label className="small" style={{ display: "block", marginBottom: 4, fontWeight: 600 }}>
-              アイコンURL <span style={{ color: "var(--text-muted, #888)", fontWeight: 400 }}>(省略可)</span>
+              アイコン <span style={{ color: "var(--text-muted, #888)", fontWeight: 400 }}>(サイトのファビコンを自動取得)</span>
             </label>
-            <input
-              className="input"
-              value={icon}
-              onChange={(e) => setIcon(e.target.value)}
-              placeholder="例: https://example.com/icon.png"
-            />
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              {icon && (
+                <img
+                  src={icon}
+                  alt=""
+                  style={{ width: 32, height: 32, borderRadius: 4, objectFit: "cover", flexShrink: 0, border: "1px solid var(--border, #e2e8f0)" }}
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                />
+              )}
+              <input
+                className="input"
+                value={icon}
+                onChange={(e) => setIcon(e.target.value)}
+                placeholder="自動取得されます（URLで上書き可）"
+                style={{ flex: 1 }}
+              />
+            </div>
           </div>
         </div>
 
