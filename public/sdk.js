@@ -1875,7 +1875,7 @@
   }
 
   // ─── Web Push ─────────────────────────────────────────────────────────
-  var PUSH_BRIDGE_ORIGIN = "https://push.mokkeda.jp";
+  var PUSH_BRIDGE_ORIGIN = "https://push.mokkeda.com";
   var _pushIframe = null;
   var _pushCallbacks = {};
 
