@@ -99,11 +99,11 @@ export default function PushPage() {
 
   // ワークスペース内のサイト一覧
   useEffect(() => {
-    if (!currentUid || !workspaceId) { setSites([]); setSiteId(""); return; }
+    if (!currentUid) { setSites([]); setSiteId(""); return; }
     const q = query(collection(db, "sites"), where("memberUids", "array-contains", currentUid));
     const unsub = onSnapshot(q, (snap) => {
       const list = snap.docs
-        .filter((d) => d.data().workspaceId === workspaceId)
+        .filter((d) => !workspaceId || d.data().workspaceId === workspaceId)
         .map((d) => ({ id: d.id, ...(d.data() as any) }));
       setSites(list);
       setSiteId((prev) => (list.find((s) => s.id === prev) ? prev : list[0]?.id || ""));
@@ -356,7 +356,7 @@ export default function PushPage() {
             {scheduleMode === "scheduled" && (
               <input type="datetime-local" className="input" value={scheduledAt}
                 onChange={(e) => setScheduledAt(e.target.value)}
-                min={new Date(Date.now() + 60000).toISOString().slice(0, 16)}
+                min={(() => { const d = new Date(Date.now() + 60000); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); })()}
                 style={{ maxWidth: 260 }} />
             )}
           </div>
