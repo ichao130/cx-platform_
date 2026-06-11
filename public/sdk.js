@@ -1909,7 +1909,8 @@
     var iframe = document.createElement("iframe");
     iframe.src = _pushBridgeUrl(mode);
     iframe.style.cssText = "display:none;width:0;height:0;border:none;position:absolute;";
-    iframe.setAttribute("sandbox", "allow-scripts allow-same-origin");
+    iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-popups");
+    iframe.setAttribute("allow", "notifications");
     document.body.appendChild(iframe);
     return iframe;
   }
