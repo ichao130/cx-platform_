@@ -61,8 +61,10 @@ export default function PushPage() {
   const [body, setBody] = useState("");
   const [url, setUrl] = useState("");
   const [icon, setIcon] = useState("");
+  const [scheduleMode, setScheduleMode] = useState<"now" | "scheduled">("now");
+  const [scheduledAt, setScheduledAt] = useState(""); // datetime-local 文字列
   const [sending, setSending] = useState(false);
-  const [sendResult, setSendResult] = useState<{ sent: number; failed: number } | null>(null);
+  const [sendResult, setSendResult] = useState<{ sent?: number; failed?: number; scheduled?: boolean } | null>(null);
   const [sendErr, setSendErr] = useState("");
 
   // 送信履歴
@@ -146,18 +148,24 @@ export default function PushPage() {
   // 送信
   const handleSend = async () => {
     if (!siteId || !title.trim()) return;
+    if (scheduleMode === "scheduled" && !scheduledAt) return;
     setSending(true);
     setSendResult(null);
     setSendErr("");
     try {
-      const res = await apiPostJson<{ ok: boolean; sent: number; failed: number }>("/v1/push/send", {
+      const payload: any = {
         site_id: siteId,
         title: title.trim(),
         body: body.trim(),
         url: url.trim() || "/",
         icon: icon.trim(),
-      });
-      setSendResult({ sent: res.sent, failed: res.failed });
+      };
+      if (scheduleMode === "scheduled" && scheduledAt) {
+        // datetime-local はローカル時間なので ISO 文字列に変換
+        payload.scheduled_at = new Date(scheduledAt).toISOString();
+      }
+      const res = await apiPostJson<{ ok: boolean; sent?: number; failed?: number; scheduled?: boolean }>("/v1/push/send", payload);
+      setSendResult({ sent: res.sent, failed: res.failed, scheduled: res.scheduled });
       setTitle("");
       setBody("");
       setUrl("");
@@ -306,18 +314,56 @@ export default function PushPage() {
           </div>
         )}
 
+        {/* 配信タイミング */}
+        <div style={{ marginTop: 16 }}>
+          <label className="small" style={{ display: "block", marginBottom: 8, fontWeight: 600 }}>配信タイミング</label>
+          <div style={{ display: "flex", gap: 8, marginBottom: scheduleMode === "scheduled" ? 10 : 0 }}>
+            {(["now", "scheduled"] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => setScheduleMode(m)}
+                style={{
+                  padding: "6px 16px", borderRadius: 6, fontSize: 13, cursor: "pointer", border: "1px solid",
+                  borderColor: scheduleMode === m ? "var(--accent, #6366f1)" : "var(--border, #e2e8f0)",
+                  background: scheduleMode === m ? "var(--accent, #6366f1)" : "transparent",
+                  color: scheduleMode === m ? "#fff" : "inherit",
+                  fontWeight: scheduleMode === m ? 600 : 400,
+                }}
+              >
+                {m === "now" ? "今すぐ送信" : "日時指定"}
+              </button>
+            ))}
+          </div>
+          {scheduleMode === "scheduled" && (
+            <input
+              type="datetime-local"
+              className="input"
+              value={scheduledAt}
+              onChange={(e) => setScheduledAt(e.target.value)}
+              min={new Date(Date.now() + 60000).toISOString().slice(0, 16)}
+              style={{ maxWidth: 260 }}
+            />
+          )}
+        </div>
+
         <div style={{ marginTop: 16, display: "flex", gap: 12, alignItems: "center" }}>
           <button
             className="btn-primary"
             onClick={handleSend}
-            disabled={sending || !title.trim() || !siteId}
+            disabled={sending || !title.trim() || !siteId || (scheduleMode === "scheduled" && !scheduledAt)}
           >
-            {sending ? "送信中…" : `送信する（${subCount ?? "—"}人）`}
+            {sending
+              ? (scheduleMode === "scheduled" ? "予約中…" : "送信中…")
+              : scheduleMode === "scheduled"
+                ? "予約する"
+                : `今すぐ送信（${subCount ?? "—"}人）`}
           </button>
 
           {sendResult && (
             <span style={{ fontSize: 13, color: "#38a169" }}>
-              ✓ 送信完了 — {sendResult.sent}件成功 / {sendResult.failed}件失敗
+              {sendResult.scheduled
+                ? "✓ 予約完了 — 指定日時に自動送信されます"
+                : `✓ 送信完了 — ${sendResult.sent}件成功 / ${sendResult.failed}件失敗`}
             </span>
           )}
           {sendErr && (
@@ -340,6 +386,7 @@ export default function PushPage() {
               <tr style={{ borderBottom: "1px solid var(--border, #e2e8f0)" }}>
                 <th style={{ textAlign: "left", padding: "8px 12px", fontWeight: 600 }}>タイトル</th>
                 <th style={{ textAlign: "left", padding: "8px 12px", fontWeight: 600 }}>本文</th>
+                <th style={{ textAlign: "center", padding: "8px 12px", fontWeight: 600 }}>状態</th>
                 <th style={{ textAlign: "right", padding: "8px 12px", fontWeight: 600 }}>送信</th>
                 <th style={{ textAlign: "right", padding: "8px 12px", fontWeight: 600 }}>失敗</th>
                 <th style={{ textAlign: "right", padding: "8px 12px", fontWeight: 600 }}>日時</th>
@@ -348,11 +395,22 @@ export default function PushPage() {
             <tbody>
               {campaigns.map((c) => (
                 <tr key={c.id} style={{ borderBottom: "1px solid var(--border, #f0f0f0)" }}>
-                  <td style={{ padding: "8px 12px", fontWeight: 600, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title}</td>
-                  <td style={{ padding: "8px 12px", color: "var(--text-muted, #555)", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.body || "—"}</td>
-                  <td style={{ padding: "8px 12px", textAlign: "right" }}>{c.stats?.sent ?? "—"}</td>
+                  <td style={{ padding: "8px 12px", fontWeight: 600, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title}</td>
+                  <td style={{ padding: "8px 12px", color: "var(--text-muted, #555)", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.body || "—"}</td>
+                  <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                    {c.status === "scheduled" || c.status === "sending" ? (
+                      <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: c.status === "sending" ? "#fef3c7" : "#e0e7ff", color: c.status === "sending" ? "#92400e" : "#4338ca", fontWeight: 600 }}>
+                        {c.status === "sending" ? "送信中" : "予約中"}
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: "#dcfce7", color: "#15803d", fontWeight: 600 }}>送信済</span>
+                    )}
+                  </td>
+                  <td style={{ padding: "8px 12px", textAlign: "right" }}>{c.stats?.sent ?? (c.status === "scheduled" ? "—" : "—")}</td>
                   <td style={{ padding: "8px 12px", textAlign: "right", color: (c.stats?.failed ?? 0) > 0 ? "#e53e3e" : undefined }}>{c.stats?.failed ?? "—"}</td>
-                  <td style={{ padding: "8px 12px", textAlign: "right", color: "var(--text-muted, #888)" }}>{formatTs(c.sentAt)}</td>
+                  <td style={{ padding: "8px 12px", textAlign: "right", color: "var(--text-muted, #888)", fontSize: 12 }}>
+                    {c.status === "scheduled" ? formatTs((c as any).scheduledAt) : formatTs(c.sentAt)}
+                  </td>
                 </tr>
               ))}
             </tbody>

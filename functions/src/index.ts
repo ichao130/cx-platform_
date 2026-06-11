@@ -4,6 +4,7 @@ import { onCall, HttpsError, onRequest } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { defineSecret } from "firebase-functions/params";
+import webpush from "web-push";
 
 import express from "express";
 import cors from "cors";
@@ -22,6 +23,9 @@ const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
 const STRIPE_WEBHOOK_SECRET = defineSecret("STRIPE_WEBHOOK_SECRET");
 const MISOCA_CLIENT_ID = defineSecret("MISOCA_CLIENT_ID");
 const MISOCA_CLIENT_SECRET = defineSecret("MISOCA_CLIENT_SECRET");
+const VAPID_PRIVATE_KEY = defineSecret("VAPID_PRIVATE_KEY");
+
+const VAPID_PUBLIC_KEY = "BHHAw9e5rSVttkuLfz1TRvebwIRP4UT_SNWneI22hxdvbn_q4eOFrqojYby2mRsgtYR_5yp2mljlCc2-u9pCcSU";
 
 
 /**
@@ -467,5 +471,87 @@ export const autoExpireScenarios = onSchedule(
     }
     await batch.commit();
     console.log(`[autoExpireScenarios] ${expired.length}件を paused に変更:`, expired.map((d) => d.id));
+  }
+);
+
+/**
+ * ==========================
+ * Scheduled: 予約プッシュ通知の配信
+ * 毎分実行。scheduledAt が現在時刻以前の "scheduled" キャンペーンを送信する。
+ * ==========================
+ */
+export const processScheduledPush = onSchedule(
+  {
+    region: "asia-northeast1",
+    schedule: "* * * * *", // 毎分
+    timeZone: "UTC",
+    timeoutSeconds: 120,
+    secrets: [VAPID_PRIVATE_KEY],
+  },
+  async () => {
+    const db = adminDb();
+    const now = new Date();
+
+    const snap = await db.collection("push_campaigns")
+      .where("status", "==", "scheduled")
+      .where("scheduledAt", "<=", now)
+      .get();
+
+    if (snap.empty) return;
+
+    webpush.setVapidDetails(
+      "mailto:hello@mokkeda.com",
+      VAPID_PUBLIC_KEY,
+      VAPID_PRIVATE_KEY.value()
+    );
+
+    for (const campaignDoc of snap.docs) {
+      const campaign = campaignDoc.data() as any;
+      const siteId: string = campaign.siteId || "";
+      if (!siteId) continue;
+
+      // 処理中フラグを立てて二重送信防止
+      await campaignDoc.ref.update({ status: "sending" });
+
+      try {
+        const tokensSnap = await db.collection("push_subscriptions").doc(siteId)
+          .collection("tokens").where("active", "==", true).get();
+
+        const payload = JSON.stringify({
+          title: campaign.title || "",
+          body: campaign.body || "",
+          url: campaign.url || "/",
+          icon: campaign.icon || "",
+        });
+
+        let sent = 0, failed = 0;
+        const batch = db.batch();
+
+        await Promise.all(tokensSnap.docs.map(async (d) => {
+          const sub = d.data().subscription;
+          try {
+            const subObj = typeof sub === "string" ? JSON.parse(sub) : sub;
+            await webpush.sendNotification(subObj, payload);
+            sent++;
+          } catch (e: any) {
+            if (e?.statusCode === 410 || e?.statusCode === 404) {
+              batch.update(d.ref, { active: false });
+            }
+            failed++;
+          }
+        }));
+
+        await batch.commit();
+        await campaignDoc.ref.update({
+          status: "sent",
+          sentAt: now,
+          stats: { sent, failed },
+        });
+        console.log(`[processScheduledPush] campaignId=${campaignDoc.id} sent=${sent} failed=${failed}`);
+      } catch (e) {
+        console.error(`[processScheduledPush] campaignId=${campaignDoc.id} error:`, e);
+        await campaignDoc.ref.update({ status: "scheduled" }); // エラー時は元に戻す
+      }
+    }
   }
 );

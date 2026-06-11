@@ -6276,12 +6276,13 @@ export function registerV1Routes(app: Express) {
   });
 
   // POST /v1/push/send  (管理画面専用)
+  // scheduled_at（ISO8601文字列）を渡すと予約配信。未来の日時なら status: "scheduled" で保存のみ。
   app.post("/v1/push/send", async (req, res) => {
     try {
       corsByAdminOrigins(req, res);
       const uid = await requireAuthUid(req);
 
-      const { site_id, title, body, url, icon } = req.body || {};
+      const { site_id, title, body, url, icon, scheduled_at } = req.body || {};
       if (!site_id || !title) return res.status(400).json({ ok: false, error: "missing_params" });
 
       // サイトアクセス権確認
@@ -6291,6 +6292,28 @@ export function registerV1Routes(app: Express) {
       const siteData = siteDoc.data() || {};
       const wsId: string = siteData.workspaceId || "";
       await assertWorkspaceRole({ workspaceId: wsId, uid, allowedRoles: ["owner", "admin", "member"] });
+
+      // 予約配信: 未来の日時ならキャンペーンを保存して終了
+      if (scheduled_at) {
+        const scheduledMs = new Date(scheduled_at).getTime();
+        if (isNaN(scheduledMs)) return res.status(400).json({ ok: false, error: "invalid_scheduled_at" });
+        if (scheduledMs > Date.now()) {
+          const campaignRef = db.collection("push_campaigns").doc();
+          await campaignRef.set({
+            siteId: site_id,
+            title,
+            body: body || "",
+            url: url || "/",
+            icon: icon || "",
+            status: "scheduled",
+            scheduledAt: new Date(scheduled_at),
+            createdAt: FieldValue.serverTimestamp(),
+            createdBy: uid,
+          });
+          return res.json({ ok: true, scheduled: true, campaignId: campaignRef.id });
+        }
+        // 過去日時なら即時配信にフォールスルー
+      }
 
       initWebPush();
 
@@ -6311,7 +6334,6 @@ export function registerV1Routes(app: Express) {
         } catch (e: any) {
           console.warn("[push/send] failed for token", d.id, e?.statusCode, e?.message);
           if (e?.statusCode === 410 || e?.statusCode === 404) {
-            // 無効なトークンを無効化
             batch.update(d.ref, { active: false });
           }
           failed++;
