@@ -6352,6 +6352,7 @@ export function registerV1Routes(app: Express) {
         icon: icon || "",
         status: "sent",
         sentAt: FieldValue.serverTimestamp(),
+        createdAt: FieldValue.serverTimestamp(),
         stats: { sent, failed },
         createdBy: uid,
       });
@@ -6403,7 +6404,7 @@ export function registerV1Routes(app: Express) {
 
       const snap = await db.collection("push_campaigns")
         .where("siteId", "==", site_id)
-        .orderBy("sentAt", "desc")
+        .orderBy("createdAt", "desc")
         .limit(50)
         .get();
 

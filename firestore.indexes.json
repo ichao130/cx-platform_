@@ -340,7 +340,7 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "siteId", "order": "ASCENDING" },
-        { "fieldPath": "sentAt", "order": "DESCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" },
         { "fieldPath": "__name__", "order": "DESCENDING" }
       ]
     },
