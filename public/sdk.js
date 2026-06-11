@@ -1890,45 +1890,55 @@
     return url;
   }
 
-  function _ensurePushIframe(mode, cb) {
-    // メッセージ受信リスナー（1回だけ登録）
-    if (!window.__cxPushListener) {
-      window.__cxPushListener = true;
-      window.addEventListener("message", function (ev) {
-        if (ev.origin !== PUSH_BRIDGE_ORIGIN) return;
-        var data = ev.data || {};
-        if (data.type && _pushCallbacks[data.type]) {
-          var fn = _pushCallbacks[data.type];
-          delete _pushCallbacks[data.type];
-          fn(data);
-        }
-      });
-    }
-
-    // iframe 作成
-    var iframe = document.createElement("iframe");
-    iframe.src = _pushBridgeUrl(mode);
-    iframe.style.cssText = "display:none;width:0;height:0;border:none;position:absolute;";
-    iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-popups");
-    iframe.setAttribute("allow", "notifications");
-    document.body.appendChild(iframe);
-    return iframe;
-  }
-
   /**
    * プッシュ通知の購読リクエスト。
-   * 許可ダイアログを表示し、結果をコールバックで返す。
-   * @param {function} onResult - ({ status: "subscribed"|"denied"|"dismissed"|"unsupported"|"error" }) => void
+   * ポップアップウィンドウ経由で許可を求め、結果をコールバックで返す。
+   * @param {function} onResult - ({ status: "subscribed"|"denied"|"dismissed"|"unsupported"|"error"|"popup_blocked" }) => void
    */
   function cxRequestPush(onResult) {
     try {
       var cb = onResult || function () {};
-      _pushCallbacks["cx_push_subscribed"]    = function () { cb({ status: "subscribed" }); };
-      _pushCallbacks["cx_push_denied"]        = function () { cb({ status: "denied" }); };
-      _pushCallbacks["cx_push_dismissed"]     = function () { cb({ status: "dismissed" }); };
-      _pushCallbacks["cx_push_unsupported"]   = function () { cb({ status: "unsupported" }); };
-      _pushCallbacks["cx_push_error"]         = function (d) { cb({ status: "error", error: d.error }); };
-      _ensurePushIframe("subscribe");
+      var timer = null;
+      var popup = null;
+
+      var handler = function (ev) {
+        if (ev.origin !== PUSH_BRIDGE_ORIGIN) return;
+        var data = ev.data || {};
+        if (!data.type || !data.type.startsWith("cx_push_")) return;
+
+        window.removeEventListener("message", handler);
+        if (timer) clearTimeout(timer);
+        try { if (popup && !popup.closed) popup.close(); } catch (e) {}
+
+        var status = data.type.replace("cx_push_", "");
+        cb({ status: status, error: data.error });
+      };
+
+      window.addEventListener("message", handler);
+
+      // ポップアップを画面中央に開く（ユーザー操作から呼ばれるので許可される）
+      var w = 480, h = 620;
+      var left = Math.max(0, Math.round(window.screenX + (window.outerWidth - w) / 2));
+      var top  = Math.max(0, Math.round(window.screenY + (window.outerHeight - h) / 2));
+      popup = window.open(
+        _pushBridgeUrl("subscribe"),
+        "cx_push_bridge",
+        "width=" + w + ",height=" + h + ",left=" + left + ",top=" + top + ",toolbar=no,menubar=no,scrollbars=no"
+      );
+
+      if (!popup) {
+        window.removeEventListener("message", handler);
+        cb({ status: "popup_blocked" });
+        return;
+      }
+
+      // タイムアウト（30秒でポップアップが閉じられた場合など）
+      timer = setTimeout(function () {
+        window.removeEventListener("message", handler);
+        try { if (!popup.closed) popup.close(); } catch (e) {}
+        cb({ status: "dismissed" });
+      }, 30000);
+
     } catch (e) {
       try { onResult && onResult({ status: "error", error: String(e) }); } catch (e2) {}
     }

@@ -5,7 +5,8 @@
   <meta name="robots" content="noindex" />
   <title>MOKKEDA Push Bridge</title>
 </head>
-<body>
+<body style="margin:0;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f8fafc;">
+<div id="msg" style="text-align:center;color:#64748b;font-size:15px;padding:32px;">通知の設定を確認中…</div>
 <script>
 (function () {
   "use strict";
@@ -21,7 +22,15 @@
   }
 
   function postToParent(msg) {
-    try { window.parent.postMessage(msg, "*"); } catch (e) {}
+    try {
+      // ポップアップ: opener に送って自分を閉じる
+      if (window.opener && window.opener !== window) {
+        window.opener.postMessage(msg, "*");
+        setTimeout(function () { window.close(); }, 300);
+      } else {
+        window.parent.postMessage(msg, "*");
+      }
+    } catch (e) {}
   }
 
   function urlBase64ToUint8Array(base64String) {
