@@ -217,7 +217,7 @@ function StatCard({ label, value, sub, accent, loading, numericValue, formatter,
   return (
     <div className="card" style={{ padding: 18, background: "#fff", border: "1px solid rgba(15,23,42,.08)", minWidth: 0 }}>
       <div className="small" style={{ opacity: 0.68 }}>{label}</div>
-      <div style={{ fontSize, fontWeight: 800, lineHeight: 1.2, marginTop: 6, letterSpacing: "-.02em", color: accent || "inherit", wordBreak: "break-all", minHeight: fontSize }}>
+      <div style={{ fontSize, fontWeight: 800, lineHeight: 1.2, marginTop: 6, letterSpacing: "-.02em", color: accent || "inherit", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minHeight: fontSize }}>
         {loading ? (
           <SkeletonBar width="70%" height={fontSize * 0.9} radius={4} />
         ) : numericValue !== undefined ? (
