@@ -258,15 +258,16 @@ export default function PushPage() {
                 <th>本文</th>
                 <th>URL</th>
                 <th>状態</th>
-                <th>送信数</th>
+                <th style={{ textAlign: "center" }}>送信</th>
+                <th style={{ textAlign: "center" }}>失敗</th>
                 <th>{tab === "scheduled" ? "配信予定日時" : "配信日時"}</th>
               </tr>
             </thead>
             <tbody>
               {campaignsLoading ? (
-                <tr><td colSpan={6} style={{ textAlign: "center", opacity: 0.5, padding: 24 }}>読み込み中…</td></tr>
+                <tr><td colSpan={7} style={{ textAlign: "center", opacity: 0.5, padding: 24 }}>読み込み中…</td></tr>
               ) : tabList.length === 0 ? (
-                <tr><td colSpan={6} style={{ textAlign: "center", opacity: 0.5, padding: 24 }}>
+                <tr><td colSpan={7} style={{ textAlign: "center", opacity: 0.5, padding: 24 }}>
                   {tab === "scheduled" ? "配信予定の通知はありません" : "配信済みの通知はありません"}
                 </td></tr>
               ) : tabList.map((c) => (
@@ -286,6 +287,9 @@ export default function PushPage() {
                     {c.status === "sent"      && <span className="badge" style={{ background: "#dcfce7", color: "#15803d", borderColor: "#bbf7d0" }}>送信済</span>}
                   </td>
                   <td style={{ textAlign: "center" }}>{c.stats?.sent ?? "—"}</td>
+                  <td style={{ textAlign: "center", color: (c.stats?.failed ?? 0) > 0 ? "#dc2626" : undefined }}>
+                    {c.status === "scheduled" ? "—" : (c.stats?.failed ?? "—")}
+                  </td>
                   <td className="small" style={{ opacity: 0.72, whiteSpace: "nowrap" }}>
                     {c.status === "scheduled" ? formatTs(c.scheduledAt) : formatTs(c.sentAt)}
                   </td>
@@ -315,8 +319,13 @@ export default function PushPage() {
       >
         <div style={{ display: "grid", gap: 16 }}>
           <div>
-            <div className="h2">サイト</div>
-            <div className="small" style={{ opacity: 0.72 }}>{selectedSite?.name || siteId} / 購読者数: {subCount ?? "—"}</div>
+            <div className="h2">送信先サイト</div>
+            <select className="input" value={siteId} onChange={(e) => setSiteId(e.target.value)}>
+              {sites.map((s) => (
+                <option key={s.id} value={s.id}>{s.name || s.id}</option>
+              ))}
+            </select>
+            <div className="small" style={{ opacity: 0.6, marginTop: 4 }}>購読者数: <b>{subCount ?? "—"}</b> 人</div>
           </div>
 
           <div>
