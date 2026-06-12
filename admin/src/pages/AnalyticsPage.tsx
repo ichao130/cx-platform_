@@ -21,7 +21,6 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
-  LabelList,
 } from "recharts";
 import { db } from "../firebase";
 import { SkeletonBar, SkeletonCard } from "../components/Skeleton";
@@ -952,46 +951,6 @@ export default function AnalyticsPage() {
       .sort((a, b) => b.revenue - a.revenue);
   }, [purchaseLogs, journeyLogs, scenarios, isScenarioInPeriod]);
 
-  // ---- computed: 流入元（utm_source or ref）× 売上 ----
-  const referrerData = useMemo(() => {
-    // PV数を流入元ごとに集計
-    const sessionMap = new Map<string, number>();
-    for (const l of pvLogs) {
-      const src = l.utm_source || (l.ref ? (() => { try { return new URL(l.ref, "http://x").hostname || l.ref; } catch { return l.ref; } })() : "") || "直接流入";
-      sessionMap.set(src, (sessionMap.get(src) || 0) + 1);
-    }
-    // 訪問者の流入元マップ（最初のpageviewのutm_source）
-    const vidSourceMap = new Map<string, string>();
-    for (const v of visitorList) {
-      vidSourceMap.set(v.vid, v.utmSource || "直接流入");
-    }
-    // 購入を流入元に帰属（ファーストタッチ）
-    const revenueMap = new Map<string, { revenue: number; count: number; vids: Set<string> }>();
-    for (const p of purchaseLogs) {
-      if (!p.vid) continue;
-      const src = vidSourceMap.get(p.vid) || "直接流入";
-      if (!revenueMap.has(src)) revenueMap.set(src, { revenue: 0, count: 0, vids: new Set() });
-      const entry = revenueMap.get(src)!;
-      entry.revenue += typeof p.revenue === "number" ? p.revenue : 0;
-      entry.count++;
-      entry.vids.add(p.vid);
-    }
-    const allSrcs = new Set([...sessionMap.keys(), ...revenueMap.keys()]);
-    return Array.from(allSrcs)
-      .map((src) => ({
-        src,
-        sessions: sessionMap.get(src) || 0,
-        revenue: revenueMap.get(src)?.revenue || 0,
-        purchaseCount: revenueMap.get(src)?.count || 0,
-        buyers: revenueMap.get(src)?.vids.size || 0,
-      }))
-      .sort((a, b) => b.revenue - a.revenue || b.sessions - a.sessions)
-      .slice(0, 10);
-  }, [pvLogs, visitorList, purchaseLogs]);
-
-  const referrerMax = useMemo(() => Math.max(...referrerData.map((r) => r.sessions), 1), [referrerData]);
-  const referrerTotal = useMemo(() => referrerData.reduce((s, r) => s + r.sessions, 0), [referrerData]);
-
   // ---- computed: UTM campaign ----
   const campaignData = useMemo(() => {
     const map = new Map<string, number>();
@@ -1215,6 +1174,48 @@ export default function AnalyticsPage() {
       .sort((a, b) => b.lastSeen.localeCompare(a.lastSeen))
       .slice(0, 1000);
   }, [journeyLogs, purchaseLogs, effectiveFrom, effectiveTo]);
+
+  // ---- computed: 流入元（utm_source or ref）× 売上 ----
+  const referrerData = useMemo(() => {
+    const sessionMap = new Map<string, number>();
+    for (const l of pvLogs) {
+      let src = "直接流入";
+      if (l.utm_source) {
+        src = l.utm_source;
+      } else if (l.ref) {
+        try { src = new URL(l.ref, "http://x").hostname || l.ref; } catch (e) { src = l.ref; }
+      }
+      sessionMap.set(src, (sessionMap.get(src) || 0) + 1);
+    }
+    const vidSourceMap = new Map<string, string>();
+    for (const v of visitorList) {
+      vidSourceMap.set(v.vid, v.utmSource || "直接流入");
+    }
+    const revenueMap = new Map<string, { revenue: number; count: number; vids: Set<string> }>();
+    for (const p of purchaseLogs) {
+      if (!p.vid) continue;
+      const src = vidSourceMap.get(p.vid) || "直接流入";
+      if (!revenueMap.has(src)) revenueMap.set(src, { revenue: 0, count: 0, vids: new Set() });
+      const entry = revenueMap.get(src)!;
+      entry.revenue += typeof p.revenue === "number" ? p.revenue : 0;
+      entry.count++;
+      entry.vids.add(p.vid);
+    }
+    const allSrcs = new Set([...sessionMap.keys(), ...revenueMap.keys()]);
+    return Array.from(allSrcs)
+      .map((src) => ({
+        src,
+        sessions: sessionMap.get(src) || 0,
+        revenue: revenueMap.get(src)?.revenue || 0,
+        purchaseCount: revenueMap.get(src)?.count || 0,
+        buyers: revenueMap.get(src)?.vids.size || 0,
+      }))
+      .sort((a, b) => b.revenue - a.revenue || b.sessions - a.sessions)
+      .slice(0, 10);
+  }, [pvLogs, visitorList, purchaseLogs]);
+
+  const referrerMax = useMemo(() => Math.max(...referrerData.map((r) => r.sessions), 1), [referrerData]);
+  const referrerTotal = useMemo(() => referrerData.reduce((s, r) => s + r.sessions, 0), [referrerData]);
 
   // ---- computed: 新規/リピート 日別集計 ----
   // stats_daily の "new_vids" / "repeat_vids" ドキュメントを優先（limit制限なし）
@@ -2165,9 +2166,7 @@ export default function AnalyticsPage() {
                           <XAxis type="number" hide />
                           <YAxis type="category" dataKey="src" width={90} tick={{ fontSize: 11 }} />
                           <Tooltip formatter={(v: any) => `¥${Number(v).toLocaleString()}`} labelStyle={{ fontSize: 12 }} />
-                          <Bar dataKey="revenue" name="売上" fill="#59b7c6" radius={[0, 4, 4, 0]}>
-                            <LabelList dataKey="revenue" position="right" formatter={(v: any) => v > 0 ? `¥${Number(v).toLocaleString()}` : ""} style={{ fontSize: 11, fill: "#334155" }} />
-                          </Bar>
+                          <Bar dataKey="revenue" name="売上" fill="#59b7c6" radius={[0, 4, 4, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
