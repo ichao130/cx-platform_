@@ -21,6 +21,7 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
+  LabelList,
 } from "recharts";
 import { db } from "../firebase";
 import { SkeletonBar, SkeletonCard } from "../components/Skeleton";
@@ -951,21 +952,45 @@ export default function AnalyticsPage() {
       .sort((a, b) => b.revenue - a.revenue);
   }, [purchaseLogs, journeyLogs, scenarios, isScenarioInPeriod]);
 
-  // ---- computed: 流入元（utm_source or ref） ----
+  // ---- computed: 流入元（utm_source or ref）× 売上 ----
   const referrerData = useMemo(() => {
-    const map = new Map<string, number>();
+    // PV数を流入元ごとに集計
+    const sessionMap = new Map<string, number>();
     for (const l of pvLogs) {
-      const src = l.utm_source || (l.ref ? (new URL(l.ref, "http://x").hostname || l.ref) : "") || "直接流入";
-      map.set(src, (map.get(src) || 0) + 1);
+      const src = l.utm_source || (l.ref ? (() => { try { return new URL(l.ref, "http://x").hostname || l.ref; } catch { return l.ref; } })() : "") || "直接流入";
+      sessionMap.set(src, (sessionMap.get(src) || 0) + 1);
     }
-    return Array.from(map.entries())
-      .map(([src, count]) => ({ src, count }))
-      .sort((a, b) => b.count - a.count)
+    // 訪問者の流入元マップ（最初のpageviewのutm_source）
+    const vidSourceMap = new Map<string, string>();
+    for (const v of visitorList) {
+      vidSourceMap.set(v.vid, v.utmSource || "直接流入");
+    }
+    // 購入を流入元に帰属（ファーストタッチ）
+    const revenueMap = new Map<string, { revenue: number; count: number; vids: Set<string> }>();
+    for (const p of purchaseLogs) {
+      if (!p.vid) continue;
+      const src = vidSourceMap.get(p.vid) || "直接流入";
+      if (!revenueMap.has(src)) revenueMap.set(src, { revenue: 0, count: 0, vids: new Set() });
+      const entry = revenueMap.get(src)!;
+      entry.revenue += typeof p.revenue === "number" ? p.revenue : 0;
+      entry.count++;
+      entry.vids.add(p.vid);
+    }
+    const allSrcs = new Set([...sessionMap.keys(), ...revenueMap.keys()]);
+    return Array.from(allSrcs)
+      .map((src) => ({
+        src,
+        sessions: sessionMap.get(src) || 0,
+        revenue: revenueMap.get(src)?.revenue || 0,
+        purchaseCount: revenueMap.get(src)?.count || 0,
+        buyers: revenueMap.get(src)?.vids.size || 0,
+      }))
+      .sort((a, b) => b.revenue - a.revenue || b.sessions - a.sessions)
       .slice(0, 10);
-  }, [pvLogs]);
+  }, [pvLogs, visitorList, purchaseLogs]);
 
-  const referrerMax = useMemo(() => Math.max(...referrerData.map((r) => r.count), 1), [referrerData]);
-  const referrerTotal = useMemo(() => referrerData.reduce((s, r) => s + r.count, 0), [referrerData]);
+  const referrerMax = useMemo(() => Math.max(...referrerData.map((r) => r.sessions), 1), [referrerData]);
+  const referrerTotal = useMemo(() => referrerData.reduce((s, r) => s + r.sessions, 0), [referrerData]);
 
   // ---- computed: UTM campaign ----
   const campaignData = useMemo(() => {
@@ -2121,21 +2146,59 @@ export default function AnalyticsPage() {
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
 
-              {/* 流入元 */}
-              <div className="card" style={{ padding: 18, background: "#fff" }}>
-                <div style={{ marginBottom: 14 }}>
-                  <div className="small" style={{ fontWeight: 700 }}>🔀 流入元</div>
-                  <div className="small" style={{ opacity: 0.5, marginTop: 2 }}>utm_source またはリファラー</div>
+              {/* 流入元 × 売上（全幅） */}
+              <div className="card" style={{ padding: 18, background: "#fff", gridColumn: "1 / -1" }}>
+                <div style={{ marginBottom: 16 }}>
+                  <div className="small" style={{ fontWeight: 700 }}>🔀 流入元経由売上</div>
+                  <div className="small" style={{ opacity: 0.5, marginTop: 2 }}>utm_source またはリファラー × ファーストタッチ帰属</div>
                 </div>
                 {journeyLoading ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }}><SkeletonBar width="80%" /><SkeletonBar width="60%" /><SkeletonBar width="70%" /></div>
                 ) : referrerData.length === 0 ? (
                   <div className="small" style={{ opacity: 0.55 }}>データなし</div>
                 ) : (
-                  <div style={{ display: "grid", gap: 12 }}>
-                    {referrerData.map((r) => (
-                      <BarRow key={r.src} label={r.src} value={r.count} max={referrerMax} total={referrerTotal} color="#59b7c6" />
-                    ))}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+                    {/* グラフ */}
+                    <div>
+                      <ResponsiveContainer width="100%" height={Math.max(180, referrerData.length * 36)}>
+                        <BarChart data={[...referrerData].reverse()} layout="vertical" margin={{ top: 0, right: 60, left: 8, bottom: 0 }} barSize={14}>
+                          <XAxis type="number" hide />
+                          <YAxis type="category" dataKey="src" width={90} tick={{ fontSize: 11 }} />
+                          <Tooltip formatter={(v: any) => `¥${Number(v).toLocaleString()}`} labelStyle={{ fontSize: 12 }} />
+                          <Bar dataKey="revenue" name="売上" fill="#59b7c6" radius={[0, 4, 4, 0]}>
+                            <LabelList dataKey="revenue" position="right" formatter={(v: any) => v > 0 ? `¥${Number(v).toLocaleString()}` : ""} style={{ fontSize: 11, fill: "#334155" }} />
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                    {/* テーブル */}
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                        <thead>
+                          <tr style={{ borderBottom: "1px solid #e2e8f0" }}>
+                            <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 600, opacity: 0.6 }}>流入元</th>
+                            <th style={{ textAlign: "right", padding: "4px 8px", fontWeight: 600, opacity: 0.6 }}>PV</th>
+                            <th style={{ textAlign: "right", padding: "4px 8px", fontWeight: 600, opacity: 0.6 }}>購入者</th>
+                            <th style={{ textAlign: "right", padding: "4px 8px", fontWeight: 600, opacity: 0.6 }}>売上</th>
+                            <th style={{ textAlign: "right", padding: "4px 8px", fontWeight: 600, opacity: 0.6 }}>CVR</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {referrerData.map((r) => {
+                            const cvr = r.sessions > 0 ? (r.buyers / r.sessions * 100) : 0;
+                            return (
+                              <tr key={r.src} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                                <td style={{ padding: "6px 8px", fontWeight: 500, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.src}</td>
+                                <td style={{ textAlign: "right", padding: "6px 8px", opacity: 0.7 }}>{fmtInt(r.sessions)}</td>
+                                <td style={{ textAlign: "right", padding: "6px 8px" }}>{r.buyers > 0 ? fmtInt(r.buyers) : <span style={{ opacity: 0.3 }}>—</span>}</td>
+                                <td style={{ textAlign: "right", padding: "6px 8px", fontWeight: r.revenue > 0 ? 700 : 400, color: r.revenue > 0 ? "#0f172a" : undefined }}>{r.revenue > 0 ? `¥${r.revenue.toLocaleString()}` : <span style={{ opacity: 0.3 }}>—</span>}</td>
+                                <td style={{ textAlign: "right", padding: "6px 8px", color: cvr > 0 ? "#059669" : undefined }}>{cvr > 0 ? `${cvr.toFixed(1)}%` : <span style={{ opacity: 0.3 }}>—</span>}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 )}
               </div>

@@ -44,7 +44,7 @@ const SHOPIFY_API_KEY = (0, params_1.defineString)("SHOPIFY_API_KEY");
 const SHOPIFY_API_SECRET = (0, params_1.defineString)("SHOPIFY_API_SECRET");
 const SHOPIFY_APP_URL = (0, params_1.defineString)("SHOPIFY_APP_URL"); // Cloud Functions URL（OAuthコールバック用）
 const SHOPIFY_SDK_URL = "https://cx-platform-v1.web.app"; // SDK配信URL（Firebase Hosting）
-const SHOPIFY_SCOPES = "write_script_tags,read_script_tags";
+const SHOPIFY_SCOPES = "write_script_tags,read_script_tags,write_pixels";
 const ADMIN_APP_URL = "https://cx-platform-v1.web.app";
 // ---- helpers ----
 function hmacValid(query, secret) {
@@ -84,68 +84,67 @@ async function injectScriptTag(shop, token, siteId, siteKey) {
         script_tag: { event: "onload", src },
     });
 }
-// ---- Web Pixel 登録 ----
-// Web Pixel は REST では登録できないため、GraphQL Admin API を使用
-async function registerWebPixel(shop, token, siteId, siteKey) {
-    const appUrl = SHOPIFY_APP_URL.value(); // APIエンドポイント用
-    // すでに登録済みか確認
-    const checkRes = await fetch(`https://${shop}/admin/api/2024-01/web_pixels.json`, {
-        headers: { "X-Shopify-Access-Token": token },
-    });
-    const checkJson = await checkRes.json();
-    const pixels = checkJson.web_pixels || [];
-    if (pixels.length > 0)
-        return pixels[0];
-    // Web Pixel のスクリプト（sandboxed context で動作）
-    const pixelScript = `
-analytics.subscribe("checkout_completed", (event) => {
-  const order = event.data.checkout;
-  const items = (order.lineItems || []).map(function(item) {
-    return {
-      product_id: String(item.variant && item.variant.product && item.variant.product.id || ""),
-      variant_id: String(item.variant && item.variant.id || ""),
-      title: item.title || "",
-      quantity: item.quantity || 1,
-      price: item.variant && item.variant.price && item.variant.price.amount ? Number(item.variant.price.amount) : 0
-    };
-  });
-  const revenue = order.totalPrice && order.totalPrice.amount ? Number(order.totalPrice.amount) : 0;
-  const orderId = String(order.order && order.order.id || order.token || "");
-  const vid = getCookie("_cx_vid");
-  fetch("${appUrl}/v1/log", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      site_id: "${siteId}",
-      site_key: "${siteKey}",
-      event: "purchase",
-      revenue: revenue,
-      order_id: orderId,
-      currency: order.currencyCode || "JPY",
-      items: items,
-      vid: vid,
-      url: window.location.href,
-      path: window.location.pathname
-    })
-  }).catch(function(){});
-});
-
-function getCookie(name) {
-  var m = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
-  return m ? decodeURIComponent(m[2]) : null;
-}
-`.trim();
-    const res = await fetch(`https://${shop}/admin/api/2024-01/web_pixels.json`, {
+// ---- GraphQL ヘルパー ----
+async function shopifyGraphQL(shop, token, query, variables) {
+    const res = await fetch(`https://${shop}/admin/api/2024-01/graphql.json`, {
         method: "POST",
         headers: {
             "X-Shopify-Access-Token": token,
             "Content-Type": "application/json",
         },
-        body: JSON.stringify({ web_pixel: { settings: {}, runtime_context: "STRICT" } }),
+        body: JSON.stringify({ query, variables }),
     });
-    // REST APIでは登録が制限されているため、ストア情報をDBに保存してフロント側で対応
-    console.log("[shopify] web_pixel registration attempted:", res.status);
-    return { pixelScript };
+    const json = await res.json();
+    if (!res.ok)
+        throw new Error(`GraphQL HTTP error ${res.status}: ${JSON.stringify(json)}`);
+    if (json.errors)
+        throw new Error(`GraphQL errors: ${JSON.stringify(json.errors)}`);
+    return json.data;
+}
+// ---- Web Pixel 登録（GraphQL Admin API + write_pixels スコープ必須）----
+// 初回: webPixelCreate → 既存あり: webPixelUpdate（settings に siteId/siteKey を注入）
+// スクリプト本体は extensions/web-pixel/src/index.js（shopify app deploy で配備済み）
+async function registerWebPixel(shop, token, siteId, siteKey) {
+    const settings = JSON.stringify({ siteId, siteKey });
+    // 既存ピクセル確認
+    let existingId = null;
+    try {
+        const checkData = await shopifyGraphQL(shop, token, `{ webPixel { id settings } }`);
+        existingId = checkData?.webPixel?.id || null;
+    }
+    catch (e) {
+        console.warn(`[shopify] webPixel check failed: ${e.message}`);
+    }
+    if (existingId) {
+        // settings を最新に更新
+        const data = await shopifyGraphQL(shop, token, `
+      mutation webPixelUpdate($webPixel: WebPixelInput!) {
+        webPixelUpdate(webPixel: $webPixel) {
+          userErrors { code field message }
+          webPixel { id settings }
+        }
+      }
+    `, { webPixel: { settings } });
+        const errors = data?.webPixelUpdate?.userErrors;
+        if (errors?.length > 0)
+            throw new Error(`webPixelUpdate errors: ${JSON.stringify(errors)}`);
+        console.log(`[shopify] webPixel updated: ${shop} id=${existingId}`);
+    }
+    else {
+        // 新規登録
+        const data = await shopifyGraphQL(shop, token, `
+      mutation webPixelCreate($webPixel: WebPixelInput!) {
+        webPixelCreate(webPixel: $webPixel) {
+          userErrors { code field message }
+          webPixel { id settings }
+        }
+      }
+    `, { webPixel: { settings } });
+        const errors = data?.webPixelCreate?.userErrors;
+        if (errors?.length > 0)
+            throw new Error(`webPixelCreate errors: ${JSON.stringify(errors)}`);
+        console.log(`[shopify] webPixel created: ${shop} id=${data?.webPixelCreate?.webPixel?.id}`);
+    }
 }
 // ---- Session Token 検証（App Bridge 3.x / HS256）----
 function decodeSessionToken(token, secret) {
@@ -262,16 +261,33 @@ function registerShopifyRoutes(app) {
                 }
             }
         }
+        // Web Pixel 登録 / 更新（write_pixels スコープが付与されている場合のみ成功）
+        let pixelOk = false;
+        let pixelError = "";
+        if (siteId) {
+            const siteDoc2 = await db.collection("sites").doc(siteId).get();
+            const siteKey2 = siteDoc2.exists ? siteDoc2.data()?.publicKey || "" : "";
+            try {
+                await registerWebPixel(shop, newToken, siteId, siteKey2);
+                pixelOk = true;
+            }
+            catch (e) {
+                pixelError = e.message;
+                console.warn(`[shopify] registerWebPixel failed (token-exchange): ${e.message}`);
+            }
+        }
         // siteドキュメントのtokenExpiresAtも更新
         if (siteId) {
             await db.collection("sites").doc(siteId).update({
                 "shopify.tokenExpiresAt": tokenExpiresAt,
+                "shopify.pixelOk": pixelOk,
             }).catch(() => { });
         }
         res.json({
             ok: true, shop, siteId: siteId || null,
             tokenExpiresAt,
             scriptTagOk, scriptTagError,
+            pixelOk, pixelError,
         });
     });
     // ② インストール開始: ?shop=xxx.myshopify.com&site_id=yyy
@@ -354,12 +370,23 @@ function registerShopifyRoutes(app) {
             catch (e) {
                 console.error("[shopify] ScriptTag injection failed:", e);
             }
+            // Web Pixel 登録
+            let pixelOk = false;
+            try {
+                await registerWebPixel(shop, accessToken, siteId, siteKey);
+                pixelOk = true;
+                console.log(`[shopify] webPixel registered: ${shop} → siteId=${siteId}`);
+            }
+            catch (e) {
+                console.warn(`[shopify] webPixel registration failed (callback): ${e.message}`);
+            }
             // siteDoc に shopify 連携情報を保存
             if (siteDoc.exists) {
                 await db.collection("sites").doc(siteId).update({
                     "shopify.shop": shop,
                     "shopify.connected": true,
                     "shopify.connectedAt": new Date().toISOString(),
+                    "shopify.pixelOk": pixelOk,
                 });
             }
         }
@@ -488,6 +515,58 @@ function registerShopifyRoutes(app) {
             await db.collection("sites").doc(siteId).update({ "shopify.connected": false });
         }
         res.status(200).send("ok");
+    });
+    // ⑤' ストータス・最近のログ取得（shopify-connect.html用）
+    app.post("/shopify/status", async (req, res) => {
+        const { session_token } = req.body || {};
+        if (!session_token) {
+            res.status(400).json({ error: "session_token required" });
+            return;
+        }
+        const decoded = decodeSessionToken(session_token, SHOPIFY_API_SECRET.value());
+        if (!decoded) {
+            res.status(401).json({ error: "Invalid session token" });
+            return;
+        }
+        const shop = decoded.shop;
+        const db = (0, admin_1.adminDb)();
+        const storeId = shop.replace(".myshopify.com", "");
+        const storeDoc = await db.collection("shopify_stores").doc(storeId).get();
+        if (!storeDoc.exists) {
+            res.json({ connected: false });
+            return;
+        }
+        const store = storeDoc.data();
+        const siteId = store?.siteId;
+        if (!siteId) {
+            res.json({ connected: true, siteId: null, logs: [] });
+            return;
+        }
+        // 直近24時間の集計
+        const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        const logsSnap = await db.collection("logs")
+            .where("site_id", "==", siteId)
+            .where("createdAt", ">=", since)
+            .orderBy("createdAt", "desc")
+            .limit(100)
+            .get();
+        let pageviews = 0, purchases = 0, lastSeenAt = null;
+        logsSnap.forEach(doc => {
+            const d = doc.data();
+            if (d.event === "pageview")
+                pageviews++;
+            if (d.event === "purchase")
+                purchases++;
+            if (!lastSeenAt)
+                lastSeenAt = d.createdAt;
+        });
+        res.json({
+            connected: true,
+            shop,
+            siteId,
+            tokenExpiresAt: store.tokenExpiresAt || null,
+            stats24h: { pageviews, purchases, lastSeenAt },
+        });
     });
     // ---- GDPR Compliance Webhooks ----
     // Webhook HMAC検証ヘルパー（bodyはBuffer）

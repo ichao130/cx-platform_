@@ -5629,11 +5629,12 @@ function registerV1Routes(app) {
         res.status(204).send("");
     });
     // POST /v1/push/send  (管理画面専用)
+    // scheduled_at（ISO8601文字列）を渡すと予約配信。未来の日時なら status: "scheduled" で保存のみ。
     app.post("/v1/push/send", async (req, res) => {
         try {
             corsByAdminOrigins(req, res);
             const uid = await (0, admin_1.requireAuthUid)(req);
-            const { site_id, title, body, url, icon } = req.body || {};
+            const { site_id, title, body, url, icon, scheduled_at } = req.body || {};
             if (!site_id || !title)
                 return res.status(400).json({ ok: false, error: "missing_params" });
             // サイトアクセス権確認
@@ -5644,6 +5645,28 @@ function registerV1Routes(app) {
             const siteData = siteDoc.data() || {};
             const wsId = siteData.workspaceId || "";
             await (0, site_1.assertWorkspaceRole)({ workspaceId: wsId, uid, allowedRoles: ["owner", "admin", "member"] });
+            // 予約配信: 未来の日時ならキャンペーンを保存して終了
+            if (scheduled_at) {
+                const scheduledMs = new Date(scheduled_at).getTime();
+                if (isNaN(scheduledMs))
+                    return res.status(400).json({ ok: false, error: "invalid_scheduled_at" });
+                if (scheduledMs > Date.now()) {
+                    const campaignRef = db.collection("push_campaigns").doc();
+                    await campaignRef.set({
+                        siteId: site_id,
+                        title,
+                        body: body || "",
+                        url: url || "/",
+                        icon: icon || "",
+                        status: "scheduled",
+                        scheduledAt: new Date(scheduled_at),
+                        createdAt: firestore_1.FieldValue.serverTimestamp(),
+                        createdBy: uid,
+                    });
+                    return res.json({ ok: true, scheduled: true, campaignId: campaignRef.id });
+                }
+                // 過去日時なら即時配信にフォールスルー
+            }
             initWebPush();
             // トークン一覧取得
             const tokensSnap = await db.collection("push_subscriptions").doc(site_id)
@@ -5661,7 +5684,6 @@ function registerV1Routes(app) {
                 catch (e) {
                     console.warn("[push/send] failed for token", d.id, e?.statusCode, e?.message);
                     if (e?.statusCode === 410 || e?.statusCode === 404) {
-                        // 無効なトークンを無効化
                         batch.update(d.ref, { active: false });
                     }
                     failed++;
@@ -5678,6 +5700,7 @@ function registerV1Routes(app) {
                 icon: icon || "",
                 status: "sent",
                 sentAt: firestore_1.FieldValue.serverTimestamp(),
+                createdAt: firestore_1.FieldValue.serverTimestamp(),
                 stats: { sent, failed },
                 createdBy: uid,
             });
@@ -5728,7 +5751,7 @@ function registerV1Routes(app) {
             await (0, site_1.assertWorkspaceRole)({ workspaceId: siteData.workspaceId || "", uid, allowedRoles: ["owner", "admin", "member", "viewer"] });
             const snap = await db.collection("push_campaigns")
                 .where("siteId", "==", site_id)
-                .orderBy("sentAt", "desc")
+                .orderBy("createdAt", "desc")
                 .limit(50)
                 .get();
             const campaigns = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
