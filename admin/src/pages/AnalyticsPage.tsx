@@ -612,11 +612,12 @@ export default function AnalyticsPage() {
         collection(db, "logs"),
         where("site_id", "==", siteId),
         where("createdAt", ">", since),
+        where("createdAt", "<=", to),
         orderBy("createdAt", "desc"),
         limit(5000)
       ),
       (snap) => {
-        setJourneyLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((l) => (l.createdAt || "") <= to));
+        setJourneyLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
         setJourneyLoading(false);
       },
       () => setJourneyLoading(false)
