@@ -841,28 +841,33 @@ export default function AnalyticsPage() {
   //    - シナリオの CV計測タイミングが "click" → click/click_link イベントで帰属
   //    - "view"（デフォルト）→ impression イベントで帰属
   const revenueByScenario = useMemo(() => {
-    if (!purchaseLogs.length) return [];
-    // 表示ベース: vid → 最後に impression したシナリオ
-    const vidToImpScenario = new Map<string, string>();
-    const sortedImp = [...journeyLogs]
-      .filter((l) => l.event === "impression" && l.scenario_id)
-      .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
-    for (const l of sortedImp) {
-      if (l.vid) vidToImpScenario.set(l.vid, l.scenario_id);
-    }
-    // クリックベース: vid → 最後に click/click_link したシナリオ
-    const vidToClickScenario = new Map<string, string>();
-    const sortedClick = [...journeyLogs]
-      .filter((l) => (l.event === "click" || l.event === "click_link") && l.scenario_id)
-      .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
-    for (const l of sortedClick) {
-      if (l.vid) vidToClickScenario.set(l.vid, l.scenario_id);
-    }
+    // stats_daily の revenue_total を使う（journeyLogsの件数制限に依存しない）
     const map = new Map<string, { id: string | null; name: string; revenue: number; count: number }>();
+
+    // ① stats_daily の purchase イベントから集計（scenario_id 付きのみ）
+    for (const r of statRows) {
+      if (r.event !== "purchase" || !r.scenarioId) continue;
+      const sc = scenarios.find((s) => s.id === r.scenarioId);
+      if (!sc) continue;
+      const key = r.scenarioId;
+      const name = String(sc.data?.name || sc.id);
+      if (!map.has(key)) map.set(key, { id: r.scenarioId, name, revenue: 0, count: 0 });
+      const entry = map.get(key)!;
+      entry.revenue += typeof r.revenue_total === "number" ? r.revenue_total : 0;
+      entry.count += typeof r.count === "number" ? r.count : 0;
+    }
+
+    // ② purchaseLogs で scenario_id が直接付いているものを補完（Web Pixel経由）
+    //    stats_daily で重複しないよう vid+order_id ベースで管理
+    const vidToImpScenario = new Map<string, string>();
+    const vidToClickScenario = new Map<string, string>();
+    for (const l of journeyLogs) {
+      if (l.event === "impression" && l.scenario_id && l.vid) vidToImpScenario.set(l.vid, l.scenario_id);
+      if ((l.event === "click" || l.event === "click_link") && l.scenario_id && l.vid) vidToClickScenario.set(l.vid, l.scenario_id);
+    }
     for (const purchase of purchaseLogs) {
       let scenarioId: string | null = purchase.scenario_id || null;
       if (!scenarioId && purchase.vid) {
-        // クリックベース帰属のシナリオを優先
         const clickScId = vidToClickScenario.get(purchase.vid) || null;
         const impScId = vidToImpScenario.get(purchase.vid) || null;
         if (clickScId) {
@@ -874,19 +879,25 @@ export default function AnalyticsPage() {
           if ((impSc?.data?.goal as any)?.attribution !== "click") scenarioId = impScId;
         }
       }
-      // 施策が選択期間内に稼働していない場合は「施策なし」扱い
-      const inPeriod = isScenarioInPeriod(scenarioId);
-      const effectiveScenarioId = inPeriod ? scenarioId : null;
-      const key = effectiveScenarioId || "__none__";
-      const sc = scenarios.find((s) => s.id === effectiveScenarioId);
-      const name = sc ? String(sc.data?.name || sc.id) : "（施策なし）";
-      if (!map.has(key)) map.set(key, { id: effectiveScenarioId, name, revenue: 0, count: 0 });
-      const entry = map.get(key)!;
+      if (!scenarioId) {
+        // 施策なし
+        if (!map.has("__none__")) map.set("__none__", { id: null, name: "（施策なし）", revenue: 0, count: 0 });
+        const entry = map.get("__none__")!;
+        entry.revenue += typeof purchase.revenue === "number" ? purchase.revenue : 0;
+        entry.count++;
+        continue;
+      }
+      // stats_daily にすでに集計済みならスキップ（二重計上防止）
+      if (map.has(scenarioId)) continue;
+      const sc = scenarios.find((s) => s.id === scenarioId);
+      const name = sc ? String(sc.data?.name || sc.id) : scenarioId;
+      if (!map.has(scenarioId)) map.set(scenarioId, { id: scenarioId, name, revenue: 0, count: 0 });
+      const entry = map.get(scenarioId)!;
       entry.revenue += typeof purchase.revenue === "number" ? purchase.revenue : 0;
       entry.count++;
     }
     return Array.from(map.values()).sort((a, b) => b.revenue - a.revenue);
-  }, [purchaseLogs, journeyLogs, scenarios, isScenarioInPeriod]);
+  }, [statRows, purchaseLogs, journeyLogs, scenarios]);
 
   // ---- computed: 商品別売上（施策帰属付き） ----
   const revenueByProduct = useMemo(() => {
@@ -1024,8 +1035,8 @@ export default function AnalyticsPage() {
   // 期間内に稼働していたシナリオのみ表示（アーカイブ除外）
   const inPeriodScenarios = useMemo(() => scenarios.filter((s) => (s.data as any)?.status !== "paused" && isScenarioInPeriod(s.id)), [scenarios, isScenarioInPeriod]);
 
-  // 施策ファネル: 期間内シナリオのみ
-  const inPeriodFunnelData = useMemo(() => funnelData.filter((f) => inPeriodScenarios.some((s) => s.id === f.id)), [funnelData, inPeriodScenarios]);
+  // 施策ファネル: activeな施策はすべて表示（期間フィルターなし）、pausedのみ除外
+  const inPeriodFunnelData = useMemo(() => funnelData, [funnelData]);
 
   // ---- computed: 日別トレンド ----
   const dailyTrend = useMemo<TrendPoint[]>(() => {
