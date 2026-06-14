@@ -1469,7 +1469,8 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ attributes: { _cx_scenario_id: scenarioId, _cx_scenario_ts: String(Date.now()) } }),
-        credentials: "same-origin"
+        credentials: "same-origin",
+        keepalive: true // CTAクリックで外部遷移してもリクエストを完了させる（クリックベース帰属の取りこぼし防止）
       }).catch(function () {});
     } catch (e) {}
   }
