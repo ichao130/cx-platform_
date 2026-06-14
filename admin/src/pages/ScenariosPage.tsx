@@ -314,6 +314,9 @@ export default function ScenariosPage() {
   );
   const [goalValue, setGoalValue] = useState("/thanks");
 
+  // クーポンコード（この施策のクーポン。購入の discount_codes と突き合わせて売上帰属に使う）
+  const [couponCode, setCouponCode] = useState("");
+
   // targeting (Phase 1)
   const [targetingEnabled, setTargetingEnabled] = useState(false);
   const [targetVisitorType, setTargetVisitorType] = useState<"all" | "new" | "returning">("all");
@@ -661,6 +664,7 @@ export default function ScenariosPage() {
       memo: memo || "",
       schedule: schedule || undefined,
       goal: goal || null,
+      couponCode: couponCode.trim().toUpperCase() || undefined,
       entry_rules,
 
       // 非ABのときだけ使う（AB有効でも残してOK。serverはvariant優先にしてる）
@@ -669,7 +673,7 @@ export default function ScenariosPage() {
       targeting,
       experiment: experiment || undefined,
     }),
-    [workspaceId, siteId, name, status, priority, memo, schedule, goal, entry_rules, actionRefs, targeting, experiment]
+    [workspaceId, siteId, name, status, priority, memo, schedule, goal, couponCode, entry_rules, actionRefs, targeting, experiment]
   );
 
   function togglePageType(pt: (typeof PAGE_TYPES)[number]) {
@@ -812,6 +816,7 @@ export default function ScenariosPage() {
     setGoalEnabled(false);
     setGoalType("path_prefix");
     setGoalValue("/thanks");
+    setCouponCode("");
 
     setTargetingEnabled(false);
     setTargetVisitorType("all");
@@ -898,6 +903,7 @@ export default function ScenariosPage() {
       const toDelete: Record<string, any> = {};
       if (!scheduleEnabled) toDelete.schedule = deleteField();
       if (!expEnabled) toDelete.experiment = deleteField();
+      if (!couponCode.trim()) toDelete.couponCode = deleteField();
       if (Object.keys(toDelete).length) {
         await updateDoc(docRef, toDelete);
       }
@@ -988,6 +994,7 @@ export default function ScenariosPage() {
       setGoalType("path_prefix");
       setGoalValue("/thanks");
     }
+    setCouponCode(String((s as any).couponCode || ""));
 
     const t = (s as any).targeting;
     if (t?.enabled) {
@@ -2031,6 +2038,19 @@ export default function ScenariosPage() {
                   {goalType === "path_prefix" && "✅ 入力したパスで始まるURLにアクセスしたときにCV計測（例：/thanks → /thanks, /thanks/123 が対象）"}
                   {goalType === "path_exact" && "✅ 入力したパスと完全に一致するURLにアクセスしたときにCV計測"}
                   {goalType === "url_contains" && "✅ URLのどこかに入力した文字列が含まれる場合にCV計測（例：complete → checkout/complete も対象）"}
+                </div>
+
+                <div style={{ height: 14 }} />
+                <div className="h2">クーポンコード（任意）</div>
+                <input
+                  className="input"
+                  style={{ width: 280, textTransform: "uppercase" }}
+                  value={couponCode}
+                  onChange={(e) => setCouponCode(e.target.value)}
+                  placeholder="例：LINE10"
+                />
+                <div className="small" style={{ marginTop: 6, opacity: 0.6 }}>
+                  🎟️ この施策のクーポンコードを指定すると、そのコードで購入された売上を施策の成果として集計します（接客のクリック/表示に依存しない確実な帰属）。LINE友だち限定クーポンなどに最適。
                 </div>
 
                 <div style={{ height: 14 }} />

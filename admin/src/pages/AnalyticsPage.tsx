@@ -864,6 +864,13 @@ export default function AnalyticsPage() {
       if ((l.event === "click" || l.event === "click_link") && l.scenario_id && l.vid) vidToClickScenario.set(l.vid, l.scenario_id);
     }
 
+    // クーポンコード → 施策のマップ（最も確実な帰属。接客のクリック/表示に依存しない）
+    const couponToScenario = new Map<string, string>();
+    for (const s of scenarios) {
+      const code = String((s.data as any)?.couponCode || "").trim().toUpperCase();
+      if (code) couponToScenario.set(code, s.id);
+    }
+
     const map = new Map<string, { id: string | null; name: string; revenue: number; count: number }>();
     const addToNone = (rev: number) => {
       if (!map.has("__none__")) map.set("__none__", { id: null, name: "（施策なし）", revenue: 0, count: 0 });
@@ -874,6 +881,25 @@ export default function AnalyticsPage() {
 
     for (const purchase of purchaseLogs) {
       const rev = typeof purchase.revenue === "number" ? purchase.revenue : 0;
+
+      // ① クーポン一致を最優先（明示的な紐付けなので施策稼働期間のゲートも掛けない）
+      let couponScenarioId: string | null = null;
+      const codes: string[] = Array.isArray(purchase.discount_codes) ? purchase.discount_codes : [];
+      for (const c of codes) {
+        const hit = couponToScenario.get(String(c || "").trim().toUpperCase());
+        if (hit) { couponScenarioId = hit; break; }
+      }
+      if (couponScenarioId) {
+        const sc = scenarios.find((s) => s.id === couponScenarioId);
+        const name = sc ? String(sc.data?.name || sc.id) : couponScenarioId;
+        if (!map.has(couponScenarioId)) map.set(couponScenarioId, { id: couponScenarioId, name, revenue: 0, count: 0 });
+        const entry = map.get(couponScenarioId)!;
+        entry.revenue += rev;
+        entry.count++;
+        continue;
+      }
+
+      // ② カート属性 / ラストタッチ帰属（稼働期間ゲートあり）
       let scenarioId: string | null = purchase.scenario_id || null;
       if (!scenarioId && purchase.vid) {
         const clickScId = vidToClickScenario.get(purchase.vid) || null;
