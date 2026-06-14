@@ -1661,19 +1661,50 @@
       var dlPurchaseFired = false;
 
       function extractPurchaseData(item) {
-        // GA4標準: { event: 'purchase', ecommerce: { transaction_id, value, currency } }
-        // UA標準:  { event: 'purchase', ecommerce: { purchase: { actionField: { id, revenue } } } }
+        // GA4標準: { event:'purchase', ecommerce:{ transaction_id, value, currency, coupon, items:[{item_name,price,quantity,coupon}] } }
+        // UA標準:  { event:'purchase', ecommerce:{ purchase:{ actionField:{ id, revenue, coupon }, products:[{name,price,quantity,coupon}] } } }
         try {
           var ec = item.ecommerce;
           if (!ec) return null;
-          var transactionId = ec.transaction_id
-            || (ec.purchase && ec.purchase.actionField && ec.purchase.actionField.id)
-            || null;
-          var revenue = ec.value
-            || (ec.purchase && ec.purchase.actionField && (ec.purchase.actionField.revenue || ec.purchase.actionField.value))
-            || 0;
+          var ua = ec.purchase || null;
+          var af = ua && ua.actionField ? ua.actionField : null;
+
+          var transactionId = ec.transaction_id || (af && af.id) || null;
+          var revenue = ec.value || (af && (af.revenue || af.value)) || 0;
           var currency = ec.currency || "JPY";
-          return { transactionId: transactionId, revenue: Number(revenue) || 0, currency: currency };
+
+          // クーポン: 注文単位＋商品単位を集約（大文字化・重複排除）
+          var codeSet = {}, codes = [];
+          function addCode(c) {
+            if (!c) return;
+            var k = String(c).trim().toUpperCase();
+            if (!k || codeSet[k]) return;
+            codeSet[k] = true;
+            codes.push(k);
+          }
+          addCode(ec.coupon);
+          if (af) addCode(af.coupon);
+
+          // 商品明細（GA4 items / UA products 両対応）
+          var rawItems = ec.items || (ua && ua.products) || [];
+          var items = [];
+          for (var i = 0; i < rawItems.length; i++) {
+            var it = rawItems[i] || {};
+            addCode(it.coupon);
+            items.push({
+              title: String(it.item_name || it.name || it.item_id || it.id || ""),
+              qty: Number(it.quantity) || 1,
+              price: Number(it.price) || 0,
+            });
+          }
+
+          return {
+            transactionId: transactionId,
+            revenue: Number(revenue) || 0,
+            currency: currency,
+            discount_codes: codes,
+            items: items,
+          };
         } catch (e) { return null; }
       }
 
@@ -1690,6 +1721,7 @@
           window.dispatchEvent(new CustomEvent("cx:purchase", { detail: data }));
         } catch (e) {}
         // 購入ログをサーバーに送信
+        // transaction_id → order_id にマッピング（重複排除・クーポン帰属のキーになる）
         postLog(apiBase, {
           site_id: siteId,
           event: "purchase",
@@ -1697,10 +1729,11 @@
           path: window.location.pathname,
           vid: ctx.vid,
           sid: ctx.sid,
-          transaction_id: data.transactionId,
+          order_id: data.transactionId,
           revenue: data.revenue,
           currency: data.currency,
-          source: "datalayer",
+          discount_codes: data.discount_codes,
+          items: data.items,
         });
       }
 
