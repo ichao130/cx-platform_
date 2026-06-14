@@ -1218,19 +1218,23 @@ export default function AnalyticsPage() {
 
   // ---- computed: 流入元（utm_source or ref）× 売上 ----
   const referrerData = useMemo(() => {
+    // utm_source → 参照元ドメイン → 直接流入 の順で流入元を判定（PV・売上で共通）
+    const resolveSource = (utmSource: string, ref: string): string => {
+      if (utmSource) return utmSource;
+      if (ref) {
+        try { return new URL(ref, "http://x").hostname || ref; } catch (e) { return ref; }
+      }
+      return "直接流入";
+    };
     const sessionMap = new Map<string, number>();
     for (const l of pvLogs) {
-      let src = "直接流入";
-      if (l.utm_source) {
-        src = l.utm_source;
-      } else if (l.ref) {
-        try { src = new URL(l.ref, "http://x").hostname || l.ref; } catch (e) { src = l.ref; }
-      }
+      const src = resolveSource(l.utm_source, l.ref);
       sessionMap.set(src, (sessionMap.get(src) || 0) + 1);
     }
+    // 訪問者の流入元: utm_source優先、なければ最初のpageviewの参照元ドメイン
     const vidSourceMap = new Map<string, string>();
     for (const v of visitorList) {
-      vidSourceMap.set(v.vid, v.utmSource || "直接流入");
+      vidSourceMap.set(v.vid, resolveSource(v.utmSource, v.firstRef));
     }
     const revenueMap = new Map<string, { revenue: number; count: number; vids: Set<string> }>();
     for (const p of purchaseLogs) {
