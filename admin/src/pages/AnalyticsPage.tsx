@@ -843,7 +843,7 @@ export default function AnalyticsPage() {
   // ※ 購入日が施策の稼働期間（スケジュール±猶予）外なら帰属を外す（施策なし扱い）。
   //   Shopifyのカート属性が終了後も残り、終了済み施策に後日の購入が紐づく問題への対策。
   const revenueByScenario = useMemo(() => {
-    const ATTR_GRACE_MS = 3 * 24 * 60 * 60 * 1000; // 終了後3日間は猶予
+    const ATTR_GRACE_MS = 7 * 24 * 60 * 60 * 1000; // 終了後7日間は猶予（SDKのカート属性TTLと一致）
 
     // 施策が指定日に稼働していたか（スケジュールなし＝常時稼働とみなす）
     const wasActiveOnDay = (sc: { data: any } | undefined, dayStr: string): boolean => {

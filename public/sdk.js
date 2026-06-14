@@ -557,14 +557,7 @@
             }
             // クリックベース: click_link 時にカート属性を保存
             if (ctx.pending_click_cart_sync) {
-              try {
-                fetch("/cart/update.js", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ attributes: { _cx_scenario_id: ctx.pending_click_cart_sync } }),
-                  credentials: "same-origin"
-                }).catch(function () {});
-              } catch (e) {}
+              cxWriteScenarioCart(ctx.pending_click_cart_sync);
               ctx.pending_click_cart_sync = null;
             }
           });
@@ -664,14 +657,7 @@
           ctx.pending_click_goal = null;
         }
         if (ctx.pending_click_cart_sync) {
-          try {
-            fetch("/cart/update.js", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ attributes: { _cx_scenario_id: ctx.pending_click_cart_sync } }),
-              credentials: "same-origin"
-            }).catch(function () {});
-          } catch (e) {}
+          cxWriteScenarioCart(ctx.pending_click_cart_sync);
           ctx.pending_click_cart_sync = null;
         }
       });
@@ -779,14 +765,7 @@
             ctx.pending_click_goal = null;
           }
           if (ctx.pending_click_cart_sync) {
-            try {
-              fetch("/cart/update.js", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ attributes: { _cx_scenario_id: ctx.pending_click_cart_sync } }),
-                credentials: "same-origin"
-              }).catch(function () {});
-            } catch (e) {}
+            cxWriteScenarioCart(ctx.pending_click_cart_sync);
             ctx.pending_click_cart_sync = null;
           }
         });
@@ -904,14 +883,7 @@
             ctx.pending_click_goal = null;
           }
           if (ctx.pending_click_cart_sync) {
-            try {
-              fetch("/cart/update.js", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ attributes: { _cx_scenario_id: ctx.pending_click_cart_sync } }),
-                credentials: "same-origin"
-              }).catch(function () {});
-            } catch (e) {}
+            cxWriteScenarioCart(ctx.pending_click_cart_sync);
             ctx.pending_click_cart_sync = null;
           }
         });
@@ -1431,14 +1403,7 @@
     if (s.goal && s.goal.attribution === "click") {
       ctx.pending_click_cart_sync = ctx.scenario_id;
     } else {
-      try {
-        fetch("/cart/update.js", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ attributes: { _cx_scenario_id: ctx.scenario_id } }),
-          credentials: "same-origin"
-        }).catch(function () {});
-      } catch (e) {}
+      cxWriteScenarioCart(ctx.scenario_id);
     }
 
     function fire() {
@@ -1490,6 +1455,45 @@
       // タイマートリガー（既存）
       setTimeout(fire, waitMs);
     }
+  }
+
+  // ─── Shopify カート属性: シナリオ帰属（タイムスタンプ付き） ───────────────
+  // _cx_scenario_ts は SDK 起動時の期限切れ判定に使う。
+  // 終了済み施策のIDが放棄カートに残り、後日の購入が誤帰属する問題への対策。
+  var CX_SCENARIO_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 帰属の有効期間: 7日
+
+  function cxWriteScenarioCart(scenarioId) {
+    if (!scenarioId) return;
+    try {
+      fetch("/cart/update.js", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ attributes: { _cx_scenario_id: scenarioId, _cx_scenario_ts: String(Date.now()) } }),
+        credentials: "same-origin"
+      }).catch(function () {});
+    } catch (e) {}
+  }
+
+  // カート属性の _cx_scenario_id が古ければ（_cx_scenario_ts が TTL 超過、または ts 無し）クリア
+  function cxExpireStaleScenarioCart() {
+    try {
+      fetch("/cart.js", { credentials: "same-origin" })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (cart) {
+          if (!cart || !cart.attributes) return;
+          var sid = cart.attributes._cx_scenario_id;
+          if (!sid) return;
+          var ts = parseInt(cart.attributes._cx_scenario_ts, 10);
+          if (ts && (Date.now() - ts) <= CX_SCENARIO_TTL_MS) return; // まだ有効
+          fetch("/cart/update.js", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ attributes: { _cx_scenario_id: "", _cx_scenario_ts: "" } }),
+            credentials: "same-origin"
+          }).catch(function () {});
+        })
+        .catch(function () {});
+    } catch (e) {}
   }
 
   function main() {
@@ -1630,6 +1634,9 @@
           credentials: "same-origin"
         }).catch(function () {});
       } catch (e) {}
+
+      // 古いシナリオ帰属（終了済み施策の放棄カート残り）をクリア
+      cxExpireStaleScenarioCart();
     }
 
     // カゴ落ち追跡: cx:cart:add イベントでフラグをセット
