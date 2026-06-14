@@ -3679,16 +3679,40 @@ export function registerV1Routes(app: Express) {
 
       // Normalize ids (variantId は必ず入れる / nullはna)
       const siteId = String(body.site_id);
-      const scenarioId = String(body.scenario_id ?? "all");
       const actionId = String(body.action_id ?? "all");
       const templateId = body.template_id ?? null;
       const variantId = String(body.variant_id ?? "na") || "na";
       const event = body.event;
 
+      // ── 帰属ガード ─────────────────────────────────────────────────────
+      // 購入イベントで、終了済み施策のIDがShopifyの放棄カート属性(_cx_scenario_id)に
+      // 残ったまま後日購入されると誤帰属する。施策の稼働期間(±猶予)外なら帰属を外す。
+      let attributedScenarioId: string | null = body.scenario_id ?? null;
+      let attrDropped = false;
+      if (event === "purchase" && attributedScenarioId) {
+        const ATTR_GRACE_MS = 7 * 24 * 60 * 60 * 1000; // 終了後7日まで有効
+        try {
+          const scSnap = await db.collection("scenarios").doc(attributedScenarioId).get();
+          const sched = scSnap.exists ? (scSnap.data() as any)?.schedule : null;
+          if (sched && (sched.startAt || sched.endAt)) {
+            const nowMs = Date.now();
+            const startMs = sched.startAt ? new Date(sched.startAt).getTime() - ATTR_GRACE_MS : -Infinity;
+            const endMs   = sched.endAt   ? new Date(sched.endAt).getTime() + ATTR_GRACE_MS : Infinity;
+            if (nowMs < startMs || nowMs > endMs) {
+              attrDropped = true;
+              attributedScenarioId = null;
+            }
+          }
+        } catch (e) {
+          console.warn("[/v1/log] attribution guard failed", e);
+        }
+      }
+      const scenarioId = String(attributedScenarioId ?? "all");
+
       // ---- raw logs (詳細分析・検証用) ----
       const logPayload: Record<string, any> = {
         site_id: siteId,
-        scenario_id: body.scenario_id ?? null,
+        scenario_id: attributedScenarioId,
         action_id: body.action_id ?? null,
         template_id: templateId,
         variant_id: body.variant_id ?? null,
@@ -3712,6 +3736,11 @@ export function registerV1Routes(app: Express) {
         logPayload.currency = body.currency ?? "JPY";
         logPayload.items = body.items ?? null;
         logPayload.discount_codes = body.discount_codes ?? [];
+        // 帰属ガードで施策IDを外した場合、元IDを残して追跡可能にする
+        if (attrDropped) {
+          logPayload._attr_dropped = true;
+          logPayload._attr_scenario_raw = body.scenario_id ?? null;
+        }
       }
 
       // ---- stats_daily (集計) ----
@@ -3722,7 +3751,7 @@ export function registerV1Routes(app: Express) {
       const statsPayload: Record<string, any> = {
         siteId,
         day,
-        scenarioId: body.scenario_id ?? null,
+        scenarioId: attributedScenarioId,
         actionId: body.action_id ?? null,
         templateId,
         variantId,
