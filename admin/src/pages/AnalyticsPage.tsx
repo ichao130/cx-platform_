@@ -2207,7 +2207,7 @@ export default function AnalyticsPage() {
                     {/* グラフ */}
                     <div>
                       <ResponsiveContainer width="100%" height={Math.max(180, referrerData.length * 36)}>
-                        <BarChart data={[...referrerData].reverse()} layout="vertical" margin={{ top: 0, right: 60, left: 8, bottom: 0 }} barSize={14}>
+                        <BarChart data={referrerData} layout="vertical" margin={{ top: 0, right: 60, left: 8, bottom: 0 }} barSize={14}>
                           <XAxis type="number" hide />
                           <YAxis type="category" dataKey="src" width={90} tick={{ fontSize: 11 }} />
                           <Tooltip formatter={(v: any) => `¥${Number(v).toLocaleString()}`} labelStyle={{ fontSize: 12 }} />
