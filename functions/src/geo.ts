@@ -32,6 +32,8 @@ export interface GeoResult {
   country: string | null; // ISOコード（例: JP）
   region: string | null;  // 都道府県（日本語優先）
   city: string | null;    // 市区町村（日本語優先）
+  lat: number | null;     // 緯度（天気取得用・ログには保存しない）
+  lng: number | null;     // 経度（同上）
 }
 
 /** x-forwarded-for 等からクライアントIPを取り出す */
@@ -42,7 +44,7 @@ export function clientIpFrom(xff: string | undefined, fallback?: string): string
 
 /** IP→地域を解決。失敗時は全フィールドnull。 */
 export async function resolveGeo(ip: string): Promise<GeoResult> {
-  const empty: GeoResult = { country: null, region: null, city: null };
+  const empty: GeoResult = { country: null, region: null, city: null, lat: null, lng: null };
   if (!ip) return empty;
   const r = await getReader();
   if (!r) return empty;
@@ -54,6 +56,8 @@ export async function resolveGeo(ip: string): Promise<GeoResult> {
       country: res.country?.iso_code || null,
       region: sub?.names?.ja || sub?.names?.en || null,
       city: res.city?.names?.ja || res.city?.names?.en || null,
+      lat: typeof res.location?.latitude === "number" ? res.location.latitude : null,
+      lng: typeof res.location?.longitude === "number" ? res.location.longitude : null,
     };
   } catch (e) {
     return empty;

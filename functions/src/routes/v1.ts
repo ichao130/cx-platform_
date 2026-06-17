@@ -30,6 +30,7 @@ import {
 } from "../services/backup";
 import webpush from "web-push";
 import { resolveGeo, clientIpFrom } from "../geo";
+import { resolveWeather } from "../weather";
 /* =========================================
    Schemas
 ========================================= */
@@ -3712,13 +3713,19 @@ export function registerV1Routes(app: Express) {
 
       // ── 地域(GeoIP) ────────────────────────────────────────────────────
       // 集計対象の pageview / purchase だけ解決（IPは保存せず地域のみ）。
-      let geo: { country: string | null; region: string | null; city: string | null } =
-        { country: null, region: null, city: null };
+      let geo: { country: string | null; region: string | null; city: string | null; lat: number | null; lng: number | null } =
+        { country: null, region: null, city: null, lat: null, lng: null };
+      let weather: { code: number | null; temp: number | null; label: string | null } =
+        { code: null, temp: null, label: null };
       if (event === "pageview" || event === "purchase") {
         try {
           const ip = clientIpFrom(req.header("x-forwarded-for"), req.ip);
           geo = await resolveGeo(ip);
-        } catch (e) { /* geo無効でも続行 */ }
+          // 位置が取れたら、その地点・その時刻の天気を付与（地域×時間でキャッシュ）
+          if (geo.lat != null && geo.lng != null) {
+            weather = await resolveWeather(geo.lat, geo.lng);
+          }
+        } catch (e) { /* geo/weather無効でも続行 */ }
       }
 
       // ---- raw logs (詳細分析・検証用) ----
@@ -3726,6 +3733,9 @@ export function registerV1Routes(app: Express) {
         geo_country: geo.country,
         geo_region: geo.region,
         geo_city: geo.city,
+        weather_code: weather.code,
+        weather_temp: weather.temp,
+        weather_label: weather.label,
         site_id: siteId,
         scenario_id: attributedScenarioId,
         action_id: body.action_id ?? null,

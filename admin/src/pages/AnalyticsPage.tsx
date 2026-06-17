@@ -1295,6 +1295,36 @@ export default function AnalyticsPage() {
   const hasGeoData = useMemo(() => regionData.some((r) => r.region !== "（不明）"), [regionData]);
   const regionPvMax = useMemo(() => Math.max(...regionData.map((r) => r.pv), 1), [regionData]);
 
+  // ---- computed: 天気別 × PV/売上 ----
+  // アクセス地点・時刻の天気（GeoIPの緯度経度→Open-Meteo）。季節・商品の購買傾向の参考に。
+  const weatherData = useMemo(() => {
+    // カテゴリの表示順（晴れ→雨→雪…）
+    const order = ["快晴", "晴れ/曇り", "霧", "にわか雨", "雨", "雷雨", "にわか雪", "雪", "その他"];
+    const pvByW = new Map<string, number>();
+    for (const l of pvLogs) {
+      if (!l.weather_label) continue;
+      pvByW.set(l.weather_label, (pvByW.get(l.weather_label) || 0) + 1);
+    }
+    const revByW = new Map<string, { revenue: number; count: number }>();
+    for (const p of purchaseLogs) {
+      if (!p.weather_label) continue;
+      if (!revByW.has(p.weather_label)) revByW.set(p.weather_label, { revenue: 0, count: 0 });
+      const e = revByW.get(p.weather_label)!;
+      e.revenue += typeof p.revenue === "number" ? p.revenue : 0;
+      e.count++;
+    }
+    const all = new Set([...pvByW.keys(), ...revByW.keys()]);
+    return Array.from(all)
+      .map((label) => ({
+        label,
+        pv: pvByW.get(label) || 0,
+        revenue: revByW.get(label)?.revenue || 0,
+        purchases: revByW.get(label)?.count || 0,
+      }))
+      .sort((a, b) => (order.indexOf(a.label) - order.indexOf(b.label)));
+  }, [pvLogs, purchaseLogs]);
+  const hasWeatherData = useMemo(() => weatherData.length > 0, [weatherData]);
+
   // ---- computed: 新規/リピート 日別集計 ----
   // stats_daily の "new_vids" / "repeat_vids" ドキュメントを優先（limit制限なし）
   // デプロイ前の旧データのみ visitorList フォールバック
@@ -2391,6 +2421,56 @@ export default function AnalyticsPage() {
                   </div>
                   <div className="small" style={{ marginTop: 12, opacity: 0.5 }}>
                     ※ 日本のモバイル回線はキャリア拠点（多くが東京）に寄るため、都道府県は傾向の参考値です。
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* ===== Section 2.6: 天気分析 ===== */}
+          <div style={{ marginBottom: 32 }}>
+            <div className="h2" style={{ marginBottom: 14 }}>
+              天気分析 <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel} · アクセス地点の天気）</span>
+            </div>
+            <div className="card" style={{ padding: 18, background: "#fff" }}>
+              {!hasWeatherData ? (
+                <div className="small" style={{ opacity: 0.6, lineHeight: 1.7 }}>
+                  🌤️ 天気データを収集中です。GeoIP設定後の新規アクセスから、その地点・時刻の天気が記録されます。
+                </div>
+              ) : (
+                <>
+                  <div className="small" style={{ marginBottom: 14, opacity: 0.6 }}>
+                    アクセスした地点・時刻の天気別のPV・購入・売上。季節商品や天候連動の傾向を見る参考に。
+                  </div>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ borderBottom: "1px solid #e2e8f0" }}>
+                          <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 600, opacity: 0.6 }}>天気</th>
+                          <th style={{ textAlign: "right", padding: "6px 10px", fontWeight: 600, opacity: 0.6 }}>PV</th>
+                          <th style={{ textAlign: "right", padding: "6px 10px", fontWeight: 600, opacity: 0.6 }}>購入</th>
+                          <th style={{ textAlign: "right", padding: "6px 10px", fontWeight: 600, opacity: 0.6 }}>売上</th>
+                          <th style={{ textAlign: "right", padding: "6px 10px", fontWeight: 600, opacity: 0.6 }}>PVあたり売上</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {weatherData.map((w) => {
+                          const rpv = w.pv > 0 ? w.revenue / w.pv : 0;
+                          return (
+                            <tr key={w.label} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                              <td style={{ padding: "7px 10px", fontWeight: 600 }}>{w.label}</td>
+                              <td style={{ textAlign: "right", padding: "7px 10px", opacity: 0.7 }}>{fmtInt(w.pv)}</td>
+                              <td style={{ textAlign: "right", padding: "7px 10px" }}>{w.purchases > 0 ? fmtInt(w.purchases) : <span style={{ opacity: 0.3 }}>—</span>}</td>
+                              <td style={{ textAlign: "right", padding: "7px 10px", fontWeight: w.revenue > 0 ? 700 : 400 }}>{w.revenue > 0 ? `¥${Math.round(w.revenue).toLocaleString()}` : <span style={{ opacity: 0.3 }}>—</span>}</td>
+                              <td style={{ textAlign: "right", padding: "7px 10px", color: rpv > 0 ? "#0891b2" : undefined }}>{rpv > 0 ? `¥${rpv.toFixed(0)}` : <span style={{ opacity: 0.3 }}>—</span>}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="small" style={{ marginTop: 12, opacity: 0.5 }}>
+                    ※ 天気はアクセス地点（GeoIP）と時刻から取得。地域別アクセス量の差も含むため、傾向の参考としてご覧ください。
                   </div>
                 </>
               )}
