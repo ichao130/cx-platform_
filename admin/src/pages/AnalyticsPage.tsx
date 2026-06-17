@@ -1325,6 +1325,38 @@ export default function AnalyticsPage() {
   }, [pvLogs, purchaseLogs]);
   const hasWeatherData = useMemo(() => weatherData.length > 0, [weatherData]);
 
+  // ---- computed: 気温帯別 × PV/売上 ----
+  // アパレルは気温帯が売れ筋（コート⇔半袖の境目）に直結するため、気温でも切る。
+  const tempBandData = useMemo(() => {
+    const bands = [
+      { label: "〜4℃", min: -Infinity, max: 5 },
+      { label: "5〜9℃", min: 5, max: 10 },
+      { label: "10〜15℃", min: 10, max: 16 },
+      { label: "16〜19℃", min: 16, max: 20 },
+      { label: "20〜24℃", min: 20, max: 25 },
+      { label: "25〜29℃", min: 25, max: 30 },
+      { label: "30℃〜", min: 30, max: Infinity },
+    ];
+    const idxFor = (t: number) => bands.findIndex((b) => t >= b.min && t < b.max);
+    const pv = new Array(bands.length).fill(0);
+    const rev = bands.map(() => ({ revenue: 0, count: 0 }));
+    for (const l of pvLogs) {
+      if (typeof l.weather_temp !== "number") continue;
+      const i = idxFor(l.weather_temp);
+      if (i >= 0) pv[i]++;
+    }
+    for (const p of purchaseLogs) {
+      if (typeof p.weather_temp !== "number") continue;
+      const i = idxFor(p.weather_temp);
+      if (i >= 0) { rev[i].revenue += typeof p.revenue === "number" ? p.revenue : 0; rev[i].count++; }
+    }
+    return bands
+      .map((b, i) => ({ label: b.label, pv: pv[i], revenue: rev[i].revenue, purchases: rev[i].count }))
+      .filter((r) => r.pv > 0 || r.purchases > 0);
+  }, [pvLogs, purchaseLogs]);
+  const hasTempData = useMemo(() => tempBandData.length > 0, [tempBandData]);
+  const tempPvMax = useMemo(() => Math.max(...tempBandData.map((r) => r.pv), 1), [tempBandData]);
+
   // ---- computed: 新規/リピート 日別集計 ----
   // stats_daily の "new_vids" / "repeat_vids" ドキュメントを優先（limit制限なし）
   // デプロイ前の旧データのみ visitorList フォールバック
@@ -2469,8 +2501,51 @@ export default function AnalyticsPage() {
                       </tbody>
                     </table>
                   </div>
+
+                  {/* 気温帯別（アパレル向け） */}
+                  {hasTempData && (
+                    <div style={{ marginTop: 22 }}>
+                      <div className="small" style={{ fontWeight: 700, marginBottom: 4 }}>🌡️ 気温帯別</div>
+                      <div className="small" style={{ marginBottom: 12, opacity: 0.6 }}>
+                        コート⇔半袖の境目など、気温帯ごとの購買傾向。アパレルの売れ筋分析に。
+                      </div>
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                          <thead>
+                            <tr style={{ borderBottom: "1px solid #e2e8f0" }}>
+                              <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 600, opacity: 0.6 }}>気温帯</th>
+                              <th style={{ textAlign: "right", padding: "6px 10px", fontWeight: 600, opacity: 0.6 }}>PV</th>
+                              <th style={{ textAlign: "right", padding: "6px 10px", fontWeight: 600, opacity: 0.6 }}>購入</th>
+                              <th style={{ textAlign: "right", padding: "6px 10px", fontWeight: 600, opacity: 0.6 }}>売上</th>
+                              <th style={{ textAlign: "right", padding: "6px 10px", fontWeight: 600, opacity: 0.6 }}>PVあたり売上</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {tempBandData.map((t) => {
+                              const rpv = t.pv > 0 ? t.revenue / t.pv : 0;
+                              return (
+                                <tr key={t.label} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                                  <td style={{ padding: "7px 10px", fontWeight: 600 }}>
+                                    <span style={{ display: "inline-block", width: 64 }}>{t.label}</span>
+                                    <span style={{ display: "inline-block", width: 80, height: 6, background: "#e2e8f0", borderRadius: 99, verticalAlign: "middle", overflow: "hidden" }}>
+                                      <span style={{ display: "block", height: "100%", width: `${(t.pv / tempPvMax) * 100}%`, background: "#f59e0b" }} />
+                                    </span>
+                                  </td>
+                                  <td style={{ textAlign: "right", padding: "7px 10px", opacity: 0.7 }}>{fmtInt(t.pv)}</td>
+                                  <td style={{ textAlign: "right", padding: "7px 10px" }}>{t.purchases > 0 ? fmtInt(t.purchases) : <span style={{ opacity: 0.3 }}>—</span>}</td>
+                                  <td style={{ textAlign: "right", padding: "7px 10px", fontWeight: t.revenue > 0 ? 700 : 400 }}>{t.revenue > 0 ? `¥${Math.round(t.revenue).toLocaleString()}` : <span style={{ opacity: 0.3 }}>—</span>}</td>
+                                  <td style={{ textAlign: "right", padding: "7px 10px", color: rpv > 0 ? "#0891b2" : undefined }}>{rpv > 0 ? `¥${rpv.toFixed(0)}` : <span style={{ opacity: 0.3 }}>—</span>}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="small" style={{ marginTop: 12, opacity: 0.5 }}>
-                    ※ 天気はアクセス地点（GeoIP）と時刻から取得。地域別アクセス量の差も含むため、傾向の参考としてご覧ください。
+                    ※ 天気・気温はアクセス地点（GeoIP）と時刻から取得。地域別アクセス量の差も含むため、傾向の参考としてご覧ください。
                   </div>
                 </>
               )}
