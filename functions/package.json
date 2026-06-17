@@ -18,6 +18,7 @@
     "express-rate-limit": "^8.3.2",
     "firebase-admin": "^12.4.0",
     "firebase-functions": "^4.9.0",
+    "maxmind": "^5.0.6",
     "openai": "^4.61.0",
     "stripe": "^20.4.1",
     "web-push": "^3.6.7",

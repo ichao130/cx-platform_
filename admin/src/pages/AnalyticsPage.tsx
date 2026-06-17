@@ -1262,6 +1262,39 @@ export default function AnalyticsPage() {
   const referrerMax = useMemo(() => Math.max(...referrerData.map((r) => r.sessions), 1), [referrerData]);
   const referrerTotal = useMemo(() => referrerData.reduce((s, r) => s + r.sessions, 0), [referrerData]);
 
+  // ---- computed: 地域別（GeoIP）× PV/売上 ----
+  // 商品開発の地域インサイト用。期間（季節）はそのまま反映される。
+  // ⚠️ 日本のモバイルはキャリア拠点(東京)に寄るため都道府県は参考値。
+  const regionData = useMemo(() => {
+    const pvByRegion = new Map<string, number>();
+    for (const l of pvLogs) {
+      const r = l.geo_region || "（不明）";
+      pvByRegion.set(r, (pvByRegion.get(r) || 0) + 1);
+    }
+    const revByRegion = new Map<string, { revenue: number; count: number; buyers: Set<string> }>();
+    for (const p of purchaseLogs) {
+      const r = p.geo_region || "（不明）";
+      if (!revByRegion.has(r)) revByRegion.set(r, { revenue: 0, count: 0, buyers: new Set() });
+      const e = revByRegion.get(r)!;
+      e.revenue += typeof p.revenue === "number" ? p.revenue : 0;
+      e.count++;
+      if (p.vid) e.buyers.add(p.vid);
+    }
+    const all = new Set([...pvByRegion.keys(), ...revByRegion.keys()]);
+    return Array.from(all)
+      .map((region) => ({
+        region,
+        pv: pvByRegion.get(region) || 0,
+        revenue: revByRegion.get(region)?.revenue || 0,
+        buyers: revByRegion.get(region)?.buyers.size || 0,
+      }))
+      .sort((a, b) => b.pv - a.pv)
+      .slice(0, 15);
+  }, [pvLogs, purchaseLogs]);
+  // 地域データが実質的に取れているか（「（不明）」以外が1件でもあるか）
+  const hasGeoData = useMemo(() => regionData.some((r) => r.region !== "（不明）"), [regionData]);
+  const regionPvMax = useMemo(() => Math.max(...regionData.map((r) => r.pv), 1), [regionData]);
+
   // ---- computed: 新規/リピート 日別集計 ----
   // stats_daily の "new_vids" / "repeat_vids" ドキュメントを優先（limit制限なし）
   // デプロイ前の旧データのみ visitorList フォールバック
@@ -2300,6 +2333,66 @@ export default function AnalyticsPage() {
                     ))}
                   </div>
                 </div>
+              )}
+            </div>
+          </div>
+
+          {/* ===== Section 2.5: 地域分析（GeoIP）===== */}
+          <div style={{ marginBottom: 32 }}>
+            <div className="h2" style={{ marginBottom: 14 }}>
+              地域分析 <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel} · 都道府県別）</span>
+            </div>
+            <div className="card" style={{ padding: 18, background: "#fff" }}>
+              {!hasGeoData ? (
+                <div className="small" style={{ opacity: 0.6, lineHeight: 1.7 }}>
+                  📍 地域データを収集中です。GeoIP設定後の新規アクセスから記録されます。<br />
+                  <span style={{ opacity: 0.8 }}>※ 日本のモバイル回線はキャリア拠点（多くが東京）に寄るため、都道府県は傾向の参考値としてご覧ください。</span>
+                </div>
+              ) : (
+                <>
+                  <div className="small" style={{ marginBottom: 14, opacity: 0.6 }}>
+                    アクセス（PV）の多い順 · 商品開発の地域インサイト用。期間を変えると季節変動が見えます。
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+                    {/* グラフ */}
+                    <div>
+                      <ResponsiveContainer width="100%" height={Math.max(180, regionData.length * 30)}>
+                        <BarChart data={regionData} layout="vertical" margin={{ top: 0, right: 40, left: 8, bottom: 0 }} barSize={13}>
+                          <XAxis type="number" hide />
+                          <YAxis type="category" dataKey="region" width={80} tick={{ fontSize: 11 }} />
+                          <Tooltip formatter={(v: any) => `${Number(v).toLocaleString()} PV`} labelStyle={{ fontSize: 12 }} />
+                          <Bar dataKey="pv" name="PV" fill="#8b5cf6" radius={[0, 4, 4, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                    {/* テーブル */}
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                        <thead>
+                          <tr style={{ borderBottom: "1px solid #e2e8f0" }}>
+                            <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 600, opacity: 0.6 }}>都道府県</th>
+                            <th style={{ textAlign: "right", padding: "4px 8px", fontWeight: 600, opacity: 0.6 }}>PV</th>
+                            <th style={{ textAlign: "right", padding: "4px 8px", fontWeight: 600, opacity: 0.6 }}>購入者</th>
+                            <th style={{ textAlign: "right", padding: "4px 8px", fontWeight: 600, opacity: 0.6 }}>売上</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {regionData.map((r) => (
+                            <tr key={r.region} style={{ borderBottom: "1px solid #f1f5f9", opacity: r.region === "（不明）" ? 0.5 : 1 }}>
+                              <td style={{ padding: "6px 8px", fontWeight: 500, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.region}</td>
+                              <td style={{ textAlign: "right", padding: "6px 8px", opacity: 0.7 }}>{fmtInt(r.pv)}</td>
+                              <td style={{ textAlign: "right", padding: "6px 8px" }}>{r.buyers > 0 ? fmtInt(r.buyers) : <span style={{ opacity: 0.3 }}>—</span>}</td>
+                              <td style={{ textAlign: "right", padding: "6px 8px", fontWeight: r.revenue > 0 ? 700 : 400 }}>{r.revenue > 0 ? `¥${Math.round(r.revenue).toLocaleString()}` : <span style={{ opacity: 0.3 }}>—</span>}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                  <div className="small" style={{ marginTop: 12, opacity: 0.5 }}>
+                    ※ 日本のモバイル回線はキャリア拠点（多くが東京）に寄るため、都道府県は傾向の参考値です。
+                  </div>
+                </>
               )}
             </div>
           </div>

@@ -29,6 +29,7 @@ import {
   upsertBackupSettings,
 } from "../services/backup";
 import webpush from "web-push";
+import { resolveGeo, clientIpFrom } from "../geo";
 /* =========================================
    Schemas
 ========================================= */
@@ -3709,8 +3710,22 @@ export function registerV1Routes(app: Express) {
       }
       const scenarioId = String(attributedScenarioId ?? "all");
 
+      // ── 地域(GeoIP) ────────────────────────────────────────────────────
+      // 集計対象の pageview / purchase だけ解決（IPは保存せず地域のみ）。
+      let geo: { country: string | null; region: string | null; city: string | null } =
+        { country: null, region: null, city: null };
+      if (event === "pageview" || event === "purchase") {
+        try {
+          const ip = clientIpFrom(req.header("x-forwarded-for"), req.ip);
+          geo = await resolveGeo(ip);
+        } catch (e) { /* geo無効でも続行 */ }
+      }
+
       // ---- raw logs (詳細分析・検証用) ----
       const logPayload: Record<string, any> = {
+        geo_country: geo.country,
+        geo_region: geo.region,
+        geo_city: geo.city,
         site_id: siteId,
         scenario_id: attributedScenarioId,
         action_id: body.action_id ?? null,
@@ -3783,6 +3798,10 @@ export function registerV1Routes(app: Express) {
           vrUpdate.lastSeen = nowIso;
           vrUpdate.lastPath = body.path ?? null;
           vrUpdate.pv = FieldValue.increment(1);
+          // 地域は取得できた時だけ更新（nullで既存を上書きしない）
+          if (geo.region) vrUpdate.geo_region = geo.region;
+          if (geo.country) vrUpdate.geo_country = geo.country;
+          if (geo.city) vrUpdate.geo_city = geo.city;
         } else if (event === "conversion") {
           vrUpdate.cv = true;
         } else if (event === "purchase") {

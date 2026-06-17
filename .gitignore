@@ -5,3 +5,5 @@ node_modules
 public/assets/
 public/ops/assets/
 .firebase/
+# MaxMind GeoIP DB (ローカル配置・デプロイ時バンドル)
+functions/geo/*.mmdb
