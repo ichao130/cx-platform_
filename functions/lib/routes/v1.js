@@ -51,6 +51,8 @@ const stripe_1 = __importDefault(require("stripe"));
 const misoca_1 = require("../services/misoca");
 const backup_1 = require("../services/backup");
 const web_push_1 = __importDefault(require("web-push"));
+const geo_1 = require("../geo");
+const weather_1 = require("../weather");
 /* =========================================
    Schemas
 ========================================= */
@@ -3263,8 +3265,29 @@ function registerV1Routes(app) {
                 }
             }
             const scenarioId = String(attributedScenarioId ?? "all");
+            // ── 地域(GeoIP) ────────────────────────────────────────────────────
+            // 集計対象の pageview / purchase だけ解決（IPは保存せず地域のみ）。
+            let geo = { country: null, region: null, city: null, lat: null, lng: null };
+            let weather = { code: null, temp: null, label: null };
+            if (event === "pageview" || event === "purchase") {
+                try {
+                    const ip = (0, geo_1.clientIpFrom)(req.header("x-forwarded-for"), req.ip);
+                    geo = await (0, geo_1.resolveGeo)(ip);
+                    // 位置が取れたら、その地点・その時刻の天気を付与（地域×時間でキャッシュ）
+                    if (geo.lat != null && geo.lng != null) {
+                        weather = await (0, weather_1.resolveWeather)(geo.lat, geo.lng);
+                    }
+                }
+                catch (e) { /* geo/weather無効でも続行 */ }
+            }
             // ---- raw logs (詳細分析・検証用) ----
             const logPayload = {
+                geo_country: geo.country,
+                geo_region: geo.region,
+                geo_city: geo.city,
+                weather_code: weather.code,
+                weather_temp: weather.temp,
+                weather_label: weather.label,
                 site_id: siteId,
                 scenario_id: attributedScenarioId,
                 action_id: body.action_id ?? null,
@@ -3333,6 +3356,13 @@ function registerV1Routes(app) {
                     vrUpdate.lastSeen = nowIso;
                     vrUpdate.lastPath = body.path ?? null;
                     vrUpdate.pv = firestore_1.FieldValue.increment(1);
+                    // 地域は取得できた時だけ更新（nullで既存を上書きしない）
+                    if (geo.region)
+                        vrUpdate.geo_region = geo.region;
+                    if (geo.country)
+                        vrUpdate.geo_country = geo.country;
+                    if (geo.city)
+                        vrUpdate.geo_city = geo.city;
                 }
                 else if (event === "conversion") {
                     vrUpdate.cv = true;

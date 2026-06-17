@@ -3032,6 +3032,16 @@ export default function AnalyticsPage() {
                                           🔗 {ev.ref ? formatRef(ev.ref) : "直接流入"}
                                         </div>
                                       )}
+                                      {(ev.geo_region || ev.weather_label) && (
+                                        <div className="small" style={{ opacity: 0.55, marginTop: 4, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                                          {ev.geo_region && (
+                                            <span>📍 {ev.geo_region}{ev.geo_city ? ` ${ev.geo_city}` : ""}</span>
+                                          )}
+                                          {ev.weather_label && (
+                                            <span>🌤️ {ev.weather_label}{typeof ev.weather_temp === "number" ? ` ${Math.round(ev.weather_temp)}℃` : ""}</span>
+                                          )}
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
                                   </React.Fragment>
