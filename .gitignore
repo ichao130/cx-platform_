@@ -7,3 +7,7 @@ public/ops/assets/
 .firebase/
 # MaxMind GeoIP DB (ローカル配置・デプロイ時バンドル)
 functions/geo/*.mmdb
+
+# Firebase Functions の本番環境変数（秘密情報・git管理外）
+functions/.env.*
+!functions/.env.example
