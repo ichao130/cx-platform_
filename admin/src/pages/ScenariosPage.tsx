@@ -444,7 +444,13 @@ export default function ScenariosPage() {
   }, [workspaceId]);
 
   useEffect(() => {
-    if (!siteId) {
+    // siteId が「自分がメンバーのサイト（sites=memberUids絞り済み）」かつ現ワークスペースに
+    // 含まれる場合のみ取得する。localStorageに残った別ワークスペースのsiteIdで
+    // 他サイトのシナリオが見えてしまう問題を防ぐ（Firestoreルールは認証済み読み取り可のため）。
+    const validSite = !!siteId && sites.some(
+      (s) => s.id === siteId && (!workspaceId || String(s.data?.workspaceId || "") === String(workspaceId))
+    );
+    if (!validSite) {
       setRows([]);
       return;
     }
@@ -460,7 +466,7 @@ export default function ScenariosPage() {
         snap.docs.map((d) => ({ id: d.id, data: d.data() as Scenario }))
       )
     );
-  }, [siteId]);
+  }, [siteId, sites, workspaceId]);
 
 
   useEffect(() => {
