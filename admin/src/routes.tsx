@@ -1,23 +1,24 @@
 // admin/src/routes.tsx
-import React from "react";
+import React, { Suspense, lazy } from "react";
 import { Route, Routes, Navigate } from "react-router-dom";
 
-import DashboardPage from "./pages/DashboardPage";
-import ScenariosPage from "./pages/ScenariosPage";
-import ActionsPage from "./pages/ActionsPage";
-import SitesPage from "./pages/SitesPage";
-import TemplatesPage from "./pages/TemplatesPage";
-import WorkspacesPage from "./pages/WorkspacesPage";
-import MediaLibraryPage from "./pages/MediaLibraryPage";
-import ScenarioReviewPage from "./pages/ScenarioReviewPage";
-import ScenarioAiPage from "./pages/ScenarioAiPage";
-import WorkspaceMembersPage from "./pages/WorkspaceMembersPage";
-import WorkspaceBillingPage from "./pages/WorkspaceBillingPage";
-import AcceptInvitePage from "./pages/AcceptInvitePage";
-import AnalyticsPage from "./pages/AnalyticsPage";
-import OptimizePage from "./pages/OptimizePage";
-import RmsPage from "./pages/RmsPage";
-import PushPage from "./pages/PushPage";
+// ページ単位の code-split（初期バンドルを軽量化。各ページは遷移時に読み込む）
+const DashboardPage = lazy(() => import("./pages/DashboardPage"));
+const ScenariosPage = lazy(() => import("./pages/ScenariosPage"));
+const ActionsPage = lazy(() => import("./pages/ActionsPage"));
+const SitesPage = lazy(() => import("./pages/SitesPage"));
+const TemplatesPage = lazy(() => import("./pages/TemplatesPage"));
+const WorkspacesPage = lazy(() => import("./pages/WorkspacesPage"));
+const MediaLibraryPage = lazy(() => import("./pages/MediaLibraryPage"));
+const ScenarioReviewPage = lazy(() => import("./pages/ScenarioReviewPage"));
+const ScenarioAiPage = lazy(() => import("./pages/ScenarioAiPage"));
+const WorkspaceMembersPage = lazy(() => import("./pages/WorkspaceMembersPage"));
+const WorkspaceBillingPage = lazy(() => import("./pages/WorkspaceBillingPage"));
+const AcceptInvitePage = lazy(() => import("./pages/AcceptInvitePage"));
+const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage"));
+const OptimizePage = lazy(() => import("./pages/OptimizePage"));
+const RmsPage = lazy(() => import("./pages/RmsPage"));
+const PushPage = lazy(() => import("./pages/PushPage"));
 
 type AccessKey =
   | "dashboard"
@@ -68,6 +69,7 @@ function Guard({
 export default function AppRoutes({ canAccess, workspaceRole, isPlatformAdmin, workspaceId, siteId }: AppRoutesProps) {
   return (
     <div className="container">
+      <Suspense fallback={<div className="card"><div className="small" style={{ opacity: 0.6 }}>読み込み中…</div></div>}>
       <Routes>
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/invite" element={<AcceptInvitePage />} />
@@ -107,6 +109,7 @@ export default function AppRoutes({ canAccess, workspaceRole, isPlatformAdmin, w
           }
         />
       </Routes>
+      </Suspense>
     </div>
   );
 }

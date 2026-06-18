@@ -727,6 +727,8 @@ export default function AnalyticsPage() {
 
   // pvLogs は journeyLogs から派生（pageview のみ）
   const pvLogs = useMemo(() => journeyLogs.filter((l: any) => l.event === "pageview"), [journeyLogs]);
+  // デバッグ表示用（impression一覧）。folタグ内でも毎レンダー走るのでメモ化
+  const debugImpressions = useMemo(() => journeyLogs.filter((l: any) => l.event === "impression" && l.scenario_id), [journeyLogs]);
 
   // ---- computed: リアルタイム ----
   const activeVisitors = useMemo(() => {
@@ -821,19 +823,26 @@ export default function AnalyticsPage() {
       .map((s) => ({ ...s, vids: Array.from(s.vids) }));
   }, [purchaseLogs]);
 
+  // シナリオID → シナリオ のマップ（ループ内の find による O(n^2) を回避）
+  const scenarioById = useMemo(() => {
+    const m = new Map<string, { id: string; data: any }>();
+    for (const s of scenarios) m.set(s.id, s);
+    return m;
+  }, [scenarios]);
+
   // シナリオが選択期間内に稼働していたか判定
   // スケジュールなし → 常時稼働 → true
   // スケジュールあり → 選択期間と重なる場合のみ true
   const isScenarioInPeriod = useCallback((scenarioId: string | null): boolean => {
     if (!scenarioId) return false;
-    const sc = scenarios.find((s) => s.id === scenarioId);
+    const sc = scenarioById.get(scenarioId);
     if (!sc) return false;
     const schedule = (sc.data as any)?.schedule;
     if (!schedule || (!schedule.startAt && !schedule.endAt)) return true;
     const startMs = schedule.startAt ? new Date(schedule.startAt).getTime() : -Infinity;
     const endMs   = schedule.endAt   ? new Date(schedule.endAt).getTime()   : Infinity;
     return startMs <= effectiveTo.getTime() && endMs >= effectiveFrom.getTime();
-  }, [scenarios, effectiveFrom, effectiveTo]);
+  }, [scenarioById, effectiveFrom, effectiveTo]);
 
   // シナリオ別売上
   // ① purchase ログに scenario_id が直接保存されていれば確定帰属（Web Pixel 更新後の購入）
@@ -890,7 +899,7 @@ export default function AnalyticsPage() {
         if (hit) { couponScenarioId = hit; break; }
       }
       if (couponScenarioId) {
-        const sc = scenarios.find((s) => s.id === couponScenarioId);
+        const sc = scenarioById.get(couponScenarioId);
         const name = sc ? String(sc.data?.name || sc.id) : couponScenarioId;
         if (!map.has(couponScenarioId)) map.set(couponScenarioId, { id: couponScenarioId, name, revenue: 0, count: 0 });
         const entry = map.get(couponScenarioId)!;
@@ -905,18 +914,18 @@ export default function AnalyticsPage() {
         const clickScId = vidToClickScenario.get(purchase.vid) || null;
         const impScId = vidToImpScenario.get(purchase.vid) || null;
         if (clickScId) {
-          const clickSc = scenarios.find((s) => s.id === clickScId);
+          const clickSc = scenarioById.get(clickScId);
           if ((clickSc?.data?.goal as any)?.attribution === "click") scenarioId = clickScId;
         }
         if (!scenarioId && impScId) {
-          const impSc = scenarios.find((s) => s.id === impScId);
+          const impSc = scenarioById.get(impScId);
           if ((impSc?.data?.goal as any)?.attribution !== "click") scenarioId = impScId;
         }
       }
       if (!scenarioId) { addToNone(rev); continue; }
 
       // 購入日に施策が稼働していたかチェック（終了済み施策への後日帰属を排除）
-      const sc = scenarios.find((s) => s.id === scenarioId);
+      const sc = scenarioById.get(scenarioId);
       const purchaseDay = utcIsoToJstDay(purchase.createdAt || "");
       if (!wasActiveOnDay(sc, purchaseDay)) { addToNone(rev); continue; }
 
@@ -957,11 +966,11 @@ export default function AnalyticsPage() {
         const clickScId = vidToClickScenario.get(log.vid) || null;
         const impScId = vidToImpScenario.get(log.vid) || null;
         if (clickScId) {
-          const clickSc = scenarios.find((s) => s.id === clickScId);
+          const clickSc = scenarioById.get(clickScId);
           if ((clickSc?.data?.goal as any)?.attribution === "click") scenarioId = clickScId;
         }
         if (!scenarioId && impScId) {
-          const impSc = scenarios.find((s) => s.id === impScId);
+          const impSc = scenarioById.get(impScId);
           if ((impSc?.data?.goal as any)?.attribution !== "click") scenarioId = impScId;
         }
       }
@@ -1070,6 +1079,35 @@ export default function AnalyticsPage() {
 
   // ---- computed: 日別トレンド ----
   const dailyTrend = useMemo<TrendPoint[]>(() => {
+    // 事前バケット（各ログ・stats を日ごとに1パスで集計）— 日数×件数のO(n^2)を回避
+    const pvAgg = new Map<string, { vids: Set<string>; sids: Set<string> }>();
+    for (const l of pvLogs) {
+      const d = utcIsoToJstDay(l.createdAt || "");
+      if (!d) continue;
+      let a = pvAgg.get(d);
+      if (!a) { a = { vids: new Set(), sids: new Set() }; pvAgg.set(d, a); }
+      if (l.vid) a.vids.add(l.vid);
+      if (l.sid) a.sids.add(l.sid);
+    }
+    const revByDay = new Map<string, number>();
+    for (const l of purchaseLogs) {
+      const d = utcIsoToJstDay(l.createdAt || "");
+      if (!d) continue;
+      revByDay.set(d, (revByDay.get(d) || 0) + (typeof l.revenue === "number" ? l.revenue : 0));
+    }
+    const statAgg = new Map<string, { pv: number; imp: number; cv: number; uvDoc?: any; sessionDoc?: any }>();
+    for (const r of statRows as any[]) {
+      const d = r.day;
+      if (!d) continue;
+      let a = statAgg.get(d);
+      if (!a) { a = { pv: 0, imp: 0, cv: 0 }; statAgg.set(d, a); }
+      if (r.event === "pageview") a.pv += safeNum(r.count);
+      else if (r.event === "impression") a.imp += safeNum(r.count);
+      else if (r.event === "conversion") a.cv += safeNum(r.count);
+      else if (r.event === "uv" && r.siteId === siteId) a.uvDoc = r;
+      else if (r.event === "session" && r.siteId === siteId) a.sessionDoc = r;
+    }
+
     const result: TrendPoint[] = [];
     const cur = new Date(effectiveFrom);
     cur.setHours(0, 0, 0, 0);
@@ -1078,27 +1116,20 @@ export default function AnalyticsPage() {
     while (cur <= end) {
       const day = isoDay(cur);
       const label = `${cur.getMonth() + 1}/${cur.getDate()}`;
-      // PV: stats_daily（JST集計で正確）
-      const pv = statRows.filter((r) => r.day === day && r.event === "pageview").reduce((s: number, r: any) => s + safeNum(r.count), 0);
-      // UV: サーバー側 arrayUnion 集計の "uv" ドキュメントを優先。旧データは journeyLogs でフォールバック
-      const uvDoc = statRows.find((r: any) => r.day === day && r.event === "uv" && r.siteId === siteId);
-      const dayLogs = pvLogs.filter((l) => utcIsoToJstDay(l.createdAt || "") === day);
-      const uv = uvDoc?.vids?.length ?? new Set(dayLogs.map((l: any) => l.vid).filter(Boolean)).size;
-      // セッション数: stats_daily の "session" ドキュメント（sid の arrayUnion）を優先
-      // フォールバック: pvLogs（pageview のみ）の sid でカウント（journeyLogs の全イベントは使わない）
-      const sessionDoc = statRows.find((r: any) => r.day === day && r.event === "session" && r.siteId === siteId);
-      const session = sessionDoc?.sids?.length
-        ?? new Set(pvLogs.filter((l) => utcIsoToJstDay(l.createdAt || "") === day && l.sid).map((l) => l.sid)).size;
-      const imp = statRows.filter((r) => r.day === day && r.event === "impression").reduce((s, r) => s + safeNum(r.count), 0);
-      const cv = statRows.filter((r) => r.day === day && r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
-      const revenue = purchaseLogs
-        .filter((l) => utcIsoToJstDay(l.createdAt || "") === day)
-        .reduce((s, l) => s + (typeof l.revenue === "number" ? l.revenue : 0), 0);
+      const sa = statAgg.get(day);
+      const pa = pvAgg.get(day);
+      // PV: stats_daily（JST集計で正確）。UV/セッションはサーバー集計優先、無ければログから
+      const pv = sa?.pv ?? 0;
+      const uv = sa?.uvDoc?.vids?.length ?? (pa ? pa.vids.size : 0);
+      const session = sa?.sessionDoc?.sids?.length ?? (pa ? pa.sids.size : 0);
+      const imp = sa?.imp ?? 0;
+      const cv = sa?.cv ?? 0;
+      const revenue = revByDay.get(day) || 0;
       result.push({ day, label, pv, uv, session, imp, cv, revenue });
       cur.setDate(cur.getDate() + 1);
     }
     return result;
-  }, [pvLogs, journeyLogs, statRows, purchaseLogs, effectiveFrom, effectiveTo]);
+  }, [pvLogs, statRows, purchaseLogs, effectiveFrom, effectiveTo, siteId]);
 
   // ---- computed: 最近のセッション ----
   const sessionData = useMemo(() => {
@@ -1439,11 +1470,11 @@ export default function AnalyticsPage() {
         const clickScId = vidToClickScenario.get(purchase.vid) || null;
         const impScId = vidToImpScenario.get(purchase.vid) || null;
         if (clickScId) {
-          const sc = scenarios.find((s) => s.id === clickScId);
+          const sc = scenarioById.get(clickScId);
           if ((sc?.data?.goal as any)?.attribution === "click") scenarioId = clickScId;
         }
         if (!scenarioId && impScId) {
-          const sc = scenarios.find((s) => s.id === impScId);
+          const sc = scenarioById.get(impScId);
           if ((sc?.data?.goal as any)?.attribution !== "click") scenarioId = impScId;
         }
       }
@@ -2147,12 +2178,12 @@ export default function AnalyticsPage() {
                         </div>
                       ))}
                       <div style={{ fontWeight: 700, margin: "10px 0 6px" }}>📺 直近のimpression（scenario_id必須）</div>
-                      {journeyLogs.filter((l: any) => l.event === "impression" && l.scenario_id).slice(0, 5).map((l: any, i: number) => (
+                      {debugImpressions.slice(0, 5).map((l: any, i: number) => (
                         <div key={i} style={{ marginBottom: 4, color: "#0891b2" }}>
                           vid: <b>{l.vid || "（空）"}</b> / scenario: {l.scenario_id}
                         </div>
                       ))}
-                      {journeyLogs.filter((l: any) => l.event === "impression" && l.scenario_id).length === 0 && (
+                      {debugImpressions.length === 0 && (
                         <div style={{ color: "#dc2626" }}>❌ impressionログなし（シナリオが表示されていないか、ログが取れていない）</div>
                       )}
                     </div>
@@ -2199,7 +2230,7 @@ export default function AnalyticsPage() {
                                 <div style={{ background: "#f8fafc", borderTop: "1px solid #e2e8f0", padding: "10px 16px 12px 32px", display: "flex", flexDirection: "column", gap: 7 }}>
                                   <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, marginBottom: 2 }}>施策別内訳</div>
                                   {r.scenarioBreakdown.map((bd) => {
-                                    const sc = scenarios.find((s) => s.id === bd.id);
+                                    const sc = scenarioById.get(bd.id);
                                     const scName = sc ? String(sc.data?.name || sc.id) : bd.id;
                                     const bdPct = r.qtyAttributed > 0 ? Math.round((bd.qty / r.qtyAttributed) * 100) : 0;
                                     return (
@@ -2977,7 +3008,7 @@ export default function AnalyticsPage() {
                                   ? new Date(ev.createdAt).toLocaleTimeString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })
                                   : "—";
                                 const dotColor = isPurchase ? "#ca8a04" : isConversion ? "#16a34a" : EVENT_COLOR[ev.event]?.text || "#94a3b8";
-                                const scenarioName = ev.scenario_id ? (scenarios.find((s) => s.id === ev.scenario_id)?.data?.name || ev.scenario_id) : null;
+                                const scenarioName = ev.scenario_id ? (scenarioById.get(ev.scenario_id)?.data?.name || ev.scenario_id) : null;
                                 const eventTitle = isPurchase
                                   ? "購入が完了しました"
                                   : isConversion
@@ -2989,7 +3020,7 @@ export default function AnalyticsPage() {
                                         : ev.path || "ページを閲覧しました";
                                 // 購入時の施策特定
                                 const attributedScenarioId = isPurchase ? (ev.scenario_id || vidToLastScenario.get(ev.vid || "") || null) : null;
-                                const attributedScenario = attributedScenarioId ? scenarios.find((s) => s.id === attributedScenarioId) : null;
+                                const attributedScenario = attributedScenarioId ? scenarioById.get(attributedScenarioId) : null;
                                 return (
                                   <React.Fragment key={ev.id || i}>
                                   {/* セッション区切り */}
