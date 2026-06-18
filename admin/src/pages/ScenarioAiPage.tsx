@@ -141,19 +141,14 @@ export default function ScenarioAiPage() {
     };
   }, [currentUid]);
 
-  // sites
+  // sites（自ワークスペースのみ。全件取得はルールで不可）
   useEffect(() => {
-    const q = query(collection(db, "sites"), orderBy("__name__"));
+    if (!workspaceId) { setSites([]); return; }
+    const q = query(collection(db, "sites"), where("workspaceId", "==", workspaceId), orderBy("__name__"));
     return onSnapshot(
       q,
       (snap) => {
-        const list = snap.docs
-          .map((d) => ({ id: d.id, data: d.data() }))
-          .filter((row) => {
-            const ws = String((row.data as any)?.workspaceId || "");
-            if (!workspaceId) return true;
-            return ws === String(workspaceId);
-          });
+        const list = snap.docs.map((d) => ({ id: d.id, data: d.data() }));
         setSites(list);
         const exists = !!siteId && list.some((s) => s.id === siteId);
         if (!exists) setSiteId(list[0]?.id || "");

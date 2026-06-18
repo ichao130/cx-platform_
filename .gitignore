@@ -11,3 +11,7 @@ functions/geo/*.mmdb
 # Firebase Functions の本番環境変数（秘密情報・git管理外）
 functions/.env.*
 !functions/.env.example
+
+# Firestore emulator debug log
+firestore-debug.log
+firebase-debug.log

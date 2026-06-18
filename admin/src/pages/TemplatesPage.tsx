@@ -266,13 +266,14 @@ export default function TemplatesPage() {
     return () => window.removeEventListener('cx_admin_workspace_changed', handler);
   }, [currentUid]);
 
-  // サイト一覧をリアルタイム取得
+  // サイト一覧をリアルタイム取得（自ワークスペースのみ。全件取得はルールで不可）
   useEffect(() => {
-    const q = query(collection(db, 'sites'));
+    if (!workspaceId) { setSites([]); return; }
+    const q = query(collection(db, 'sites'), where('workspaceId', '==', workspaceId));
     return onSnapshot(q, (snap) => {
       setSites(snap.docs.map((d) => ({ id: d.id, data: d.data() as SiteRow['data'] })));
     });
-  }, []);
+  }, [workspaceId]);
 
   // ワークスペースに紐づくサイト一覧
   const visibleSites = useMemo(() => {
