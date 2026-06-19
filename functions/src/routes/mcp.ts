@@ -118,6 +118,21 @@ const TOOLS = [
       required: ["site_id", "day_from", "day_to"],
     },
   },
+  {
+    name: "get_purchases",
+    description:
+      "指定期間の購入明細を1件ずつ返します。各購入の売上・商品(items)・天気(weather_label/temp)・地域(都道府県)・クーポンを含むため、「雨の日に売れた商品」「気温20℃以下の売れ筋」「地域別の人気商品」などのクロス分析に使えます。返ってきた明細をその場で集計して回答すること。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        site_id: { type: "string", description: "サイトID" },
+        day_from: { type: "string", description: "集計開始日 (YYYY-MM-DD)" },
+        day_to: { type: "string", description: "集計終了日 (YYYY-MM-DD)" },
+        limit: { type: "number", description: "取得件数（デフォルト300、最大1000）" },
+      },
+      required: ["site_id", "day_from", "day_to"],
+    },
+  },
   // ── 作成・更新系 ──
   {
     name: "create_action",
@@ -638,6 +653,63 @@ async function executeTool(name: string, args: any, uid: string): Promise<string
     ]
       .filter((l) => l !== undefined)
       .join("\n");
+  }
+
+  // ── 購入明細（天気・地域・商品クロス分析用）──
+  if (name === "get_purchases") {
+    const { site_id, day_from, day_to, limit = 300 } = args;
+    const site = await getSiteAndWorkspace(site_id);
+    if (!site) return `サイト ${site_id} へのアクセス権がありません。`;
+
+    const snap = await db.collection("logs")
+      .where("site_id", "==", site_id)
+      .where("event", "==", "purchase")
+      .where("createdAt", ">=", day_from)
+      .where("createdAt", "<=", day_to + "T23:59:59Z")
+      .orderBy("createdAt", "desc")
+      .limit(Math.min(Number(limit) || 300, 1000))
+      .get();
+
+    if (snap.empty) return `期間 ${day_from}〜${day_to} に購入はありません。`;
+
+    // order_id で重複排除（同一注文の二重ログ対策）
+    const seen = new Set<string>();
+    const rows: any[] = [];
+    for (const d of snap.docs) {
+      const p = d.data() as any;
+      const key = p.order_id ? String(p.order_id) : d.id;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push(p);
+    }
+
+    // JST日付に変換
+    const jstDay = (iso: string) => {
+      const t = new Date(new Date(iso).getTime() + 9 * 3600 * 1000);
+      return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, "0")}-${String(t.getUTCDate()).padStart(2, "0")}`;
+    };
+
+    const purchases = rows.map((p) => ({
+      day: jstDay(p.createdAt || ""),
+      revenue: Number(p.revenue) || 0,
+      items: Array.isArray(p.items)
+        ? p.items.map((it: any) => ({ title: String(it.title || ""), qty: Number(it.qty) || 0, price: Number(it.price) || 0 }))
+        : [],
+      weather: p.weather_label || null,
+      temp: typeof p.weather_temp === "number" ? p.weather_temp : null,
+      region: p.geo_region || null,
+      coupons: Array.isArray(p.discount_codes) ? p.discount_codes : [],
+    }));
+
+    const totalRev = purchases.reduce((s, p) => s + p.revenue, 0);
+    // JSONで返し、Claude側で自由に集計させる
+    return [
+      `購入明細: ${site_id} (${day_from}〜${day_to}) ${purchases.length}件 / 売上合計 ¥${totalRev.toLocaleString()}`,
+      `※ 各購入に weather(天気)・temp(気温)・region(都道府県)・items(商品)・coupons を含む。これを集計して質問に答えること。`,
+      `※ 天気/地域は2026-06-17以降のアクセスのみ付与（それ以前はnull）。`,
+      ``,
+      JSON.stringify(purchases),
+    ].join("\n");
   }
 
   if (name === "get_scenario_stats") {
