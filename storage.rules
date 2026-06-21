@@ -2,12 +2,13 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
 
-    // ── 許可するMIMEタイプ（GIF / JPG / PNG のみ） ──────────────
+    // ── 許可するMIMEタイプ（GIF / JPG / PNG / WebP） ──────────────
     function isAllowedImageType() {
       return request.resource.contentType in [
         'image/gif',
         'image/jpeg',
-        'image/png'
+        'image/png',
+        'image/webp'
       ];
     }
 

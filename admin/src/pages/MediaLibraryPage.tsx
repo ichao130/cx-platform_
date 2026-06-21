@@ -494,8 +494,8 @@ export default function MediaPage() {
   }, [pendingPreviewUrls]);
 
   function acceptFiles(files: File[]) {
-    const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/gif"];
-    const ALLOWED_EXTS = [".jpg", ".jpeg", ".png", ".gif"];
+    const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+    const ALLOWED_EXTS = [".jpg", ".jpeg", ".png", ".gif", ".webp"];
     const MAX_SIZE = 10 * 1024 * 1024; // 10MB
 
     setUploadErr('');
@@ -508,7 +508,7 @@ export default function MediaPage() {
       const mime = (file.type || '').toLowerCase();
       const ext = file.name.toLowerCase().match(/\.[^.]+$/)?.[0] ?? '';
       if (!ALLOWED_TYPES.includes(mime) || !ALLOWED_EXTS.includes(ext)) {
-        errors.push(`${file.name}: GIF / JPG / PNG のみ対応しています`);
+        errors.push(`${file.name}: GIF / JPG / PNG / WebP のみ対応しています`);
         continue;
       }
       if (file.size > MAX_SIZE) {
@@ -717,7 +717,7 @@ export default function MediaPage() {
 
           <input
             type="file"
-            accept="image/jpeg,image/png,image/gif,.jpg,.jpeg,.png,.gif"
+            accept="image/jpeg,image/png,image/gif,image/webp,.jpg,.jpeg,.png,.gif,.webp"
             multiple
             disabled={!siteId || uploading || !mediaLimit.allowed}
             title={!mediaLimit.allowed ? `プランの上限に達しています（${mediaLimit.current}/${mediaLimit.limit}）` : undefined}
