@@ -3267,7 +3267,7 @@ function registerV1Routes(app) {
             const scenarioId = String(attributedScenarioId ?? "all");
             // ── 地域(GeoIP) ────────────────────────────────────────────────────
             // 集計対象の pageview / purchase だけ解決（IPは保存せず地域のみ）。
-            let geo = { country: null, region: null, city: null, lat: null, lng: null };
+            let geo = { country: null, region: null, city: null, lat: null, lng: null, isp: null, conn: null };
             let weather = { code: null, temp: null, label: null };
             if (event === "pageview" || event === "purchase") {
                 try {
@@ -3285,6 +3285,8 @@ function registerV1Routes(app) {
                 geo_country: geo.country,
                 geo_region: geo.region,
                 geo_city: geo.city,
+                geo_isp: geo.isp,
+                geo_conn: geo.conn,
                 weather_code: weather.code,
                 weather_temp: weather.temp,
                 weather_label: weather.label,

@@ -518,6 +518,8 @@ export default function AnalyticsPage() {
   const [compStatRows, setCompStatRows] = useState<any[]>([]);
   const [compPurchaseLogs, setCompPurchaseLogs] = useState<any[]>([]);
   const [selectedVid, setSelectedVid] = useState<string | null>(null);
+  // 選択中訪問者の全イベント（専用クエリ。共有データの5000/1000件上限に依存しない）
+  const [vidEvents, setVidEvents] = useState<any[]>([]);
 
   // ---- 商品別売上アコーディオン ----
   const [expandedProducts, setExpandedProducts] = useState<Set<string>>(new Set());
@@ -1501,23 +1503,42 @@ export default function AnalyticsPage() {
     return list.slice(0, visitorDisplayLimit);
   }, [visitorList, visitorFilter, scenarioPurchaseVids, utmFilter, couponFilter, couponStats, visitorDisplayLimit]);
 
-  // ---- computed: 選択中訪問者のイベント一覧（購入ログ含む） ----
+  // ---- 選択中訪問者の全イベントを専用クエリで取得（共有データの上限に依存しない）----
+  // 上限付きの journeyLogs(5000)/purchaseLogs(1000) をフィルタすると、その人の購入が
+  // 上限外にあると欠ける（クーポン利用が2件中1件しか出ない等）。vid専用クエリで全件取る。
+  useEffect(() => {
+    if (!selectedVid || !siteId) { setVidEvents([]); return; }
+    const since = effectiveFrom.toISOString();
+    const to    = effectiveTo.toISOString();
+    const q = query(
+      collection(db, "logs"),
+      where("site_id", "==", siteId),
+      where("vid", "==", selectedVid),
+      where("createdAt", ">=", since),
+      where("createdAt", "<=", to),
+      orderBy("createdAt", "asc"),
+      limit(1000)
+    );
+    return onSnapshot(q, (snap) => {
+      setVidEvents(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    }, () => setVidEvents([]));
+  }, [selectedVid, siteId, effectiveFrom, effectiveTo]);
+
+  // ---- computed: 選択中訪問者のイベント一覧（専用クエリ結果。購入はorder_idで重複排除）----
   const selectedJourney = useMemo(() => {
     if (!selectedVid) return [];
-    // journeyLogs は全イベントを含むため purchase を除外（purchaseLogs と重複しないように）
-    const logs = journeyLogs.filter((l) => l.vid === selectedVid && l.event !== "purchase");
-    // 購入ログを purchase イベントとして混ぜる（revenue/order_id 等の詳細情報を持つ purchaseLogs を使う）
-    const purchases = purchaseLogs
-      .filter((p) => p.vid && p.vid === selectedVid)
-      .map((p) => ({ ...p, event: "purchase", id: p.id || p.order_id || String(p.createdAt) }));
-    let all = [...logs, ...purchases]
-      .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
-    // 上部の期間指定でイベントを絞り込む
-    const fromMs = effectiveFrom.getTime();
-    const toMs2  = effectiveTo.getTime();
-    all = all.filter((e) => { const t = toMs(e.createdAt); return t >= fromMs && t <= toMs2; });
-    return all;
-  }, [journeyLogs, purchaseLogs, selectedVid, effectiveFrom, effectiveTo]);
+    const seen = new Set<string>();
+    const all: any[] = [];
+    for (const e of vidEvents) {
+      if (e.event === "purchase") {
+        const key = e.order_id ? String(e.order_id) : (e.id || String(e.createdAt));
+        if (seen.has(key)) continue;
+        seen.add(key);
+      }
+      all.push(e);
+    }
+    return all.sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+  }, [vidEvents, selectedVid]);
 
   // ---- computed: 期間内訪問者別集計（左パネルカード表示用） ----
   const filteredJourneyStats = useMemo(() => {
