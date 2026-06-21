@@ -1244,9 +1244,14 @@ export default function AnalyticsPage() {
       const lastMs = v.lastSeen ? new Date(v.lastSeen).getTime() : nowMs;
       v.daysSinceLastVisit = Math.floor((nowMs - lastMs) / 86400000);
     }
-    return Array.from(map.values())
-      .sort((a, b) => b.lastSeen.localeCompare(a.lastSeen))
-      .slice(0, 1000);
+    // 直近1000人で打ち切るが、購入者は必ず全員残す
+    // （PVの多いサイトで古いクーポン利用者がランク外に落ちて消える問題を防ぐ）
+    const allVisitors = Array.from(map.values());
+    const byRecent = [...allVisitors].sort((a, b) => b.lastSeen.localeCompare(a.lastSeen));
+    const keep = new Map<string, (typeof allVisitors)[number]>();
+    for (const v of byRecent.slice(0, 1000)) keep.set(v.vid, v);
+    for (const v of allVisitors) if (v.hasPurchase) keep.set(v.vid, v);
+    return Array.from(keep.values()).sort((a, b) => b.lastSeen.localeCompare(a.lastSeen));
   }, [journeyLogs, purchaseLogs, effectiveFrom, effectiveTo]);
 
   // ---- computed: 流入元（utm_source or ref）× 売上 ----
