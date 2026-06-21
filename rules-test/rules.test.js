@@ -39,7 +39,7 @@ async function check(label, p) {
     await setDoc(doc(db, "actions/actB"), { siteId: "siteB", workspaceId: "ws2" });
     await setDoc(doc(db, "templates/tA"), { workspaceId: "ws1" });
     await setDoc(doc(db, "templates/tB"), { workspaceId: "ws2" });
-    await setDoc(doc(db, "media/mA"), { workspaceId: "ws1" });
+    await setDoc(doc(db, "media/mA"), { workspaceId: "ws1", siteId: "siteA" });
     await setDoc(doc(db, "logs/lA"), { site_id: "siteA", event: "pageview", createdAt: "2026-06-18T00:00:00Z" });
     await setDoc(doc(db, "logs/lB"), { site_id: "siteB", event: "pageview", createdAt: "2026-06-18T00:00:00Z" });
     await setDoc(doc(db, "stats_daily/sA"), { siteId: "siteA", day: "2026-06-18", event: "pageview" });
@@ -51,6 +51,8 @@ async function check(label, p) {
 
   console.log("=== 許可されるべき（userA = ws1/siteA メンバー）===");
   await check("scenarios where siteId==siteA", assertSucceeds(getDocs(query(C("scenarios"), where("siteId", "==", "siteA")))));
+  await check("scenarios where workspaceId==ws1 (ActionsPage)", assertSucceeds(getDocs(query(C("scenarios"), where("workspaceId", "==", "ws1")))));
+  await check("media where siteId==siteA (ActionsPage)", assertSucceeds(getDocs(query(C("media"), where("siteId", "==", "siteA")))));
   await check("logs where site_id==siteA", assertSucceeds(getDocs(query(C("logs"), where("site_id", "==", "siteA")))));
   await check("stats_daily where siteId==siteA", assertSucceeds(getDocs(query(C("stats_daily"), where("siteId", "==", "siteA")))));
   await check("templates where workspaceId==ws1", assertSucceeds(getDocs(query(C("templates"), where("workspaceId", "==", "ws1")))));
@@ -62,6 +64,8 @@ async function check(label, p) {
 
   console.log("=== 拒否されるべき（他テナント / 無フィルタ）===");
   await check("scenarios where siteId==siteB (他テナント)", assertFails(getDocs(query(C("scenarios"), where("siteId", "==", "siteB")))));
+  await check("scenarios where workspaceId==ws2 (他テナント)", assertFails(getDocs(query(C("scenarios"), where("workspaceId", "==", "ws2")))));
+  await check("media where siteId==siteB (他テナント)", assertFails(getDocs(query(C("media"), where("siteId", "==", "siteB")))));
   await check("scenarios 無フィルタ", assertFails(getDocs(C("scenarios"))));
   await check("logs where site_id==siteB", assertFails(getDocs(query(C("logs"), where("site_id", "==", "siteB")))));
   await check("stats_daily where siteId==siteB", assertFails(getDocs(query(C("stats_daily"), where("siteId", "==", "siteB")))));

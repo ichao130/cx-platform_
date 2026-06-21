@@ -59,10 +59,11 @@ service cloud.firestore {
     }
 
     // ── シナリオ ─────────────────────────────────────────────────
-    // read: siteId 絞りクエリ → そのサイトのメンバーのみ
+    // read: siteId絞り(各ページ) と workspaceId絞り(ActionsPage) の2系統
     // write: 自分のワークスペースのみ（不正書き換え防止）
     match /scenarios/{scenarioId} {
-      allow read: if isSiteMember(resource.data.siteId);
+      allow read: if isSiteMember(resource.data.siteId)
+        || isMember(resource.data.workspaceId);
       allow create: if isSignedIn() && isMember(request.resource.data.workspaceId)
         && request.resource.data.workspaceId is string
         && request.resource.data.workspaceId.size() > 0;
@@ -96,9 +97,10 @@ service cloud.firestore {
       allow delete: if isSignedIn() && isMember(resource.data.workspaceId);
     }
 
-    // ── メディア（read は自ワークスペースのメンバー、write も自ワークスペース）──
+    // ── メディア（read: workspaceId絞り(MediaLibrary) と siteId絞り(ActionsPage) の2系統）──
     match /media/{mediaId} {
-      allow read: if isMember(resource.data.workspaceId);
+      allow read: if isMember(resource.data.workspaceId)
+        || isSiteMember(resource.data.siteId);
       allow create: if isSignedIn() && isMember(request.resource.data.workspaceId)
         && request.resource.data.workspaceId is string
         && request.resource.data.workspaceId.size() > 0;
