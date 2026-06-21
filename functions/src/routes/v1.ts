@@ -3713,8 +3713,8 @@ export function registerV1Routes(app: Express) {
 
       // ── 地域(GeoIP) ────────────────────────────────────────────────────
       // 集計対象の pageview / purchase だけ解決（IPは保存せず地域のみ）。
-      let geo: { country: string | null; region: string | null; city: string | null; lat: number | null; lng: number | null } =
-        { country: null, region: null, city: null, lat: null, lng: null };
+      let geo: { country: string | null; region: string | null; city: string | null; lat: number | null; lng: number | null; isp: string | null; conn: "mobile" | "fixed" | "unknown" | null } =
+        { country: null, region: null, city: null, lat: null, lng: null, isp: null, conn: null };
       let weather: { code: number | null; temp: number | null; label: string | null } =
         { code: null, temp: null, label: null };
       if (event === "pageview" || event === "purchase") {
@@ -3733,6 +3733,8 @@ export function registerV1Routes(app: Express) {
         geo_country: geo.country,
         geo_region: geo.region,
         geo_city: geo.city,
+        geo_isp: geo.isp,
+        geo_conn: geo.conn,
         weather_code: weather.code,
         weather_temp: weather.temp,
         weather_label: weather.label,

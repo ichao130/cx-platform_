@@ -698,6 +698,8 @@ async function executeTool(name: string, args: any, uid: string): Promise<string
       weather: p.weather_label || null,
       temp: typeof p.weather_temp === "number" ? p.weather_temp : null,
       region: p.geo_region || null,
+      conn: p.geo_conn || null, // mobile/fixed/unknown（固定=WiFi=地域が正確）
+      isp: p.geo_isp || null,
       coupons: Array.isArray(p.discount_codes) ? p.discount_codes : [],
     }));
 
@@ -705,8 +707,9 @@ async function executeTool(name: string, args: any, uid: string): Promise<string
     // JSONで返し、Claude側で自由に集計させる
     return [
       `購入明細: ${site_id} (${day_from}〜${day_to}) ${purchases.length}件 / 売上合計 ¥${totalRev.toLocaleString()}`,
-      `※ 各購入に weather(天気)・temp(気温)・region(都道府県)・items(商品)・coupons を含む。これを集計して質問に答えること。`,
-      `※ 天気/地域は2026-06-17以降のアクセスのみ付与（それ以前はnull）。`,
+      `※ 各購入に weather(天気)・temp(気温)・region(都道府県)・conn(回線:fixed=WiFi/mobile/unknown)・isp・items(商品)・coupons を含む。これを集計して質問に答えること。`,
+      `※ conn=fixed(固定回線/WiFi)は地域が正確。mobileはキャリア拠点(東京)に寄るため地域は不正確。地域分析はfixedに絞ると信頼性が高い。`,
+      `※ 天気/地域/回線は2026-06-17以降のアクセスのみ付与（それ以前はnull）。`,
       ``,
       JSON.stringify(purchases),
     ].join("\n");
