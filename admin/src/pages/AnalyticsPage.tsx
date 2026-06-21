@@ -512,6 +512,8 @@ export default function AnalyticsPage() {
 
   // ---- 購入ログ（売上計測） ----
   const [purchaseLogs, setPurchaseLogs] = useState<any[]>([]);
+  // CV(コンバージョン)の vid→最終CV時刻。専用クエリで取得し journeyLogs(5000)上限に依存しない
+  const [convVids, setConvVids] = useState<Map<string, string>>(new Map());
   const [purchaseLoading, setPurchaseLoading] = useState(false);
 
   // ---- 比較期間データ ----
@@ -625,6 +627,35 @@ export default function AnalyticsPage() {
       () => setJourneyLoading(false)
     );
     return unsub;
+  }, [siteId, effectiveFrom, effectiveTo]);
+
+  // ---- CV(コンバージョン)の vid を専用クエリで取得（CVフィルターを上限から外す）----
+  useEffect(() => {
+    setConvVids(new Map());
+    if (!siteId) return;
+    const since = effectiveFrom.toISOString();
+    const to    = effectiveTo.toISOString();
+    return onSnapshot(
+      query(
+        collection(db, "logs"),
+        where("site_id", "==", siteId),
+        where("event", "==", "conversion"),
+        where("createdAt", ">", since),
+        limit(5000)
+      ),
+      (snap) => {
+        const m = new Map<string, string>();
+        snap.docs.forEach((d) => {
+          const l = d.data() as any;
+          if (l.vid && (l.createdAt || "") <= to) {
+            const prev = m.get(l.vid);
+            if (!prev || String(l.createdAt) > prev) m.set(l.vid, l.createdAt);
+          }
+        });
+        setConvVids(m);
+      },
+      () => setConvVids(new Map())
+    );
   }, [siteId, effectiveFrom, effectiveTo]);
 
   // ---- 購入ログ取得（リアルタイム） ----
@@ -1226,6 +1257,16 @@ export default function AnalyticsPage() {
       v.purchaseRevenue += typeof p.revenue === "number" ? p.revenue : 0;
       v.purchaseCount++;
     }
+    // CV(専用クエリ)を反映。map にいない CVのみ訪問者も期間内なら追加し、hasConversionを立てる
+    for (const [vid, at] of convVids) {
+      if (!map.has(vid)) {
+        const t = toMs(at);
+        if (t < jFromMs || t > jToMs) continue;
+        map.set(vid, { vid, firstSeen: at || "", lastSeen: at || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, pages: [], eventCount: 0, firstRef: "", isNew: null, utmSource: "", utmMedium: "", utmCampaign: "", sessionCount: 1, spanDays: 0, daysSinceLastVisit: 0 });
+        vidSids.set(vid, new Set());
+      }
+      map.get(vid)!.hasConversion = true;
+    }
     // セッション数・スパン・最終訪問経過日数を後処理で計算
     for (const [vid, v] of map) {
       const sids = vidSids.get(vid);
@@ -1244,15 +1285,15 @@ export default function AnalyticsPage() {
       const lastMs = v.lastSeen ? new Date(v.lastSeen).getTime() : nowMs;
       v.daysSinceLastVisit = Math.floor((nowMs - lastMs) / 86400000);
     }
-    // 直近1000人で打ち切るが、購入者は必ず全員残す
-    // （PVの多いサイトで古いクーポン利用者がランク外に落ちて消える問題を防ぐ）
+    // 直近1000人で打ち切るが、購入者とCV者は必ず全員残す
+    // （重要な少数=施策経由購入/CV/クーポンの絞り込みが上限で取りこぼされるのを防ぐ）
     const allVisitors = Array.from(map.values());
     const byRecent = [...allVisitors].sort((a, b) => b.lastSeen.localeCompare(a.lastSeen));
     const keep = new Map<string, (typeof allVisitors)[number]>();
     for (const v of byRecent.slice(0, 1000)) keep.set(v.vid, v);
-    for (const v of allVisitors) if (v.hasPurchase) keep.set(v.vid, v);
+    for (const v of allVisitors) if (v.hasPurchase || v.hasConversion) keep.set(v.vid, v);
     return Array.from(keep.values()).sort((a, b) => b.lastSeen.localeCompare(a.lastSeen));
-  }, [journeyLogs, purchaseLogs, effectiveFrom, effectiveTo]);
+  }, [journeyLogs, purchaseLogs, convVids, effectiveFrom, effectiveTo]);
 
   // ---- computed: 流入元（utm_source or ref）× 売上 ----
   const referrerData = useMemo(() => {
