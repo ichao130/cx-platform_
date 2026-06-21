@@ -15,3 +15,7 @@ functions/.env.*
 # Firestore emulator debug log
 firestore-debug.log
 firebase-debug.log
+
+# 生成物: GeoLite2-ASN CSVから生成した範囲表（git管理外・デプロイ時バンドル）
+functions/geo/asn-jp.json
+asn-build/node_modules/
