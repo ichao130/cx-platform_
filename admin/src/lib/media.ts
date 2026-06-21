@@ -18,21 +18,21 @@ export type MediaDoc = {
 };
 
 // アップロード許可MIMEタイプ
-const ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/gif"] as const;
-const ALLOWED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".gif"];
+const ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
+const ALLOWED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".gif", ".webp"];
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
 
 export function validateMediaFile(file: File): void {
   const mime = (file.type || "").toLowerCase();
   if (!ALLOWED_MIME_TYPES.includes(mime as typeof ALLOWED_MIME_TYPES[number])) {
     throw new Error(
-      `対応していないファイル形式です（${file.name}）。GIF / JPG / PNG のみアップロードできます。`
+      `対応していないファイル形式です（${file.name}）。GIF / JPG / PNG / WebP のみアップロードできます。`
     );
   }
   const ext = file.name.toLowerCase().match(/\.[^.]+$/)?.[0] ?? "";
   if (!ALLOWED_EXTENSIONS.includes(ext)) {
     throw new Error(
-      `対応していない拡張子です（${file.name}）。.gif / .jpg / .jpeg / .png のみ使用できます。`
+      `対応していない拡張子です（${file.name}）。.gif / .jpg / .jpeg / .png / .webp のみ使用できます。`
     );
   }
   if (file.size > MAX_FILE_SIZE_BYTES) {
