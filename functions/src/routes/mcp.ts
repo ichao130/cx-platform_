@@ -728,7 +728,7 @@ async function executeTool(name: string, args: any, uid: string): Promise<string
     const map = new Map<string, Record<string, number>>();
     for (const d of statsSnap.docs) {
       const data = d.data() as any;
-      const sid: string = data.scenario_id || "(シナリオなし)";
+      const sid: string = data.scenarioId || "(シナリオなし)";
       const event: string = data.event || "unknown";
       if (!map.has(sid)) map.set(sid, {});
       const m = map.get(sid)!;
