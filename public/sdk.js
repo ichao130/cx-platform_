@@ -1828,10 +1828,25 @@
       if (!Array.isArray(scenarios) || !scenarios.length) return;
       warmupImages(scenarios);
       scenarios.sort(function (a, b) { return Number((b.priority || 0)) - Number((a.priority || 0)); });
+      // 複数シナリオを同時発火する。ただし「同じマウント先」には優先度の高い1つだけ（重なり防止）。
+      // マウント先が異なれば複数バナーを同時に出せる。
+      var usedMounts = {};
       for (var i = 0; i < scenarios.length; i++) {
-        if (!shouldRunScenario(scenarios[i], ctx)) continue;
-        scheduleScenario(scenarios[i], ctx, apiBase);
-        break;
+        var s = scenarios[i];
+        // このシナリオが使うマウント先キー一覧
+        var keys = [];
+        var collide = false;
+        (s.actions || []).forEach(function (a) {
+          var m = a && a.mount;
+          var key = m ? (String(m.selector || "") + "|" + String(m.placement || "")) : "__default__";
+          keys.push(key);
+          if (usedMounts[key]) collide = true;
+        });
+        if (collide) continue;                       // 同じ場所は既に埋まっている→スキップ（頻度もマークしない）
+        if (!shouldRunScenario(s, ctx)) continue;    // status / URL / 配信頻度
+        keys.forEach(function (k) { usedMounts[k] = true; });
+        // シナリオごとに ctx をクローンして渡す（scenario_id や pending_* の混線を防ぐ）
+        scheduleScenario(s, Object.assign({}, ctx), apiBase);
       }
     }
 
