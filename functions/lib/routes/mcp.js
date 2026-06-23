@@ -732,7 +732,7 @@ async function executeTool(name, args, uid) {
         const map = new Map();
         for (const d of statsSnap.docs) {
             const data = d.data();
-            const sid = data.scenario_id || "(シナリオなし)";
+            const sid = data.scenarioId || "(シナリオなし)";
             const event = data.event || "unknown";
             if (!map.has(sid))
                 map.set(sid, {});

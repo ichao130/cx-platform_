@@ -1189,7 +1189,7 @@ export default function AnalyticsPage() {
       vid: string; firstSeen: string; lastSeen: string;
       pvCount: number; totalDuration: number;
       hasConversion: boolean; hasImpression: boolean; hasPurchase: boolean;
-      purchaseRevenue: number; purchaseCount: number;
+      purchaseRevenue: number; purchaseCount: number; lastPurchaseAt: string;
       pages: string[]; eventCount: number; firstRef: string;
       isNew: boolean | null; // true=新規, false=リピート, null=不明（古いログ）
       utmSource: string; utmMedium: string; utmCampaign: string;
@@ -1212,7 +1212,7 @@ export default function AnalyticsPage() {
     for (const l of sorted) {
       const vid = l.vid || "unknown";
       if (!map.has(vid)) {
-        map.set(vid, { vid, firstSeen: l.createdAt || "", lastSeen: l.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, pages: [], eventCount: 0, firstRef: "", isNew: null, utmSource: "", utmMedium: "", utmCampaign: "", sessionCount: 0, spanDays: 0, daysSinceLastVisit: 0 });
+        map.set(vid, { vid, firstSeen: l.createdAt || "", lastSeen: l.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, lastPurchaseAt: "", pages: [], eventCount: 0, firstRef: "", isNew: null, utmSource: "", utmMedium: "", utmCampaign: "", sessionCount: 0, spanDays: 0, daysSinceLastVisit: 0 });
         vidSids.set(vid, new Set());
         vidDays.set(vid, new Set());
       }
@@ -1249,20 +1249,22 @@ export default function AnalyticsPage() {
       if (!map.has(p.vid)) {
         const t = toMs(p.createdAt);
         if (t < jFromMs || t > jToMs) continue; // 期間外の購入は無視
-        map.set(p.vid, { vid: p.vid, firstSeen: p.createdAt || "", lastSeen: p.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, pages: [], eventCount: 0, firstRef: "", isNew: null, utmSource: "", utmMedium: "", utmCampaign: "", sessionCount: 1, spanDays: 0, daysSinceLastVisit: 0 });
+        map.set(p.vid, { vid: p.vid, firstSeen: p.createdAt || "", lastSeen: p.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, lastPurchaseAt: "", pages: [], eventCount: 0, firstRef: "", isNew: null, utmSource: "", utmMedium: "", utmCampaign: "", sessionCount: 1, spanDays: 0, daysSinceLastVisit: 0 });
         vidSids.set(p.vid, new Set());
       }
       const v = map.get(p.vid)!;
       v.hasPurchase = true;
       v.purchaseRevenue += typeof p.revenue === "number" ? p.revenue : 0;
       v.purchaseCount++;
+      // 最新の購入日時を保持（最終訪問日と区別して表示するため）
+      if ((p.createdAt || "") > v.lastPurchaseAt) v.lastPurchaseAt = p.createdAt || "";
     }
     // CV(専用クエリ)を反映。map にいない CVのみ訪問者も期間内なら追加し、hasConversionを立てる
     for (const [vid, at] of convVids) {
       if (!map.has(vid)) {
         const t = toMs(at);
         if (t < jFromMs || t > jToMs) continue;
-        map.set(vid, { vid, firstSeen: at || "", lastSeen: at || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, pages: [], eventCount: 0, firstRef: "", isNew: null, utmSource: "", utmMedium: "", utmCampaign: "", sessionCount: 1, spanDays: 0, daysSinceLastVisit: 0 });
+        map.set(vid, { vid, firstSeen: at || "", lastSeen: at || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, lastPurchaseAt: "", pages: [], eventCount: 0, firstRef: "", isNew: null, utmSource: "", utmMedium: "", utmCampaign: "", sessionCount: 1, spanDays: 0, daysSinceLastVisit: 0 });
         vidSids.set(vid, new Set());
       }
       map.get(vid)!.hasConversion = true;
@@ -2869,6 +2871,7 @@ export default function AnalyticsPage() {
                       const dispLastSeen = fs ? fs.lastSeen : v.lastSeen;
                       const durationMin = Math.round(v.totalDuration / 60);
                       const lastTime = dispLastSeen ? new Date(dispLastSeen).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+                      const purchaseTime = v.lastPurchaseAt ? new Date(v.lastPurchaseAt).toLocaleString("ja-JP", { month: "numeric", day: "numeric" }) : "";
                       const vidShort = v.vid.slice(0, 8) + "…";
                       const visitorTypeLabel = v.isNew === true ? "新規" : v.isNew === false ? "リピート" : null;
                       const visitorTypeStyle = v.isNew === true
@@ -2929,9 +2932,16 @@ export default function AnalyticsPage() {
                                     <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 20, ...statusStyle }}>{statusLabel}</span>
                                   </div>
                                 </div>
-                                <span className="small" style={{ opacity: 0.45, whiteSpace: "nowrap", flexShrink: 0 }}>
-                                  {lastTime}
-                                </span>
+                                <div style={{ textAlign: "right", flexShrink: 0 }}>
+                                  <div className="small" style={{ opacity: 0.45, whiteSpace: "nowrap" }}>
+                                    最終訪問 {lastTime}
+                                  </div>
+                                  {dispHasPurchase && purchaseTime && (
+                                    <div className="small" style={{ color: "#ca8a04", fontWeight: 600, whiteSpace: "nowrap", marginTop: 2 }}>
+                                      🛒 購入 {purchaseTime}
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
                                 <span className="small" style={{ opacity: 0.72, fontWeight: 700 }}>{dispPvCount} PV</span>
