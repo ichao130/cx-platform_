@@ -261,7 +261,7 @@ function buildActionPayload(form: {
 }): ActionDoc {
   const selector = (form.selector || "").trim();
   const primary = (form.creative?.image_media_id || "").trim();
-  const mediaIds = uniq([primary, ...(form.mediaIds || [])]);
+  const mediaIds = uniq([primary, ...(form.mediaIds || [])].filter(Boolean));
 
   const base: ActionDoc = {
     workspaceId: form.workspaceId,
@@ -277,7 +277,8 @@ function buildActionPayload(form: {
       cta_url: form.creative.cta_url ?? "",
       cta_url_text: form.creative.cta_url_text ?? "詳細を見る",
       image_url: form.creative.image_url ?? "",
-      image_media_id: primary || undefined,
+      // 空文字で保存する（merge保存で古い値が残って画像が復活するのを防ぐ）
+      image_media_id: primary || "",
     },
     ...(form.type === "launcher" && form.modal_creative ? { modal_creative: form.modal_creative } : {}),
   };
@@ -1581,7 +1582,7 @@ export default function ActionsPage() {
                           className="btn"
                           type="button"
                           style={{ marginLeft: 8 }}
-                          onClick={() => setImageMediaId("")}
+                          onClick={() => { setImageMediaId(""); setImageUrl(""); }}
                         >
                           クリア
                         </button>

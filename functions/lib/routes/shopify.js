@@ -44,6 +44,10 @@ const SHOPIFY_API_KEY = (0, params_1.defineString)("SHOPIFY_API_KEY");
 const SHOPIFY_API_SECRET = (0, params_1.defineString)("SHOPIFY_API_SECRET");
 const SHOPIFY_APP_URL = (0, params_1.defineString)("SHOPIFY_APP_URL"); // Cloud Functions URL（OAuthコールバック用）
 const SHOPIFY_SDK_URL = "https://cx-platform-v1.web.app"; // SDK配信URL（Firebase Hosting）
+// stats_daily の day と揃えるJST日付（YYYY-MM-DD）
+function jstDay(d) {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+}
 const SHOPIFY_SCOPES = "write_script_tags,read_script_tags,write_pixels";
 const ADMIN_APP_URL = "https://cx-platform-v1.web.app";
 // ---- helpers ----
@@ -676,5 +680,87 @@ function registerShopifyRoutes(app) {
             console.error("[shopify/gdpr] shop/redact error:", e);
         }
         res.status(200).send("ok");
+    });
+    // ⑨ orders/paid — 入金された注文を購入として記録（Web Pixelの取りこぼし＝PayPay/外部遷移/タブ閉じを補完）
+    //    ※ read_orders スコープ＋webhook登録が有効になってから発火する（それまでは呼ばれない）。
+    //    ※ orders/paid を使うので「実際に入金された注文」のみ＝後払いの未払いキャンセルは計上しない。
+    app.post("/shopify/webhook/orders/paid", async (req, res) => {
+        const hmacHeader = req.headers["x-shopify-hmac-sha256"];
+        const rawBody = req.rawBody;
+        if (!hmacHeader || !rawBody || !verifyWebhookHmac(rawBody, SHOPIFY_API_SECRET.value(), hmacHeader)) {
+            res.status(401).send("HMAC verification failed");
+            return;
+        }
+        try {
+            const order = req.body;
+            const shop = req.headers["x-shopify-shop-domain"];
+            const db = (0, admin_1.adminDb)();
+            // shop → siteId
+            const storeSnap = await db.collection("shopify_stores").where("shop", "==", shop).limit(1).get();
+            const siteId = storeSnap.empty ? null : storeSnap.docs[0].data().siteId;
+            if (!siteId) {
+                res.status(200).send("no site mapping");
+                return;
+            }
+            // 重複チェック: Web Pixel が既に記録済みならスキップ（order.id は数値/GID両形式を候補に）
+            const candidates = [
+                String(order.id || ""),
+                `gid://shopify/Order/${order.id}`,
+                String(order.checkout_token || ""),
+                String(order.token || ""),
+            ].filter(Boolean).slice(0, 10);
+            if (candidates.length) {
+                const dupSnap = await db.collection("logs").where("order_id", "in", candidates).limit(1).get();
+                if (!dupSnap.empty) {
+                    res.status(200).send("duplicate");
+                    return;
+                }
+            }
+            // note_attributes(カート属性)から vid/sid/scenario を復元
+            const attrs = Array.isArray(order.note_attributes) ? order.note_attributes : [];
+            const attr = (k) => { const a = attrs.find((x) => x && x.name === k); return a ? String(a.value || "") : ""; };
+            const vid = attr("_cx_vid") || null;
+            const sid = attr("_cx_sid") || null;
+            const scenarioId = attr("_cx_scenario_id") || null;
+            const revenue = Number(order.total_price || 0) || 0;
+            const currency = String(order.currency || "JPY");
+            const items = Array.isArray(order.line_items)
+                ? order.line_items.map((li) => ({ title: String(li.title || ""), qty: Number(li.quantity) || 1, price: Number(li.price) || 0 }))
+                : [];
+            const discountCodes = Array.isArray(order.discount_codes)
+                ? order.discount_codes.map((d) => String(d.code || "").toUpperCase()).filter(Boolean)
+                : [];
+            const nowIso = new Date().toISOString();
+            const createdAt = order.created_at ? new Date(order.created_at).toISOString() : nowIso;
+            const day = jstDay(new Date(createdAt));
+            const logPayload = {
+                site_id: siteId,
+                scenario_id: scenarioId,
+                action_id: null, template_id: null, variant_id: null,
+                event: "purchase",
+                url: null, path: null, ref: null,
+                vid, sid,
+                utm_source: null, utm_medium: null, utm_campaign: null, is_new: null,
+                revenue, order_id: String(order.id || ""), currency, items, discount_codes: discountCodes,
+                source: "shopify_webhook",
+                createdAt, updatedAt: nowIso,
+            };
+            const scId = String(scenarioId ?? "all");
+            const statsDocId = `${siteId}__${day}__${scId}__all__na__purchase`;
+            const batch = db.batch();
+            batch.set(db.collection("logs").doc(), logPayload);
+            batch.set(db.collection("stats_daily").doc(statsDocId), {
+                siteId, day, scenarioId: scenarioId ?? null, actionId: null, templateId: null, variantId: "na",
+                event: "purchase", count: firestore_1.FieldValue.increment(1), revenue_total: firestore_1.FieldValue.increment(revenue),
+                updatedAt: firestore_1.FieldValue.serverTimestamp(),
+            }, { merge: true });
+            await batch.commit();
+            console.log(`[shopify/orders_paid] recorded order=${order.id} site=${siteId} ¥${revenue} vid=${vid ? "y" : "n"} scenario=${scenarioId || "-"}`);
+            res.status(200).send("ok");
+        }
+        catch (e) {
+            console.error("[shopify/orders_paid] error:", e);
+            res.status(200).send("ok"); // 200で返してShopifyのリトライ地獄を回避（エラーはログに残す）
+        }
     });
 }
