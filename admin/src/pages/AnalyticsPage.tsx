@@ -1062,32 +1062,42 @@ export default function AnalyticsPage() {
 
   const pageMax = useMemo(() => Math.max(...pageData.map((r) => r.count), 1), [pageData]);
 
-  // ---- computed: 離脱ページ（セッションの最終ページ） ----
-  const exitData = useMemo(() => {
+  // ---- computed: 直帰率＋ページ別離脱率（離脱ページも兼ねる） ----
+  // 直帰率 = 1ページだけ見て離脱したセッション / 全セッション
+  // ページ別離脱率 = そのページで離脱したセッション数 / そのページのPV数
+  const exitStats = useMemo(() => {
     const sessions = new Map<string, string[]>();
+    const pvByPage = new Map<string, number>();
     const sorted = [...pvLogs]
       .filter((l) => l.event === "pageview")
       .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
     for (const l of sorted) {
+      const path = l.path || "/";
+      pvByPage.set(path, (pvByPage.get(path) || 0) + 1);
       const sid = l.sid || l.vid || "";
       if (!sid) continue;
       if (!sessions.has(sid)) sessions.set(sid, []);
-      sessions.get(sid)!.push(l.path || "/");
+      sessions.get(sid)!.push(path);
     }
-    const exitMap = new Map<string, number>();
+    let bounces = 0;
+    const exitMapLocal = new Map<string, number>();
     for (const pages of sessions.values()) {
       if (!pages.length) continue;
+      if (pages.length === 1) bounces++;
       const last = pages[pages.length - 1];
-      exitMap.set(last, (exitMap.get(last) || 0) + 1);
+      exitMapLocal.set(last, (exitMapLocal.get(last) || 0) + 1);
     }
-    return Array.from(exitMap.entries())
-      .map(([path, count]) => ({ path, count }))
-      .sort((a, b) => b.count - a.count)
+    const totalSessions = sessions.size;
+    const bounceRate = totalSessions > 0 ? (bounces / totalSessions) * 100 : 0;
+    const exitRates = Array.from(exitMapLocal.entries())
+      .map(([path, exits]) => {
+        const pv = pvByPage.get(path) || exits;
+        return { path, exits, pv, rate: pv > 0 ? (exits / pv) * 100 : 0 };
+      })
+      .sort((a, b) => b.exits - a.exits)
       .slice(0, 10);
+    return { bounceRate, totalSessions, bounces, exitRates };
   }, [pvLogs]);
-
-  const exitTotal = useMemo(() => exitData.reduce((s, r) => s + r.count, 0), [exitData]);
-  const exitMax = useMemo(() => Math.max(...exitData.map((r) => r.count), 1), [exitData]);
 
   // ---- computed: シナリオファネル ----
   const funnelData = useMemo(() => {
@@ -2445,19 +2455,38 @@ export default function AnalyticsPage() {
               {/* 離脱ページ */}
               <div className="card" style={{ padding: 18, background: "#fff" }}>
                 <div style={{ marginBottom: 14 }}>
-                  <div className="small" style={{ fontWeight: 700 }}>🚪 離脱ページ</div>
-                  <div className="small" style={{ opacity: 0.5, marginTop: 2 }}>セッションの最後に見たページ</div>
+                  <div className="small" style={{ fontWeight: 700 }}>🚪 離脱ページ・離脱率</div>
+                  <div className="small" style={{ opacity: 0.5, marginTop: 2 }}>そのページのPVのうち離脱で終わった割合</div>
                 </div>
                 {journeyLoading ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }}><SkeletonBar width="75%" /><SkeletonBar width="55%" /><SkeletonBar width="65%" /></div>
-                ) : exitData.length === 0 ? (
+                ) : exitStats.exitRates.length === 0 ? (
                   <div className="small" style={{ opacity: 0.55 }}>データなし</div>
                 ) : (
-                  <div style={{ display: "grid", gap: 12 }}>
-                    {exitData.map((r) => (
-                      <BarRow key={r.path} label={r.path} value={r.count} max={exitMax} total={exitTotal} color="#f97316" href={toPageUrl(r.path) || undefined} />
-                    ))}
-                  </div>
+                  <>
+                    {/* 直帰率 */}
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 14, paddingBottom: 12, borderBottom: "1px solid #f1f5f9" }}>
+                      <span className="small" style={{ opacity: 0.6 }}>直帰率</span>
+                      <span style={{ fontSize: 22, fontWeight: 800, color: "#f97316" }}>{exitStats.bounceRate.toFixed(1)}%</span>
+                      <span className="small" style={{ opacity: 0.5 }}>1ページのみで離脱（{fmtInt(exitStats.bounces)} / {fmtInt(exitStats.totalSessions)}セッション）</span>
+                    </div>
+                    {/* ページ別離脱率 */}
+                    <div style={{ display: "grid", gap: 10 }}>
+                      {exitStats.exitRates.map((r) => (
+                        <div key={r.path}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 3 }}>
+                            <a href={toPageUrl(r.path) || undefined} target="_blank" rel="noreferrer" className="small" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#374151", textDecoration: "none" }}>{r.path}</a>
+                            <span className="small" style={{ whiteSpace: "nowrap", fontWeight: 700, color: r.rate >= 70 ? "#dc2626" : r.rate >= 40 ? "#ca8a04" : "#16a34a" }}>
+                              {r.rate.toFixed(0)}% <span style={{ fontWeight: 400, opacity: 0.5 }}>({fmtInt(r.exits)}/{fmtInt(r.pv)}PV)</span>
+                            </span>
+                          </div>
+                          <div style={{ height: 6, background: "rgba(15,23,42,.07)", borderRadius: 99, overflow: "hidden" }}>
+                            <div style={{ height: "100%", width: `${Math.min(100, r.rate)}%`, background: "#f97316", borderRadius: 99 }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
                 )}
               </div>
 
