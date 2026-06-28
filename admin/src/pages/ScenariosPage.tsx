@@ -25,7 +25,8 @@ type Goal =
   | { type: "path_prefix"; value: string; attribution?: "view" | "click" }
   | { type: "path_exact"; value: string; attribution?: "view" | "click" }
   | { type: "url_contains"; value: string; attribution?: "view" | "click" }
-  | { type: "click_cta"; value: string; attribution?: "click" };
+  | { type: "click_cta"; value: string; attribution?: "click" }
+  | { type: "purchase"; value: string; attribution?: "view" | "click" };
 
 type ExperimentVariant = {
   id: string;
@@ -95,7 +96,7 @@ type Scenario = {
 };
 
 const PAGE_TYPES = ["product", "blog_post", "other"] as const;
-const GOAL_TYPES = ["path_prefix", "path_exact", "url_contains", "click_cta"] as const;
+const GOAL_TYPES = ["path_prefix", "path_exact", "url_contains", "click_cta", "purchase"] as const;
 
 function stripUndefinedDeep<T>(obj: T): T {
   if (Array.isArray(obj)) {
@@ -582,6 +583,10 @@ export default function ScenariosPage() {
     // click_cta は value 不要（CTA クリック自体が CV）
     if (goalType === "click_cta") {
       return { type: "click_cta", value: "click", attribution: "click" } as any;
+    }
+    // purchase も value 不要（購入=CV。施策に接触した訪問者の購入を計上）
+    if (goalType === "purchase") {
+      return { type: "purchase", value: "purchase", attribution: goalAttribution } as any;
     }
     const v = String(goalValue || "").trim();
     if (!v) return null;
@@ -2017,12 +2022,13 @@ export default function ScenariosPage() {
                     コンバージョン計測を有効化
                   </label>
                   <select className="input" style={{ width: 220 }} disabled={!goalEnabled} value={goalType} onChange={(e) => setGoalType(e.target.value as any)}>
+                    <option value="purchase">🛒 購入完了（CV = 購入）</option>
                     <option value="click_cta">🖱️ クリックCV（CTA クリック = CV）</option>
                     <option value="path_prefix">URL前方一致（/thanksで始まる）</option>
                     <option value="path_exact">URLパス完全一致</option>
                     <option value="url_contains">URL部分一致（文字列を含む）</option>
                   </select>
-                  {goalType !== "click_cta" && (
+                  {goalType !== "click_cta" && goalType !== "purchase" && (
                     <input className="input" style={{ flex: 1, minWidth: 180 }} disabled={!goalEnabled} value={goalValue} onChange={(e) => setGoalValue(e.target.value)} placeholder={goalType === "path_prefix" ? "例：/thanks" : goalType === "path_exact" ? "例：/order/complete" : "例：complete"} />
                   )}
                 </div>
@@ -2031,15 +2037,16 @@ export default function ScenariosPage() {
                     <div className="small" style={{ opacity: 0.8 }}>CV計測タイミング:</div>
                     <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", fontSize: 13 }}>
                       <input type="radio" name="goalAttribution" value="view" checked={goalAttribution === "view"} onChange={() => setGoalAttribution("view")} />
-                      <span>表示ベース <span style={{ opacity: 0.65 }}>— バナーを見た後にCVページへ遷移でCV計上</span></span>
+                      <span>表示ベース <span style={{ opacity: 0.65 }}>— バナーを{goalType === "purchase" ? "見た訪問者の購入を計上" : "見た後にCVページへ遷移でCV計上"}</span></span>
                     </label>
                     <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", fontSize: 13 }}>
                       <input type="radio" name="goalAttribution" value="click" checked={goalAttribution === "click"} onChange={() => setGoalAttribution("click")} />
-                      <span>クリックベース <span style={{ opacity: 0.65 }}>— バナーをクリックした後にCVページへ遷移でCV計上</span></span>
+                      <span>クリックベース <span style={{ opacity: 0.65 }}>— バナーを{goalType === "purchase" ? "クリックした訪問者の購入を計上" : "クリックした後にCVページへ遷移でCV計上"}</span></span>
                     </label>
                   </div>
                 )}
                 <div className="small" style={{ marginTop: 6, opacity: 0.6 }}>
+                  {goalType === "purchase" && "🛒 この施策に接触（表示/クリック）した訪問者の購入をCVとして計上します。購入はWeb Pixel等で取得するため、Shopifyのサンキューページ（別ドメイン）でも計測可。CV/CVRに購入が反映されます。"}
                   {goalType === "click_cta" && "🖱️ CTAボタンのクリック自体をCV計上します。他サイトへの遷移など、遷移後の計測ができないケースに最適です。"}
                   {goalType === "path_prefix" && "✅ 入力したパスで始まるURLにアクセスしたときにCV計測（例：/thanks → /thanks, /thanks/123 が対象）"}
                   {goalType === "path_exact" && "✅ 入力したパスと完全に一致するURLにアクセスしたときにCV計測"}

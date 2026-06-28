@@ -1101,15 +1101,22 @@ export default function AnalyticsPage() {
 
   // ---- computed: シナリオファネル ----
   const funnelData = useMemo(() => {
+    // 購入完了ゴール用: シナリオ別の帰属購入数
+    const purchaseCountById = new Map<string, number>();
+    for (const r of revenueByScenario) if (r.id) purchaseCountById.set(r.id, r.count);
     return scenarios.filter((sc) => (sc.data as any)?.status !== "paused").map((sc) => {
       const rows = statRows.filter((r) => r.scenarioId === sc.id);
       const imp = rows.filter((r) => r.event === "impression").reduce((s, r) => s + safeNum(r.count), 0);
       const clk = rows.filter((r) => r.event === "click" || r.event === "click_link").reduce((s, r) => s + safeNum(r.count), 0);
-      const cv = rows.filter((r) => r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
+      const isPurchaseGoal = (sc.data?.goal as any)?.type === "purchase";
+      // 購入完了ゴールは CV = 帰属した購入数（Web Pixel経由。それ以外は conversion イベント）
+      const cv = isPurchaseGoal
+        ? (purchaseCountById.get(sc.id) || 0)
+        : rows.filter((r) => r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
       const cvr = imp > 0 ? Math.round((cv / imp) * 1000) / 10 : 0;
-      return { id: sc.id, name: String(sc.data?.name || sc.id), imp, clk, cv, cvr };
+      return { id: sc.id, name: String(sc.data?.name || sc.id), imp, clk, cv, cvr, isPurchaseGoal };
     }).sort((a, b) => b.cvr - a.cvr);
-  }, [scenarios, statRows]);
+  }, [scenarios, statRows, revenueByScenario]);
 
   // ---- computed: 施策比較テーブル ----
   const comparisonData = useMemo(() => [...funnelData], [funnelData]);
@@ -2714,7 +2721,7 @@ export default function AnalyticsPage() {
                         )}
                         <FunnelStep label="表示（インプレッション）" count={sc.imp} total={sc.imp} color="#2563eb" />
                         <FunnelStep label="クリック" count={sc.clk} total={sc.imp} color="#f59e0b" />
-                        <FunnelStep label="コンバージョン" count={sc.cv} total={sc.imp} color="#16a34a" />
+                        <FunnelStep label={sc.isPurchaseGoal ? "購入（CV）" : "コンバージョン"} count={sc.cv} total={sc.imp} color="#16a34a" />
                         <div style={{ marginTop: 10, display: "flex", gap: 6 }}>
                           <span className="badge" style={{ background: "rgba(22,163,74,.1)", color: "#16a34a", fontWeight: 700 }}>
                             CVR {sc.cvr}%
