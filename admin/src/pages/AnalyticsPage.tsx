@@ -1207,7 +1207,7 @@ export default function AnalyticsPage() {
       pvCount: number; totalDuration: number;
       hasConversion: boolean; hasImpression: boolean; hasPurchase: boolean;
       purchaseRevenue: number; purchaseCount: number; lastPurchaseAt: string;
-      pages: string[]; eventCount: number; firstRef: string;
+      pages: string[]; eventCount: number; firstRef: string; firstReferrerApp: string;
       isNew: boolean | null; // true=新規, false=リピート, null=不明（古いログ）
       utmSource: string; utmMedium: string; utmCampaign: string;
       sessionCount: number; // ユニークセッション数（sid単位）
@@ -1229,7 +1229,7 @@ export default function AnalyticsPage() {
     for (const l of sorted) {
       const vid = l.vid || "unknown";
       if (!map.has(vid)) {
-        map.set(vid, { vid, firstSeen: l.createdAt || "", lastSeen: l.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, lastPurchaseAt: "", pages: [], eventCount: 0, firstRef: "", isNew: null, utmSource: "", utmMedium: "", utmCampaign: "", sessionCount: 0, spanDays: 0, daysSinceLastVisit: 0 });
+        map.set(vid, { vid, firstSeen: l.createdAt || "", lastSeen: l.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, lastPurchaseAt: "", pages: [], eventCount: 0, firstRef: "", firstReferrerApp: "", isNew: null, utmSource: "", utmMedium: "", utmCampaign: "", sessionCount: 0, spanDays: 0, daysSinceLastVisit: 0 });
         vidSids.set(vid, new Set());
         vidDays.set(vid, new Set());
       }
@@ -1245,6 +1245,7 @@ export default function AnalyticsPage() {
         v.pvCount++;
         if (l.path && !v.pages.includes(l.path)) v.pages.push(l.path);
         if (!v.firstRef && l.ref) v.firstRef = l.ref;
+        if (!v.firstReferrerApp && l.referrer_app) v.firstReferrerApp = l.referrer_app;
         // 最初の pageview の is_new を採用（null=古いログで情報なし）
         if (v.isNew === null && typeof l.is_new === "boolean") v.isNew = l.is_new;
         // UTM パラメータは最初の pageview を採用
@@ -1266,7 +1267,7 @@ export default function AnalyticsPage() {
       if (!map.has(p.vid)) {
         const t = toMs(p.createdAt);
         if (t < jFromMs || t > jToMs) continue; // 期間外の購入は無視
-        map.set(p.vid, { vid: p.vid, firstSeen: p.createdAt || "", lastSeen: p.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, lastPurchaseAt: "", pages: [], eventCount: 0, firstRef: "", isNew: null, utmSource: "", utmMedium: "", utmCampaign: "", sessionCount: 1, spanDays: 0, daysSinceLastVisit: 0 });
+        map.set(p.vid, { vid: p.vid, firstSeen: p.createdAt || "", lastSeen: p.createdAt || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, lastPurchaseAt: "", pages: [], eventCount: 0, firstRef: "", firstReferrerApp: "", isNew: null, utmSource: "", utmMedium: "", utmCampaign: "", sessionCount: 1, spanDays: 0, daysSinceLastVisit: 0 });
         vidSids.set(p.vid, new Set());
       }
       const v = map.get(p.vid)!;
@@ -1281,7 +1282,7 @@ export default function AnalyticsPage() {
       if (!map.has(vid)) {
         const t = toMs(at);
         if (t < jFromMs || t > jToMs) continue;
-        map.set(vid, { vid, firstSeen: at || "", lastSeen: at || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, lastPurchaseAt: "", pages: [], eventCount: 0, firstRef: "", isNew: null, utmSource: "", utmMedium: "", utmCampaign: "", sessionCount: 1, spanDays: 0, daysSinceLastVisit: 0 });
+        map.set(vid, { vid, firstSeen: at || "", lastSeen: at || "", pvCount: 0, totalDuration: 0, hasConversion: false, hasImpression: false, hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0, lastPurchaseAt: "", pages: [], eventCount: 0, firstRef: "", firstReferrerApp: "", isNew: null, utmSource: "", utmMedium: "", utmCampaign: "", sessionCount: 1, spanDays: 0, daysSinceLastVisit: 0 });
         vidSids.set(vid, new Set());
       }
       map.get(vid)!.hasConversion = true;
@@ -1316,23 +1317,24 @@ export default function AnalyticsPage() {
 
   // ---- computed: 流入元（utm_source or ref）× 売上 ----
   const referrerData = useMemo(() => {
-    // utm_source → 参照元ドメイン → 直接流入 の順で流入元を判定（PV・売上で共通）
-    const resolveSource = (utmSource: string, ref: string): string => {
+    // utm_source → 参照元ドメイン → アプリ内ブラウザ(LINE等) → 直接流入 の順で判定（PV・売上で共通）
+    const resolveSource = (utmSource: string, ref: string, app?: string): string => {
       if (utmSource) return utmSource;
       if (ref) {
         try { return new URL(ref, "http://x").hostname || ref; } catch (e) { return ref; }
       }
+      if (app) return app + "(アプリ内)"; // リファラーを落とすLINE/Instagram等を救出
       return "直接流入";
     };
     const sessionMap = new Map<string, number>();
     for (const l of pvLogs) {
-      const src = resolveSource(l.utm_source, l.ref);
+      const src = resolveSource(l.utm_source, l.ref, l.referrer_app);
       sessionMap.set(src, (sessionMap.get(src) || 0) + 1);
     }
-    // 訪問者の流入元: utm_source優先、なければ最初のpageviewの参照元ドメイン
+    // 訪問者の流入元: utm_source優先、なければ最初のpageviewの参照元、なければアプリ内判定
     const vidSourceMap = new Map<string, string>();
     for (const v of visitorList) {
-      vidSourceMap.set(v.vid, resolveSource(v.utmSource, v.firstRef));
+      vidSourceMap.set(v.vid, resolveSource(v.utmSource, v.firstRef, v.firstReferrerApp));
     }
     const revenueMap = new Map<string, { revenue: number; count: number; vids: Set<string> }>();
     for (const p of purchaseLogs) {
