@@ -2481,9 +2481,9 @@ export default function AnalyticsPage() {
                     <div style={{ display: "grid", gap: 10 }}>
                       {exitStats.exitRates.map((r) => (
                         <div key={r.path}>
-                          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 3 }}>
-                            <a href={toPageUrl(r.path) || undefined} target="_blank" rel="noreferrer" className="small" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#374151", textDecoration: "none" }}>{r.path}</a>
-                            <span className="small" style={{ whiteSpace: "nowrap", fontWeight: 700, color: r.rate >= 70 ? "#dc2626" : r.rate >= 40 ? "#ca8a04" : "#16a34a" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 3, alignItems: "baseline" }}>
+                            <a href={toPageUrl(r.path) || undefined} target="_blank" rel="noreferrer" title={r.path} className="small" style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#374151", textDecoration: "none" }}>{r.path}</a>
+                            <span className="small" style={{ flexShrink: 0, whiteSpace: "nowrap", fontWeight: 700, color: r.rate >= 70 ? "#dc2626" : r.rate >= 40 ? "#ca8a04" : "#16a34a" }}>
                               {r.rate.toFixed(0)}% <span style={{ fontWeight: 400, opacity: 0.5 }}>({fmtInt(r.exits)}/{fmtInt(r.pv)}PV)</span>
                             </span>
                           </div>
