@@ -2934,7 +2934,7 @@ export default function AnalyticsPage() {
                         : v.hasConversion
                           ? "CVあり"
                           : "購入なし";
-                      const sourceSummary = v.firstRef ? formatRef(v.firstRef) : "直接流入";
+                      const sourceSummary = v.firstRef ? formatRef(v.firstRef) : (v.firstReferrerApp ? v.firstReferrerApp + "(アプリ内)" : "直接流入");
                       // vid から色を生成
                       const hue = v.vid.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360;
                       return (
@@ -3250,7 +3250,7 @@ export default function AnalyticsPage() {
                                       )}
                                       {!ev.utm_source && ev.event === "pageview" && (
                                         <div className="small" style={{ opacity: 0.5 }}>
-                                          🔗 {ev.ref ? formatRef(ev.ref) : "直接流入"}
+                                          🔗 {ev.ref ? formatRef(ev.ref) : (ev.referrer_app ? ev.referrer_app + "(アプリ内)" : "直接流入")}
                                         </div>
                                       )}
                                       {(ev.geo_region || ev.weather_label) && (

@@ -909,6 +909,23 @@ function resolveStorageTarget(input, downloadURL) {
     }
     return { path: "" };
 }
+// User-Agent から「アプリ内ブラウザ」を判定（LINE/Instagram等。リファラーを落とす流入の救出用）
+function detectInAppReferrer(ua) {
+    const s = String(ua || "");
+    if (/\bLine\//i.test(s))
+        return "LINE"; // "online/" 誤検出を防ぐため \b 付き
+    if (/Instagram/i.test(s))
+        return "Instagram";
+    if (/FBAN|FBAV|FB_IAB/i.test(s))
+        return "Facebook";
+    if (/TikTok|musical_ly|BytedanceWebview/i.test(s))
+        return "TikTok";
+    if (/Twitter|TwitterAndroid/i.test(s))
+        return "X(Twitter)";
+    if (/Pinterest/i.test(s))
+        return "Pinterest";
+    return null;
+}
 function yyyyMmDdJST(d) {
     // stats_daily の day はJST基準で切る
     const parts = new Intl.DateTimeFormat("en-CA", {
@@ -3287,6 +3304,8 @@ function registerV1Routes(app) {
                 geo_city: geo.city,
                 geo_isp: geo.isp,
                 geo_conn: geo.conn,
+                // アプリ内ブラウザ(LINE/Instagram等)判定。リファラーを落とす流入を流入元集計で救出
+                referrer_app: detectInAppReferrer(req.header("user-agent")),
                 weather_code: weather.code,
                 weather_temp: weather.temp,
                 weather_label: weather.label,
