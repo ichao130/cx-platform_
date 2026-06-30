@@ -3494,6 +3494,15 @@ function registerV1Routes(app) {
             else {
                 // site scope: scope_id should be "all" (kept for consistency)
             }
+            // 購入完了ゴールのシナリオは CV = 帰属購入数（conversionイベントではなくpurchaseを数える）
+            let isPurchaseGoal = false;
+            if (body.scope === "scenario") {
+                try {
+                    const scSnap = await db.collection("scenarios").doc(body.scope_id).get();
+                    isPurchaseGoal = scSnap.exists && scSnap.data()?.goal?.type === "purchase";
+                }
+                catch (e) { /* goal取得失敗時は従来通り */ }
+            }
             const snap = await q.get();
             console.log("[/v1/stats/summary] matched docs", snap.size);
             if (snap.size > 0) {
@@ -3524,7 +3533,9 @@ function registerV1Routes(app) {
                     bucket.click_links += c;
                 else if (ev === "close")
                     bucket.closes += c;
-                else if (ev === "conversion")
+                else if (ev === "conversion" && !isPurchaseGoal)
+                    bucket.conversions += c;
+                else if (ev === "purchase" && isPurchaseGoal)
                     bucket.conversions += c;
             }
             const variants = Object.keys(countsByVariant).sort();

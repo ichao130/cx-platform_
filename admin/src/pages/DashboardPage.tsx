@@ -299,6 +299,9 @@ export default function DashboardPage() {
 
   // ---- Computed: KPI summary ----
   const summary = useMemo(() => {
+    // 購入完了ゴールのシナリオは CV = 購入数（conversionイベントではなくpurchaseを数える）
+    const isPurchaseGoal = !!abScenarioId &&
+      (scenarios.find((s) => s.id === abScenarioId)?.data as any)?.goal?.type === "purchase";
     let imp = 0, clkLink = 0, clk = 0, close = 0, cv = 0;
     for (const r of filteredRows) {
       const c = safeNum(r.count);
@@ -306,13 +309,14 @@ export default function DashboardPage() {
       if (r.event === "click_link") clkLink += c;
       if (r.event === "click") clk += c;
       if (r.event === "close") close += c;
-      if (r.event === "conversion") cv += c;
+      if (r.event === "conversion" && !isPurchaseGoal) cv += c;
+      if (r.event === "purchase" && isPurchaseGoal) cv += c;
     }
     const cvr = imp > 0 ? Math.round((cv / imp) * 10000) / 100 : 0;
     const ctr = imp > 0 ? Math.round((clkLink / imp) * 10000) / 100 : 0;
     const closeRate = imp > 0 ? Math.round((close / imp) * 10000) / 100 : 0;
     return { imp, clkLink, clk, close, cv, cvr, ctr, closeRate };
-  }, [filteredRows]);
+  }, [filteredRows, abScenarioId, scenarios]);
 
   // ---- Computed: 売上KPI ----
   const totalRevenue = useMemo(() => purchaseLogs.reduce((s, l) => s + (typeof l.revenue === "number" ? l.revenue : 0), 0), [purchaseLogs]);
@@ -335,6 +339,8 @@ export default function DashboardPage() {
 
   // ---- Computed: 日別トレンド（棒: impression、折れ線: CVR%）----
   const trendData = useMemo(() => {
+    const isPurchaseGoal = !!abScenarioId &&
+      (scenarios.find((s) => s.id === abScenarioId)?.data as any)?.goal?.type === "purchase";
     const map = new Map<string, any>();
     for (const r of filteredRows) {
       const day = String(r.day || "");
@@ -342,7 +348,8 @@ export default function DashboardPage() {
       if (!map.has(day)) map.set(day, { day, impression: 0, cv: 0, cvr: 0 });
       const obj = map.get(day);
       if (r.event === "impression") obj.impression += safeNum(r.count);
-      if (r.event === "conversion") obj.cv += safeNum(r.count);
+      if (r.event === "conversion" && !isPurchaseGoal) obj.cv += safeNum(r.count);
+      if (r.event === "purchase" && isPurchaseGoal) obj.cv += safeNum(r.count);
     }
     const out = Array.from(map.values()).sort((a, b) => a.day.localeCompare(b.day));
     for (const d of out) {
@@ -351,12 +358,16 @@ export default function DashboardPage() {
       d.label = d.day.slice(5).replace("-", "/");
     }
     return out;
-  }, [filteredRows]);
+  }, [filteredRows, abScenarioId, scenarios]);
 
   // ---- Computed: シナリオ別比較（常に全シナリオ表示） ----
   const activeScenarioIds = useMemo(() => new Set(scenarios.map((s) => s.id)), [scenarios]);
 
   const scenarioStats = useMemo(() => {
+    // 購入完了ゴールのシナリオID（CV=purchaseで数える）
+    const purchaseGoalIds = new Set(
+      scenarios.filter((s) => (s.data as any)?.goal?.type === "purchase").map((s) => s.id)
+    );
     const map = new Map<string, { id: string; name: string; imp: number; cv: number; clk: number }>();
     for (const r of rows) {
       const sid = String(r.scenarioId || "");
@@ -366,8 +377,10 @@ export default function DashboardPage() {
         map.set(sid, { id: sid, name: scenarioLabel(sc) || sid, imp: 0, cv: 0, clk: 0 });
       }
       const obj = map.get(sid)!;
+      const isPg = purchaseGoalIds.has(sid);
       if (r.event === "impression") obj.imp += safeNum(r.count);
-      if (r.event === "conversion") obj.cv += safeNum(r.count);
+      if (r.event === "conversion" && !isPg) obj.cv += safeNum(r.count);
+      if (r.event === "purchase" && isPg) obj.cv += safeNum(r.count);
       if (r.event === "click_link") obj.clk += safeNum(r.count);
     }
     return Array.from(map.values())
@@ -382,6 +395,8 @@ export default function DashboardPage() {
 
   // ---- Computed: バリアント別テーブル ----
   const summaryTable = useMemo(() => {
+    const isPurchaseGoal = !!abScenarioId &&
+      (scenarios.find((s) => s.id === abScenarioId)?.data as any)?.goal?.type === "purchase";
     const map = new Map<string, { v: string; imp: number; clk: number; cv: number }>();
     for (const r of filteredRows) {
       const v = String(r.variantId ?? "na");
@@ -390,10 +405,11 @@ export default function DashboardPage() {
       const c = safeNum(r.count);
       if (r.event === "impression") obj.imp += c;
       if (r.event === "click_link") obj.clk += c;
-      if (r.event === "conversion") obj.cv += c;
+      if (r.event === "conversion" && !isPurchaseGoal) obj.cv += c;
+      if (r.event === "purchase" && isPurchaseGoal) obj.cv += c;
     }
     return Array.from(map.values()).sort((a, b) => b.imp - a.imp);
-  }, [filteredRows]);
+  }, [filteredRows, abScenarioId, scenarios]);
 
   const selectedSite = useMemo(() => sites.find((s) => s.id === siteId), [sites, siteId]);
   const selectedSiteName = useMemo(() => siteLabel(selectedSite), [selectedSite]);
