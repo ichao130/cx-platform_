@@ -22,7 +22,7 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
-import { db } from "../firebase";
+import { db, apiPostJson } from "../firebase";
 import { SkeletonBar, SkeletonCard } from "../components/Skeleton";
 
 // ---- helpers ----
@@ -532,6 +532,96 @@ export default function AnalyticsPage() {
   const [utmFilter, setUtmFilter] = useState<string>(""); // UTMフィルター（utm_source）
   const [couponFilter, setCouponFilter] = useState<string>(""); // クーポンコードフィルター
   const [visitorDisplayLimit, setVisitorDisplayLimit] = useState<number>(100); // 表示件数
+
+  // ---- 経由ページ別 売上貢献レポート（サーバー集計・ボタン起動） ----
+  const [paReport, setPaReport] = useState<any | null>(null);
+  const [paLoading, setPaLoading] = useState(false);
+  const [paError, setPaError] = useState<string>("");
+  const [paSearch, setPaSearch] = useState<string>("");
+  const [paExcludeNoise, setPaExcludeNoise] = useState<boolean>(true); // カート/決済ページを除外
+  const [paSort, setPaSort] = useState<"contact_revenue" | "last_revenue" | "pv" | "cv_rate">("contact_revenue");
+  const [paMode, setPaMode] = useState<"total" | "new" | "repeat">("total"); // 合計 / 新規 / リピート
+
+  // ---- 訪問者タグ（ジャーニーの追跡・検索用） ----
+  const [visitorTags, setVisitorTags] = useState<Map<string, { tags: string[]; note: string }>>(new Map());
+  const [tagFilter, setTagFilter] = useState<string>(""); // タグで訪問者を絞り込み
+  const [tagInput, setTagInput] = useState<string>("");   // タグ追加入力（詳細パネル）
+  const [noteInput, setNoteInput] = useState<string>(""); // メモ入力（詳細パネル）
+  const [tagSaving, setTagSaving] = useState<boolean>(false);
+  const [tagEditorOpen, setTagEditorOpen] = useState<boolean>(false); // タグ・メモ編集欄の開閉（普段は畳む）
+
+  // 経由ページ別 売上貢献レポートを取得（サーバー集計）
+  const loadPageAttribution = useCallback(async () => {
+    if (!siteId) return;
+    setPaLoading(true);
+    setPaError("");
+    try {
+      const data = await apiPostJson(
+        "/v1/reports/page-attribution",
+        {
+          site_id: siteId,
+          day_from: isoDay(effectiveFrom),
+          day_to: isoDay(effectiveTo),
+          limit: 200,
+          ...(paExcludeNoise
+            ? { exclude_prefixes: ["/cart", "/checkout", "/checkouts", "/orders", "/account", "/thank"] }
+            : {}),
+        },
+        { siteId }
+      );
+      setPaReport(data);
+    } catch (e: any) {
+      setPaError(e?.message || String(e));
+      setPaReport(null);
+    } finally {
+      setPaLoading(false);
+    }
+  }, [siteId, effectiveFrom, effectiveTo, paExcludeNoise]);
+
+  // 訪問者タグを購読（site単位・onSnapshotでリアルタイム）
+  useEffect(() => {
+    if (!siteId) { setVisitorTags(new Map()); return; }
+    const unsub = onSnapshot(
+      query(collection(db, "visitor_tags"), where("site_id", "==", siteId)),
+      (snap) => {
+        const m = new Map<string, { tags: string[]; note: string }>();
+        snap.docs.forEach((d) => {
+          const data = d.data() as any;
+          if (data.vid) m.set(String(data.vid), { tags: Array.isArray(data.tags) ? data.tags : [], note: String(data.note || "") });
+        });
+        setVisitorTags(m);
+      },
+      (err) => console.error("[visitor_tags] query error:", err)
+    );
+    return unsub;
+  }, [siteId]);
+
+  // タグ/メモを保存（API経由）
+  const saveVisitorTags = useCallback(async (vid: string, tags: string[], note: string) => {
+    if (!siteId || !vid) return;
+    setTagSaving(true);
+    try {
+      await apiPostJson("/v1/visitors/tags/set", { site_id: siteId, vid, tags, note }, { siteId });
+      // onSnapshotで反映されるが、体感を良くするため楽観更新
+      setVisitorTags((prev) => {
+        const m = new Map(prev);
+        if (tags.length === 0 && !note.trim()) m.delete(vid);
+        else m.set(vid, { tags, note: note.trim() });
+        return m;
+      });
+    } catch (e: any) {
+      alert("タグの保存に失敗しました: " + (e?.message || String(e)));
+    } finally {
+      setTagSaving(false);
+    }
+  }, [siteId]);
+
+  // サイト内の全タグ（絞り込みドロップダウン用）
+  const allTags = useMemo(() => {
+    const s = new Set<string>();
+    visitorTags.forEach((v) => v.tags.forEach((t) => s.add(t)));
+    return Array.from(s).sort();
+  }, [visitorTags]);
 
   // auth
   useEffect(() => {
@@ -1562,13 +1652,14 @@ export default function AnalyticsPage() {
     if (visitorFilter === "cv") list = list.filter((v) => v.hasConversion || v.hasPurchase);
     if (visitorFilter === "new") list = list.filter((v) => v.isNew === true);
     if (visitorFilter === "repeat") list = list.filter((v) => v.isNew === false);
+    if (tagFilter) list = list.filter((v: any) => (visitorTags.get(v.vid)?.tags || []).includes(tagFilter));
     if (utmFilter) list = list.filter((v: any) => v.utmSource === utmFilter);
     if (couponFilter) {
       const couponVids = new Set(couponStats.find((c) => c.code === couponFilter)?.vids || []);
       list = list.filter((v) => couponVids.has(v.vid));
     }
     return list.slice(0, visitorDisplayLimit);
-  }, [visitorList, visitorFilter, scenarioPurchaseVids, utmFilter, couponFilter, couponStats, visitorDisplayLimit]);
+  }, [visitorList, visitorFilter, scenarioPurchaseVids, tagFilter, visitorTags, utmFilter, couponFilter, couponStats, visitorDisplayLimit]);
 
   // ---- 選択中訪問者の全イベントを専用クエリで取得（共有データの上限に依存しない）----
   // 上限付きの journeyLogs(5000)/purchaseLogs(1000) をフィルタすると、その人の購入が
@@ -1606,6 +1697,13 @@ export default function AnalyticsPage() {
     }
     return all.sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
   }, [vidEvents, selectedVid]);
+
+  // 訪問者を選び直したらタグ入力・メモ入力をその訪問者の保存値に同期
+  useEffect(() => {
+    setTagInput("");
+    setNoteInput(selectedVid ? (visitorTags.get(selectedVid)?.note || "") : "");
+    setTagEditorOpen(false); // 訪問者を選び直したら畳んでおく
+  }, [selectedVid]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- computed: 期間内訪問者別集計（左パネルカード表示用） ----
   const filteredJourneyStats = useMemo(() => {
@@ -2537,6 +2635,144 @@ export default function AnalyticsPage() {
             </div>
           </div>
 
+          {/* ===== Section 2.4: 経由ページ別 売上貢献（コンテンツ帰属）===== */}
+          <div style={{ marginBottom: 32 }}>
+            <div className="h2" style={{ marginBottom: 6 }}>
+              🧭 経由ページ別 売上貢献 <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel} · シナリオ不要）</span>
+            </div>
+            <div className="small" style={{ opacity: 0.6, marginBottom: 14, lineHeight: 1.7 }}>
+              購入者が「購入前に見たページ」を辿って、ブログ・商品ページ等の売上貢献を可視化します。<br />
+              <b>接触売上</b>＝そのページを経由した購入の売上（1購入が複数ページに重複計上）／<b>ラストタッチ売上</b>＝購入直前の1ページに全額。
+            </div>
+
+            <div className="card" style={{ padding: 18, background: "#fff" }}>
+              {/* コントロール */}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginBottom: 14 }}>
+                <button
+                  className="btn"
+                  onClick={loadPageAttribution}
+                  disabled={paLoading || !siteId}
+                  style={{ background: "#6366f1", color: "#fff", border: "none", padding: "8px 18px", borderRadius: 8, fontWeight: 700, cursor: paLoading ? "default" : "pointer", opacity: paLoading || !siteId ? 0.6 : 1 }}
+                >
+                  {paLoading ? "集計中…" : paReport ? "🔄 再集計" : "▶ 集計する"}
+                </button>
+                <label className="small" style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none" }}>
+                  <input type="checkbox" checked={paExcludeNoise} onChange={(e) => setPaExcludeNoise(e.target.checked)} />
+                  🛒 カート・決済ページを除外
+                </label>
+                {paReport && (
+                  <>
+                    {/* 合計 / 新規 / リピート 切替 */}
+                    <div style={{ display: "inline-flex", border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden" }}>
+                      {([["total", "合計"], ["new", "新規"], ["repeat", "リピート"]] as const).map(([val, label]) => (
+                        <button
+                          key={val}
+                          onClick={() => setPaMode(val)}
+                          className="small"
+                          style={{
+                            padding: "6px 12px", border: "none", cursor: "pointer",
+                            background: paMode === val ? "#6366f1" : "#fff",
+                            color: paMode === val ? "#fff" : "#64748b",
+                            fontWeight: paMode === val ? 700 : 400,
+                          }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <select className="small" value={paSort} onChange={(e) => setPaSort(e.target.value as any)} style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #e2e8f0" }}>
+                      <option value="contact_revenue">並び替え: 接触売上</option>
+                      <option value="last_revenue">並び替え: ラストタッチ売上</option>
+                      <option value="pv">並び替え: PV</option>
+                      <option value="cv_rate">並び替え: 貢献率</option>
+                    </select>
+                    <input
+                      className="small"
+                      placeholder="ページURLで絞り込み（例: /blog）"
+                      value={paSearch}
+                      onChange={(e) => setPaSearch(e.target.value)}
+                      style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #e2e8f0", minWidth: 200, flex: 1 }}
+                    />
+                  </>
+                )}
+              </div>
+
+              {paError && (
+                <div className="small" style={{ color: "#dc2626", marginBottom: 12 }}>集計に失敗しました: {paError}</div>
+              )}
+
+              {paLoading ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}><SkeletonBar width="90%" /><SkeletonBar width="75%" /><SkeletonBar width="80%" /></div>
+              ) : !paReport ? (
+                <div className="small" style={{ opacity: 0.55, lineHeight: 1.7 }}>
+                  「集計する」を押すと、この期間の購入者の経路をたどってページ別の売上貢献を表示します。<br />
+                  ※ 期間内のログを走査するため、少し時間がかかる場合があります。
+                </div>
+              ) : (paReport.total_purchases || 0) === 0 ? (
+                <div className="small" style={{ opacity: 0.55 }}>この期間に購入がありません。</div>
+              ) : (
+                <>
+                  <div className="small" style={{ opacity: 0.65, marginBottom: 12 }}>
+                    期間内 購入 <b>{fmtInt(paReport.total_purchases)}</b>件 · 売上 <b>¥{Math.round(paReport.total_revenue || 0).toLocaleString()}</b>
+                    <span style={{ marginLeft: 8, opacity: 0.85 }}>
+                      （新規 ¥{Math.round(paReport.total_revenue_new || 0).toLocaleString()} / リピート ¥{Math.round(paReport.total_revenue_repeat || 0).toLocaleString()}）
+                    </span>
+                    {paReport.truncated && <span style={{ color: "#ca8a04", marginLeft: 8 }}>※ データ量が多いため一部のみ集計（期間を短くすると正確になります）</span>}
+                  </div>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ borderBottom: "1px solid #e2e8f0" }}>
+                          <th style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600, opacity: 0.6 }}>ページ</th>
+                          <th style={{ textAlign: "right", padding: "6px 8px", fontWeight: 600, opacity: 0.6 }}>PV</th>
+                          <th style={{ textAlign: "right", padding: "6px 8px", fontWeight: 600, opacity: 0.6 }}>UV</th>
+                          <th style={{ textAlign: "right", padding: "6px 8px", fontWeight: 600, opacity: 0.6 }}>経由購入</th>
+                          <th style={{ textAlign: "right", padding: "6px 8px", fontWeight: 600, opacity: 0.6, color: "#4f46e5" }}>接触売上</th>
+                          <th style={{ textAlign: "right", padding: "6px 8px", fontWeight: 600, opacity: 0.6, color: "#16a34a" }}>ラストタッチ売上</th>
+                          <th style={{ textAlign: "right", padding: "6px 8px", fontWeight: 600, opacity: 0.6 }}>貢献率</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(() => {
+                          // モードに応じて表示する売上/購入者を切替
+                          const cRev = (r: any) => paMode === "new" ? r.contact_revenue_new : paMode === "repeat" ? r.contact_revenue_repeat : r.contact_revenue;
+                          const lRev = (r: any) => paMode === "new" ? r.last_revenue_new : paMode === "repeat" ? r.last_revenue_repeat : r.last_revenue;
+                          const cBuyers = (r: any) => paMode === "new" ? r.contact_purchasers_new : paMode === "repeat" ? r.contact_purchasers_repeat : r.contact_purchasers;
+                          const sortVal = (r: any) => paSort === "contact_revenue" ? cRev(r) : paSort === "last_revenue" ? lRev(r) : paSort === "pv" ? r.pv : r.cv_rate;
+                          const kw = paSearch.trim().toLowerCase();
+                          const list = (paReport.pages as any[])
+                            .filter((r) => !kw || String(r.path).toLowerCase().includes(kw) || (() => { try { return decodeURIComponent(r.path).toLowerCase().includes(kw); } catch { return false; } })())
+                            // モードで絞った時は、そのモードの売上が0のページは隠す（新規/リピートビューを見やすく）
+                            .filter((r) => paMode === "total" || cRev(r) > 0 || lRev(r) > 0)
+                            .slice()
+                            .sort((a, b) => (Number(sortVal(b)) - Number(sortVal(a))) || (b.pv - a.pv));
+                          if (!list.length) return (
+                            <tr><td colSpan={7} style={{ padding: "12px 8px", opacity: 0.5 }}>該当ページなし</td></tr>
+                          );
+                          return list.map((r) => (
+                            <tr key={r.path} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                              <td style={{ padding: "6px 8px", maxWidth: 340 }}>
+                                <a href={toPageUrl(r.path) || undefined} target="_blank" rel="noreferrer" title={r.path} style={{ color: "#374151", textDecoration: "none", wordBreak: "break-all", lineHeight: 1.4 }}>
+                                  {(() => { try { return decodeURIComponent(r.path); } catch { return r.path; } })()}
+                                </a>
+                              </td>
+                              <td style={{ textAlign: "right", padding: "6px 8px", opacity: 0.7 }}>{fmtInt(r.pv)}</td>
+                              <td style={{ textAlign: "right", padding: "6px 8px", opacity: 0.7 }}>{fmtInt(r.uv)}</td>
+                              <td style={{ textAlign: "right", padding: "6px 8px", opacity: 0.7 }}>{fmtInt(cBuyers(r))}人</td>
+                              <td style={{ textAlign: "right", padding: "6px 8px", fontWeight: 700, color: "#4f46e5" }}>¥{Math.round(cRev(r) || 0).toLocaleString()}</td>
+                              <td style={{ textAlign: "right", padding: "6px 8px", fontWeight: 700, color: "#16a34a" }}>¥{Math.round(lRev(r) || 0).toLocaleString()}</td>
+                              <td style={{ textAlign: "right", padding: "6px 8px", fontWeight: 600, color: r.cv_rate >= 5 ? "#16a34a" : r.cv_rate >= 1 ? "#ca8a04" : "#94a3b8" }}>{r.cv_rate}%</td>
+                            </tr>
+                          ));
+                        })()}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+
           {/* ===== Section 2.5: 地域分析（GeoIP）===== */}
           <div style={{ marginBottom: 32 }}>
             <div className="h2" style={{ marginBottom: 14 }}>
@@ -2745,12 +2981,13 @@ export default function AnalyticsPage() {
                         const revPct = totalRevenue > 0 ? (r.revenue / totalRevenue) * 100 : 0;
                         return (
                           <div key={r.name} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                            <div style={{ minWidth: 140, fontSize: 13, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</div>
-                            <div style={{ flex: 1, height: 8, background: "rgba(15,23,42,.07)", borderRadius: 99, overflow: "hidden" }}>
+                            {/* ラベルは固定幅＋縮小禁止（長い施策名で幅が伸びるとバーの起点がズレるため） */}
+                            <div title={r.name} style={{ width: 140, flexShrink: 0, fontSize: 13, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</div>
+                            <div style={{ flex: 1, minWidth: 0, height: 8, background: "rgba(15,23,42,.07)", borderRadius: 99, overflow: "hidden" }}>
                               <div style={{ height: "100%", width: `${revPct}%`, background: r.name === "（施策なし）" ? "#94a3b8" : "#22c55e", borderRadius: 99, transition: "width .4s ease" }} />
                             </div>
-                            <div style={{ minWidth: 100, fontSize: 13, fontWeight: 600, textAlign: "right" }}>¥{Math.round(r.revenue).toLocaleString()}</div>
-                            <div style={{ minWidth: 40, fontSize: 12, color: "#94a3b8", textAlign: "right" }}>{r.count}件</div>
+                            <div style={{ width: 100, flexShrink: 0, fontSize: 13, fontWeight: 600, textAlign: "right" }}>¥{Math.round(r.revenue).toLocaleString()}</div>
+                            <div style={{ width: 40, flexShrink: 0, fontSize: 12, color: "#94a3b8", textAlign: "right" }}>{r.count}件</div>
                           </div>
                         );
                       })}
@@ -2840,6 +3077,19 @@ export default function AnalyticsPage() {
                   </select>
                   {couponFilter && (
                     <button type="button" onClick={() => { setCouponFilter(""); setSelectedVid(null); }} style={{ fontSize: 11, padding: "4px 7px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 6, background: "transparent", cursor: "pointer", opacity: 0.6 }}>✕</button>
+                  )}
+                </div>
+              )}
+              {/* タグ絞り込み */}
+              {allTags.length > 0 && (
+                <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+                  <span className="small" style={{ opacity: 0.6, whiteSpace: "nowrap" }}>🏷 タグ</span>
+                  <select value={tagFilter} onChange={(e) => { setTagFilter(e.target.value); setSelectedVid(null); }} style={{ fontSize: 12, padding: "5px 7px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 7, background: tagFilter ? "#eef2ff" : "#fff", cursor: "pointer", maxWidth: 160, fontWeight: tagFilter ? 700 : 400, color: tagFilter ? "#4f46e5" : "inherit" }}>
+                    <option value="">すべて</option>
+                    {allTags.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                  {tagFilter && (
+                    <button type="button" onClick={() => { setTagFilter(""); setSelectedVid(null); }} style={{ fontSize: 11, padding: "4px 7px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 6, background: "transparent", cursor: "pointer", opacity: 0.6 }}>✕</button>
                   )}
                 </div>
               )}
@@ -3009,6 +3259,14 @@ export default function AnalyticsPage() {
                               <div className="small" style={{ opacity: 0.45, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                 流入元: {sourceSummary}
                               </div>
+                              {/* タグチップ */}
+                              {(visitorTags.get(v.vid)?.tags || []).length > 0 && (
+                                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 5 }}>
+                                  {(visitorTags.get(v.vid)!.tags).map((t) => (
+                                    <span key={t} style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 20, background: "#eef2ff", color: "#4f46e5" }}>🏷 {t}</span>
+                                  ))}
+                                </div>
+                              )}
                               <div className="small" style={{ opacity: isSelected ? 0.52 : 0.34, marginTop: 5, fontWeight: isSelected ? 600 : 500 }}>
                                 {isSelected ? "右側でタイムラインを表示中" : "クリックで詳細表示"}
                               </div>
@@ -3086,6 +3344,102 @@ export default function AnalyticsPage() {
                           );
                         })()}
                       </div>
+                      {/* タグ・メモ編集（普段は畳む。クリックで展開） */}
+                      <div style={{ borderBottom: "1px solid rgba(15,23,42,.06)" }}>
+                        {(() => {
+                          const cur = visitorTags.get(selectedVid) || { tags: [], note: "" };
+                          const addTag = () => {
+                            const t = tagInput.trim();
+                            if (!t) return;
+                            if (cur.tags.includes(t)) { setTagInput(""); return; }
+                            saveVisitorTags(selectedVid, [...cur.tags, t], noteInput);
+                            setTagInput("");
+                          };
+                          const removeTag = (t: string) => saveVisitorTags(selectedVid, cur.tags.filter((x) => x !== t), noteInput);
+                          return (
+                            <>
+                              {/* 折りたたみヘッダー: クリックで開閉。畳んでても既存タグは見える */}
+                              <div
+                                onClick={() => setTagEditorOpen((o) => !o)}
+                                style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 20px", cursor: "pointer", userSelect: "none" }}
+                              >
+                                <span className="small" style={{ fontWeight: 700, opacity: 0.7, whiteSpace: "nowrap" }}>🏷 タグ・メモ</span>
+                                {!tagEditorOpen && cur.tags.length > 0 && (
+                                  <span style={{ display: "flex", gap: 4, flexWrap: "wrap", flex: 1, minWidth: 0 }}>
+                                    {cur.tags.map((t) => (
+                                      <span key={t} style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 20, background: "#eef2ff", color: "#4f46e5" }}>{t}</span>
+                                    ))}
+                                  </span>
+                                )}
+                                {!tagEditorOpen && cur.tags.length === 0 && !cur.note && (
+                                  <span className="small" style={{ opacity: 0.4, flex: 1 }}>クリックで追加</span>
+                                )}
+                                {!tagEditorOpen && cur.note && cur.tags.length === 0 && (
+                                  <span className="small" style={{ opacity: 0.5, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📝 {cur.note}</span>
+                                )}
+                                {tagSaving && <span className="small" style={{ opacity: 0.5 }}>保存中…</span>}
+                                <span className="small" style={{ opacity: 0.4, marginLeft: "auto", transform: tagEditorOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }}>▾</span>
+                              </div>
+
+                              {/* 展開時のみ編集UI */}
+                              {tagEditorOpen && (
+                                <div style={{ padding: "0 20px 14px" }}>
+                                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+                                    {cur.tags.map((t) => (
+                                      <span key={t} style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 20, background: "#eef2ff", color: "#4f46e5", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                                        {t}
+                                        <button type="button" onClick={() => removeTag(t)} title="削除" style={{ border: "none", background: "transparent", cursor: "pointer", color: "#4f46e5", fontWeight: 700, padding: 0, lineHeight: 1, fontSize: 13 }}>×</button>
+                                      </span>
+                                    ))}
+                                    <input
+                                      value={tagInput}
+                                      onChange={(e) => setTagInput(e.target.value)}
+                                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTag(); } }}
+                                      placeholder="タグを追加（Enter）"
+                                      autoFocus
+                                      list="visitor-tag-suggestions"
+                                      style={{ fontSize: 12, padding: "4px 8px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 6, minWidth: 140 }}
+                                    />
+                                    {/* 既存タグをサジェスト（その人に未付与のもののみ） */}
+                                    <datalist id="visitor-tag-suggestions">
+                                      {allTags.filter((t) => !cur.tags.includes(t)).map((t) => <option key={t} value={t} />)}
+                                    </datalist>
+                                    <button type="button" onClick={addTag} disabled={!tagInput.trim() || tagSaving} style={{ fontSize: 12, padding: "4px 10px", border: "none", borderRadius: 6, background: "#6366f1", color: "#fff", cursor: "pointer", fontWeight: 700, opacity: !tagInput.trim() || tagSaving ? 0.5 : 1 }}>追加</button>
+                                  </div>
+                                  {/* よく使うタグをワンクリック追加 */}
+                                  {allTags.filter((t) => !cur.tags.includes(t)).length > 0 && (
+                                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+                                      <span className="small" style={{ opacity: 0.45 }}>候補:</span>
+                                      {allTags.filter((t) => !cur.tags.includes(t)).slice(0, 12).map((t) => (
+                                        <button
+                                          key={t}
+                                          type="button"
+                                          onClick={() => saveVisitorTags(selectedVid, [...cur.tags, t], noteInput)}
+                                          disabled={tagSaving}
+                                          style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 20, background: "#fff", color: "#4f46e5", border: "1px dashed #c7d2fe", cursor: "pointer" }}
+                                        >
+                                          + {t}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
+                                  <div style={{ display: "flex", gap: 6, alignItems: "flex-end" }}>
+                                    <textarea
+                                      value={noteInput}
+                                      onChange={(e) => setNoteInput(e.target.value)}
+                                      placeholder="メモ（例: VIP・問い合わせ対応中 など）"
+                                      rows={1}
+                                      style={{ flex: 1, fontSize: 12, padding: "6px 8px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 6, resize: "vertical", fontFamily: "inherit" }}
+                                    />
+                                    <button type="button" onClick={() => saveVisitorTags(selectedVid, cur.tags, noteInput)} disabled={tagSaving || noteInput.trim() === (cur.note || "")} style={{ fontSize: 12, padding: "6px 12px", border: "none", borderRadius: 6, background: "#1f6573", color: "#fff", cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap", opacity: tagSaving || noteInput.trim() === (cur.note || "") ? 0.5 : 1 }}>メモ保存</button>
+                                  </div>
+                                </div>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
+
                       <div style={{ padding: "10px 20px", borderBottom: "1px solid rgba(15,23,42,.06)", background: "rgba(15,23,42,.015)" }}>
                         <div className="small" style={{ opacity: 0.52 }}>
                           上から順に訪問の流れを追えます。重要なイベントは色を強めて表示しています。

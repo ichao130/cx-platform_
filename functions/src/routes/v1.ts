@@ -133,6 +133,24 @@ const StatsSummaryReqSchema = z.object({
   variant_id: z.string().nullable().optional(), // null or "A"/"B"/"na"
 });
 
+// 経由ページ別 売上貢献レポート（シナリオ不要のコンテンツ帰属）
+const PageAttributionReqSchema = z.object({
+  site_id: z.string().min(1),
+  day_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  day_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  // 集計から除外したいパス接頭辞（例: "/cart", "/checkout"）。ラストタッチのノイズ除去用
+  exclude_prefixes: z.array(z.string()).optional(),
+  limit: z.number().int().positive().max(500).optional(), // 返す上位ページ数
+});
+
+// 訪問者タグ設定（ジャーニーの追跡・検索用）
+const VisitorTagsSetReqSchema = z.object({
+  site_id: z.string().min(1),
+  vid: z.string().min(1),
+  tags: z.array(z.string().trim().min(1).max(30)).max(20).default([]),
+  note: z.string().max(500).optional().default(""),
+});
+
 // Workspace management schemas
 const WorkspaceCreateReqSchema = z.object({
   name: z.string().min(1).max(80),
@@ -3415,6 +3433,8 @@ export function registerV1Routes(app: Express) {
 
         actionsSnap.forEach((doc) => {
           const a = (doc.data() || {}) as any;
+          // 論理削除済みアクションは参照を持っていても「使用中」としない（偽陽性防止）
+          if (a?.status === "deleted") return;
           const ids = new Set<string>(Array.isArray(a.mediaIds) ? a.mediaIds.map((x: any) => String(x)) : []);
           if (a?.creative?.image_media_id) ids.add(String(a.creative.image_media_id));
           if (ids.has(String(body.media_id))) {
@@ -3426,7 +3446,15 @@ export function registerV1Routes(app: Express) {
         });
 
         if (usedIn.length) {
-          return res.status(409).json({ ok: false, error: "media_in_use", usedIn });
+          // apiPostJson は非2xxで throw する（usedInは失われる）ため、
+          // どのアクションで使用中かを message にも入れて画面に出せるようにする。
+          const names = usedIn.map((u) => u.title || u.actionId).join("、 ");
+          return res.status(409).json({
+            ok: false,
+            error: "media_in_use",
+            message: `このメディアは使用中のため削除できません。使用アクション: ${names}`,
+            usedIn,
+          });
         }
       }
 
@@ -3555,11 +3583,50 @@ export function registerV1Routes(app: Express) {
 
       const scenarios: any[] = [];
 
+      // A/Bバリアント割り当て用の安定キー（vid優先、なければsid）
+      const abKey = String(
+        req.query.vid ||
+          req.query.sid ||
+          req.header("X-Visitor-Id") ||
+          req.header("X-Session-Id") ||
+          req.ip ||
+          "anonymous"
+      );
+
+      const reqUrl = String(req.query.url || req.query.path || "");
+
       for (const doc of scenarioSnap.docs) {
         const s = doc.data() as any;
 
+        // 1.4 ターゲティング: URL条件をサーバー側で評価（合致しないページには配信しない）。
+        //     サーバーが確実に取れるのは url のみのため、URL条件だけをここで判定する。
+        //     device/visitorType/loginStatus/cartStatus/UTM 等はクライアント情報が必要なため対象外。
+        if (s?.targeting?.enabled && !isTestMode) {
+          const t = normalizeScenarioTargeting(s.targeting);
+          if (t.audience.urlRules.length > 0) {
+            const urlOk = t.audience.urlRules.some((rule) => matchStringRule(reqUrl, rule));
+            if (!urlOk) continue; // このページはURL条件に合致しない → スキップ
+          }
+        }
+
+        // 1.5 A/Bテスト: experiment.enabled ならバリアントを割り当て、
+        //     そのバリアント固有の actionRefs を配信する（無ければベースにフォールバック）。
+        //     割り当ては pickVariant で vid を安定ハッシュ → 同一ユーザーは常に同じ側（sticky）。
+        let variantId: string | null = null;
+        let baseActionRefs = Array.isArray(s.actionRefs) ? s.actionRefs : [];
+        const exp = s.experiment;
+        if (exp?.enabled && Array.isArray(exp.variants) && exp.variants.length > 0) {
+          const stickyKey = exp.sticky === "sid" ? String(req.query.sid || abKey) : abKey;
+          const chosen = pickVariant(exp, stickyKey);
+          if (chosen?.id) {
+            variantId = String(chosen.id);
+            const vRefs = Array.isArray(chosen.actionRefs) ? chosen.actionRefs : [];
+            if (vRefs.length > 0) baseActionRefs = vRefs;
+          }
+        }
+
         // 2. expand actionRefs -> actions
-        const actionRefs = Array.isArray(s.actionRefs) ? s.actionRefs : [];
+        const actionRefs = baseActionRefs;
         const actions: any[] = [];
 
         for (const ref of actionRefs) {
@@ -3630,6 +3697,8 @@ export function registerV1Routes(app: Express) {
           goal: s.goal || null,
           actions,
           experiment: s.experiment || null,
+          variant_id: variantId, // A/B割り当て結果（experiment無効時はnull）。SDKがログに載せる
+          targeting: s.targeting || null, // ターゲティング条件（SDKがdevice/訪問種別/ログイン/カート/UTMを評価）
         });
       }
 
@@ -4090,6 +4159,278 @@ export function registerV1Routes(app: Express) {
     }
   });
 
+  // ── 経由ページ別 売上貢献レポート（シナリオ不要のコンテンツ帰属） ──
+  // 購入者の「購入直前までに見たページ」を辿り、ページ単位で
+  //  ・接触ベース売上（そのページを経由した購入の売上を全額計上／重複あり）
+  //  ・ラストタッチ売上（購入直前の1ページに全額／実売上按分）
+  // を集計する。ブログ等コンテンツの売上貢献の見える化が目的。
+  app.post("/v1/reports/page-attribution", async (req, res) => {
+    // CORSは必ずparse前に立てる（以降で例外が出ても"Failed to fetch"にならないように）
+    corsByAdminOrigins(req, res);
+    try {
+      const body = PageAttributionReqSchema.parse(req.body);
+      await requireWorkspaceAccessBySiteId(req, body.site_id, "dashboard", ["owner", "admin", "member"]);
+
+      const site = await pickSiteById(body.site_id);
+      if (!site) return res.status(404).json({ error: "site not found" });
+
+      const db = adminDb();
+      const fromIso = body.day_from;
+      const toIso = body.day_to + "T23:59:59Z";
+      const excludes = (body.exclude_prefixes || []).filter(Boolean);
+      const topN = body.limit ?? 100;
+      const isExcluded = (p: string) => excludes.some((pre) => p.startsWith(pre));
+
+      // 全期間の購入から各vidの「初回購入日時」を先に求める（新規/リピート判定用）。
+      // 購入イベントは疎なので1クエリで安価。既存インデックス(site_id+event+createdAt)を使用。
+      const firstPurchaseTs = new Map<string, string>();
+      {
+        const pSnap = await db.collection("logs")
+          .where("site_id", "==", body.site_id)
+          .where("event", "==", "purchase")
+          .where("createdAt", "<=", toIso)
+          .orderBy("createdAt", "asc")
+          .limit(20000)
+          .get();
+        for (const d of pSnap.docs) {
+          const pd = d.data() as any;
+          const v = String(pd.vid || "");
+          if (!v) continue;
+          if (!firstPurchaseTs.has(v)) firstPurchaseTs.set(v, String(pd.createdAt || "")); // asc順なので最初=初回
+        }
+      }
+
+      type Agg = {
+        pv: number;
+        uv: Set<string>;               // 訪問ユニークvid
+        contactVids: Set<string>;      // このページを経由して購入した人（distinct）
+        contactVidsRepeat: Set<string>;// うちリピート購入した人（distinct）
+        contactPurchases: number;      // 経由した購入回数
+        contactRevenue: number;        // 接触ベース売上（重複あり）
+        contactRevenueNew: number;     // うち新規（初回）購入分
+        contactRevenueRepeat: number;  // うちリピート購入分
+        lastPurchases: number;         // ラストタッチ購入回数
+        lastRevenue: number;           // ラストタッチ売上
+        lastRevenueNew: number;
+        lastRevenueRepeat: number;
+      };
+      const pages = new Map<string, Agg>();
+      const getAgg = (p: string): Agg => {
+        let a = pages.get(p);
+        if (!a) {
+          a = {
+            pv: 0, uv: new Set(), contactVids: new Set(), contactVidsRepeat: new Set(),
+            contactPurchases: 0, contactRevenue: 0, contactRevenueNew: 0, contactRevenueRepeat: 0,
+            lastPurchases: 0, lastRevenue: 0, lastRevenueNew: 0, lastRevenueRepeat: 0,
+          };
+          pages.set(p, a);
+        }
+        return a;
+      };
+
+      // 訪問者ごとの「直近の購入以降に見たページ（順序付き・連続重複なし）」
+      const legPages = new Map<string, string[]>();
+      const seenOrders = new Set<string>(); // order_id重複排除（同一注文の多重ログ対策）
+
+      let totalPurchases = 0;
+      let totalRevenue = 0;
+      let totalRevenueNew = 0;
+      let totalRevenueRepeat = 0;
+      let scanned = 0;
+      let truncated = false;
+      const MAX_SCAN = 60000;
+
+      // createdAt昇順でページング走査
+      let cursor: any = null;
+      while (true) {
+        let q = db.collection("logs")
+          .where("site_id", "==", body.site_id)
+          .where("createdAt", ">=", fromIso)
+          .where("createdAt", "<=", toIso)
+          .orderBy("createdAt", "asc")
+          .limit(3000);
+        if (cursor) q = q.startAfter(cursor);
+        const snap = await q.get();
+        if (snap.empty) break;
+
+        for (const d of snap.docs) {
+          const data = d.data() as any;
+          cursor = data.createdAt;
+          const vid = String(data.vid || "");
+          if (!vid) continue;
+
+          if (data.event === "pageview") {
+            const path = String(data.path || "/");
+            if (isExcluded(path)) continue;
+            const a = getAgg(path);
+            a.pv += 1;
+            a.uv.add(vid);
+            const leg = legPages.get(vid) || [];
+            if (leg[leg.length - 1] !== path) leg.push(path);
+            legPages.set(vid, leg);
+          } else if (data.event === "purchase") {
+            // 同一注文の多重ログはスキップ（leg も維持したまま）
+            const oid = data.order_id ? String(data.order_id) : "";
+            if (oid && seenOrders.has(oid)) continue;
+            if (oid) seenOrders.add(oid);
+
+            const rev = typeof data.revenue === "number" && data.revenue >= 0 ? data.revenue : 0;
+            // 新規/リピート判定: この購入日時が、そのvidの全期間初回購入日時より後ならリピート
+            const firstTs = firstPurchaseTs.get(vid);
+            const isRepeat = !!firstTs && String(data.createdAt || "") > firstTs;
+
+            totalPurchases += 1;
+            totalRevenue += rev;
+            if (isRepeat) totalRevenueRepeat += rev; else totalRevenueNew += rev;
+
+            const leg = legPages.get(vid) || [];
+            // 接触ベース: 購入直前までに見た全ページに全額計上（重複あり）
+            const seen = new Set<string>();
+            for (const p of leg) {
+              if (seen.has(p)) continue;
+              seen.add(p);
+              const a = getAgg(p);
+              a.contactVids.add(vid);
+              if (isRepeat) a.contactVidsRepeat.add(vid);
+              a.contactPurchases += 1;
+              a.contactRevenue += rev;
+              if (isRepeat) a.contactRevenueRepeat += rev; else a.contactRevenueNew += rev;
+            }
+            // ラストタッチ: 直前の最後の1ページに全額
+            const last = leg[leg.length - 1];
+            if (last) {
+              const a = getAgg(last);
+              a.lastPurchases += 1;
+              a.lastRevenue += rev;
+              if (isRepeat) a.lastRevenueRepeat += rev; else a.lastRevenueNew += rev;
+            }
+            // 購入後はlegをリセット（次の購入は次のlegで帰属）
+            legPages.set(vid, []);
+          }
+        }
+
+        scanned += snap.size;
+        if (snap.size < 3000) break;
+        if (scanned >= MAX_SCAN) { truncated = true; break; }
+      }
+
+      const rows = Array.from(pages.entries()).map(([path, a]) => {
+        const uv = a.uv.size;
+        const contactPurchasers = a.contactVids.size;
+        const contactPurchasersRepeat = a.contactVidsRepeat.size;
+        return {
+          path,
+          pv: a.pv,
+          uv,
+          contact_purchasers: contactPurchasers,             // 経由した購入者数（distinct）
+          contact_purchasers_repeat: contactPurchasersRepeat, // うちリピート
+          contact_purchasers_new: contactPurchasers - contactPurchasersRepeat,
+          contact_purchases: a.contactPurchases,             // 経由した購入回数
+          contact_revenue: a.contactRevenue,                 // 接触ベース売上（重複あり）
+          contact_revenue_new: a.contactRevenueNew,          // うち新規（初回）
+          contact_revenue_repeat: a.contactRevenueRepeat,    // うちリピート
+          last_purchases: a.lastPurchases,
+          last_revenue: a.lastRevenue,
+          last_revenue_new: a.lastRevenueNew,
+          last_revenue_repeat: a.lastRevenueRepeat,
+          // 貢献率: そのページを見たユニーク訪問者のうち購入に至った割合
+          cv_rate: uv > 0 ? Number(((contactPurchasers / uv) * 100).toFixed(2)) : 0,
+        };
+      });
+      // 接触ベース売上の降順（同値はPV降順）
+      rows.sort((x, y) => y.contact_revenue - x.contact_revenue || y.pv - x.pv);
+
+      return res.json({
+        ok: true,
+        day_from: body.day_from,
+        day_to: body.day_to,
+        total_purchases: totalPurchases,
+        total_revenue: totalRevenue,
+        total_revenue_new: totalRevenueNew,
+        total_revenue_repeat: totalRevenueRepeat,
+        scanned,
+        truncated,
+        pages: rows.slice(0, topN),
+      });
+    } catch (e: any) {
+      console.error("[/v1/reports/page-attribution] error:", e);
+      return res
+        .status(
+          e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401
+          : String(e?.message || "").startsWith("workspace_access_denied:") ? 403
+          : 400
+        )
+        .json({ error: "page_attribution_failed", message: e?.message || String(e) });
+    }
+  });
+
+  app.options("/v1/reports/page-attribution", (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+      res.status(204).send("");
+    } catch (e: any) {
+      return res.status(403).send(e?.message || "forbidden");
+    }
+  });
+
+  // ── 訪問者タグの設定（ジャーニーの追跡・検索用）──────────────
+  // visitor_tags/{siteId}__{vid} に tags[] と note を upsert。
+  // 読み取りはadminがonSnapshotで直接（ルールで site メンバーのみ許可）。
+  app.post("/v1/visitors/tags/set", async (req, res) => {
+    corsByAdminOrigins(req, res);
+    try {
+      const body = VisitorTagsSetReqSchema.parse(req.body);
+      await requireWorkspaceAccessBySiteId(req, body.site_id, "dashboard", ["owner", "admin", "member"]);
+
+      const site = await pickSiteById(body.site_id);
+      if (!site) return res.status(404).json({ error: "site not found" });
+
+      const db = adminDb();
+      // タグは重複除去・空除去・整形
+      const tags = Array.from(new Set(body.tags.map((t) => t.trim()).filter(Boolean))).slice(0, 20);
+      const note = (body.note || "").trim().slice(0, 500);
+      const ref = db.collection("visitor_tags").doc(`${body.site_id}__${body.vid}`);
+
+      if (tags.length === 0 && !note) {
+        // 空なら削除（一覧に残さない）
+        await ref.delete().catch(() => {});
+        return res.json({ ok: true, deleted: true, site_id: body.site_id, vid: body.vid, tags: [], note: "" });
+      }
+
+      const payload = {
+        site_id: body.site_id,
+        vid: body.vid,
+        tags,
+        note,
+        updatedAt: new Date().toISOString(),
+      };
+      await ref.set(payload, { merge: true });
+      return res.json({ ok: true, ...payload });
+    } catch (e: any) {
+      console.error("[/v1/visitors/tags/set] error:", e);
+      return res
+        .status(
+          e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401
+          : String(e?.message || "").startsWith("workspace_access_denied:") ? 403
+          : 400
+        )
+        .json({ error: "visitor_tags_set_failed", message: e?.message || String(e) });
+    }
+  });
+
+  app.options("/v1/visitors/tags/set", (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+      res.status(204).send("");
+    } catch (e: any) {
+      return res.status(403).send(e?.message || "forbidden");
+    }
+  });
+
   app.options("/v1/log", (req, res) => {
     // ログはcredentials不要 → ワイルドカードCORSで常にpreflightを通す
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -4157,11 +4498,14 @@ export function registerV1Routes(app: Express) {
      - site/workspace domains を使わない
   ------------------------------ */
   app.post("/v1/ai/insight", async (req, res) => {
+    // ---- CORS + admin allowlist（ai/insight は管理画面専用） ----
+    // 注: parse前に必ずCORSヘッダを立てる。ここより後で例外が出ても、
+    //     catchのエラーレスポンスにCORSが付き、ブラウザ側が"Failed to fetch"でなく
+    //     実メッセージを読めるようにするため。
+    corsByAdminOrigins(req, res);
     try {
       const body = AiInsightReqSchema.parse(req.body);
 
-      // ---- CORS + admin allowlist（ai/insight は管理画面専用） ----
-      corsByAdminOrigins(req, res);
       await requireWorkspaceAccessBySiteId(req, body.site_id, "ai", ["owner", "admin", "member"]);
 
       // ---- site/workspace は「存在確認」だけ（domains判定には使わない） ----

@@ -119,7 +119,9 @@ export const api = onRequest(
   // コスト爆発防止: インスタンスの最大数を制限
   maxInstances: 20,
   // メモリとタイムアウトの上限設定
-  memory: "256MiB",
+  // 注: GeoLite2-City.mmdb(約63MB)をwarmインスタンスに常駐ロードするため、
+  //     256MiBだとOpenAI insight等の重い処理でOOM→"Failed to fetch"になり得る。512MiBに引き上げ。
+  memory: "512MiB",
   timeoutSeconds: 60,
   secrets: [OPENAI_API_KEY, POSTMARK_SERVER_TOKEN, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, MISOCA_CLIENT_ID, MISOCA_CLIENT_SECRET, VAPID_PRIVATE_KEY],
 },

@@ -418,6 +418,7 @@
       vid: ctx.vid,
       sid: ctx.sid
     }, ctx.site_id, ctx.site_key);
+    recordScenarioConverted(ctx.site_id, pcc.scenarioId); // 除外条件「CV済みを除外」用
   }
 
   // テンプレートの <script> タグと tpl.js フィールドを実行する
@@ -1090,6 +1091,8 @@
 
   function runActions(actions, apiBase, ctx) {
     if (!actions || !actions.length) return;
+    // 除外条件用: このシナリオを表示したことを記録（最終表示日時＋表示回数）
+    recordScenarioShown(ctx.site_id, ctx.scenario_id);
     var index = 0;
     function next() {
       var action = actions[index++];
@@ -1220,6 +1223,7 @@
             vid: ctx.vid,
             sid: ctx.sid,
           }, ctx.site_id, ctx.site_key);
+          recordScenarioConverted(ctx.site_id, g.scenario_id); // 除外条件「CV済みを除外」用
           log("[cx] conversion fired", g.scenario_id, ctx.path);
           // 消費済み（remainingには入れない）
         } else {
@@ -1280,6 +1284,141 @@
   }
   // ──────────────────────────────────────────────────────────────────
 
+  // ─── ターゲティング（audience）判定 ──────────────────────────────
+  var _cartItemCount = null; // null = 未取得（カート条件はスキップ）
+  var _loginState = null;    // "member" | "guest" | null（不明時はログイン条件をスキップ）
+
+  // 除外条件（直近表示除外/最大表示回数/CV済み除外）用: シナリオ単位の表示・CV履歴をlocalStorageに記録
+  function tgtRecKey(siteId, scenarioId) { return "cx_tgt_" + siteId + "_" + scenarioId; }
+  function readScenarioRec(siteId, scenarioId) {
+    try {
+      var raw = localStorage.getItem(tgtRecKey(siteId, scenarioId));
+      if (raw) { var o = JSON.parse(raw); return { shownAt: Number(o.shownAt || 0), impr: Number(o.impr || 0), cv: !!o.cv }; }
+    } catch (e) {}
+    return { shownAt: 0, impr: 0, cv: false };
+  }
+  function writeScenarioRec(siteId, scenarioId, rec) {
+    try { localStorage.setItem(tgtRecKey(siteId, scenarioId), JSON.stringify(rec)); } catch (e) {}
+  }
+  function recordScenarioShown(siteId, scenarioId) {
+    if (!siteId || !scenarioId) return;
+    var rec = readScenarioRec(siteId, scenarioId);
+    rec.shownAt = Date.now();
+    rec.impr = (rec.impr || 0) + 1;
+    writeScenarioRec(siteId, scenarioId, rec);
+  }
+  function recordScenarioConverted(siteId, scenarioId) {
+    if (!siteId || !scenarioId) return;
+    var rec = readScenarioRec(siteId, scenarioId);
+    rec.cv = true;
+    writeScenarioRec(siteId, scenarioId, rec);
+  }
+
+  function detectDevice() {
+    try {
+      var ua = navigator.userAgent || "";
+      return /Mobile|Android|iPhone|iPod|Windows Phone|BlackBerry|IEMobile|Opera Mini/i.test(ua) ? "sp" : "pc";
+    } catch (e) { return "pc"; }
+  }
+
+  function detectLoginState() {
+    try {
+      // Shopify: ログイン中は customer id が入る
+      if (window.__st && window.__st.cid) return "member";
+      if (window.ShopifyAnalytics && window.ShopifyAnalytics.meta && window.ShopifyAnalytics.meta.page && window.ShopifyAnalytics.meta.page.customerId) return "member";
+      if (document.body && document.body.classList && document.body.classList.contains("customer-logged-in")) return "member";
+      // Shopifyサイトで上記が無ければ未ログイン（guest）とみなす
+      if (window.Shopify || window.__st) return "guest";
+    } catch (e) {}
+    return null; // 不明 → ログイン条件は判定しない
+  }
+
+  function loadCartStatus() {
+    try {
+      fetch("/cart.js", { credentials: "same-origin" })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (cart) {
+          if (cart && typeof cart.item_count === "number") _cartItemCount = cart.item_count;
+        })
+        .catch(function () {});
+    } catch (e) {}
+  }
+
+  function matchTargetingStringRule(value, rule) {
+    var target = String(value || "");
+    var needle = String((rule && rule.value) || "");
+    if (!needle) return true;
+    if (rule.op === "equals") return target === needle;
+    if (rule.op === "startsWith") return target.indexOf(needle) === 0;
+    return target.indexOf(needle) >= 0; // contains
+  }
+
+  // scenario.targeting を評価。合致すれば true（配信可）
+  function matchTargeting(s, ctx) {
+    var t = s && s.targeting;
+    if (!t || !t.enabled) return true;
+    var a = t.audience || {};
+
+    // URL条件（contains/equals/startsWith のいずれか一致でOK）
+    var urlRules = Array.isArray(a.urlRules) ? a.urlRules.filter(function (r) { return r && r.value; }) : [];
+    if (urlRules.length > 0) {
+      var url = String(ctx.url || "");
+      var urlOk = urlRules.some(function (r) { return matchTargetingStringRule(url, r); });
+      if (!urlOk) return false;
+    }
+
+    // 訪問種別 new/returning
+    if (a.visitorType && a.visitorType !== "all") {
+      var vt = ctx._isNew ? "new" : "returning";
+      if (a.visitorType !== vt) return false;
+    }
+
+    // デバイス pc/sp
+    if (a.device && a.device !== "all") {
+      if (a.device !== detectDevice()) return false;
+    }
+
+    // ログイン状態 guest/member（不明時はスキップ）
+    if (a.loginStatus && a.loginStatus !== "all") {
+      if (_loginState && a.loginStatus !== _loginState) return false;
+    }
+
+    // カート状態 empty/hasItems（未取得時はスキップ）
+    if (a.cartStatus && a.cartStatus !== "all") {
+      if (_cartItemCount !== null) {
+        var cs = _cartItemCount > 0 ? "hasItems" : "empty";
+        if (a.cartStatus !== cs) return false;
+      }
+    }
+
+    // UTM条件（source/medium/campaign。指定があればその中のいずれかに一致必須）
+    var utm = ctx._utm || {};
+    var ur = a.utmRules || {};
+    if (Array.isArray(ur.source) && ur.source.length > 0 && ur.source.indexOf(String(utm.utm_source || "")) < 0) return false;
+    if (Array.isArray(ur.medium) && ur.medium.length > 0 && ur.medium.indexOf(String(utm.utm_medium || "")) < 0) return false;
+    if (Array.isArray(ur.campaign) && ur.campaign.length > 0 && ur.campaign.indexOf(String(utm.utm_campaign || "")) < 0) return false;
+
+    // 除外条件（直近表示除外(日) / 最大表示回数/user / CV済み除外）
+    var ex = t.exclude || {};
+    var needRec = !!ex.converted ||
+      (typeof ex.shownWithinDays === "number" && ex.shownWithinDays > 0) ||
+      (typeof ex.maxImpressionsPerUser === "number" && ex.maxImpressionsPerUser > 0);
+    if (needRec) {
+      var sid = s.scenario_id || s.id;
+      var rec = readScenarioRec(ctx.site_id, sid);
+      // CV済み除外
+      if (ex.converted && rec.cv) return false;
+      // 直近表示除外(日): 最終表示からN日以内は出さない
+      if (typeof ex.shownWithinDays === "number" && ex.shownWithinDays > 0 && rec.shownAt) {
+        if (Date.now() - rec.shownAt < ex.shownWithinDays * 24 * 60 * 60 * 1000) return false;
+      }
+      // 最大表示回数/user
+      if (typeof ex.maxImpressionsPerUser === "number" && ex.maxImpressionsPerUser > 0 && rec.impr >= ex.maxImpressionsPerUser) return false;
+    }
+
+    return true;
+  }
+
   function shouldRunScenario(s, ctx) {
     // テストモード: ステータス・頻度制限・スケジュール・ターゲティングをすべてスキップ
     if (_testMode) {
@@ -1294,6 +1433,14 @@
 
     // url rule
     if (!shouldRunUrlRule(er, ctx)) return false;
+
+    // ページ種別条件（product/blog_post/other）
+    if (er.page && Array.isArray(er.page.page_type_in) && er.page.page_type_in.length > 0) {
+      if (er.page.page_type_in.indexOf(String(ctx.page_type || "other")) < 0) return false;
+    }
+
+    // ターゲティング（URL/デバイス/訪問種別/ログイン/カート/UTM）
+    if (!matchTargeting(s, ctx)) return false;
 
     // 配信頻度チェック
     if (!checkAndMarkFrequency(s.scenario_id || s.id, er.display || null)) return false;
@@ -1618,8 +1765,14 @@
       page_type: script.getAttribute("data-page-type") || pageTypeFromPath(window.location.pathname),
       vid: getOrCreateId("cx_vid"),  // ← この呼び出しで cx_vid が新規作成される
       sid: getOrCreateSessionId("cx_sid_" + siteId),  // sessionStorage: タブ/ブラウザ終了でリセット
-      variant_id: null
+      variant_id: null,
+      _isNew: isNewVisitor,          // ターゲティング「訪問種別」判定用
+      _utm: utm                       // ターゲティング「UTM条件」判定用
     };
+
+    // ターゲティング用: ログイン状態を同期検出、カート状態を非同期取得
+    _loginState = detectLoginState();
+    loadCartStatus();
 
     // テストモード: CV計測・カート属性更新はスキップ
     if (!_testMode) {

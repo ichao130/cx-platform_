@@ -298,7 +298,8 @@ export default function ScenariosPage() {
   // entry rules
   const [pageTypeIn, setPageTypeIn] = useState<
     Array<(typeof PAGE_TYPES)[number]>
-  >(["other"]);
+  >([...PAGE_TYPES]);
+  const [pageTypeEnabled, setPageTypeEnabled] = useState(false); // ページ種別で絞るか
   const [staySec, setStaySec] = useState(3);
   const [scrollDepthPct, setScrollDepthPct] = useState(0); // 0=無効, 1-100=スクロール深度(%)
   const [triggerType, setTriggerType] = useState<'immediate' | 'stay' | 'scroll' | 'cart_add'>('stay');
@@ -545,6 +546,8 @@ export default function ScenariosPage() {
     () => ({
       page: {
         urls: urlRules.length > 0 ? urlRules.map((r) => ({ ...r, value: r.value.trim() })).filter((r) => r.value) : undefined,
+        // ページ種別で絞る（有効かつ一部選択のときのみ保存。全選択は実質無制限なので保存しない）
+        page_type_in: (pageTypeEnabled && pageTypeIn.length > 0 && pageTypeIn.length < PAGE_TYPES.length) ? pageTypeIn : undefined,
       },
       behavior: (triggerType === 'cart_add' || triggerType === 'immediate')
         ? { stay_gte_sec: 0 }
@@ -574,7 +577,7 @@ export default function ScenariosPage() {
         } : {}),
       } : undefined,
     }),
-    [pageTypeIn, staySec, scrollDepthPct, triggerType, urlRules, displayUnit, displayInterval, cartAbandonedEnabled, visitCountEnabled, visitCountMin, visitCountHours, visitCountUtmSource]
+    [pageTypeIn, pageTypeEnabled, staySec, scrollDepthPct, triggerType, urlRules, displayUnit, displayInterval, cartAbandonedEnabled, visitCountEnabled, visitCountMin, visitCountHours, visitCountUtmSource]
   );
 
 
@@ -817,7 +820,8 @@ export default function ScenariosPage() {
     setPriority(0);
     setMemo("");
 
-    setPageTypeIn(["other"]);
+    setPageTypeIn([...PAGE_TYPES]);
+    setPageTypeEnabled(false);
     setStaySec(3);
     setScrollDepthPct(0);
     setTriggerType('stay');
@@ -943,7 +947,11 @@ export default function ScenariosPage() {
     setPriority(Number(s.priority ?? 0));
     setMemo(String(s.memo || ""));
 
-    setPageTypeIn((s.entry_rules?.page?.page_type_in as any) || ["other"]);
+    {
+      const savedPt = s.entry_rules?.page?.page_type_in as any;
+      setPageTypeEnabled(Array.isArray(savedPt) && savedPt.length > 0);
+      setPageTypeIn(Array.isArray(savedPt) && savedPt.length > 0 ? savedPt : [...PAGE_TYPES]);
+    }
     setStaySec(Number(s.entry_rules?.behavior?.stay_gte_sec ?? 3));
     setScrollDepthPct(Number(s.entry_rules?.behavior?.scroll_depth_pct ?? 0));
     setTriggerType(
@@ -1628,6 +1636,32 @@ export default function ScenariosPage() {
                 )}
 
                 <div style={{ height: 14 }} />
+                <div className="row" style={{ alignItems: "center", gap: 8 }}>
+                  <label className="badge" style={{ cursor: "pointer" }}>
+                    <input type="checkbox" checked={pageTypeEnabled} onChange={(e) => setPageTypeEnabled(e.target.checked)} />
+                    ページ種別で絞る
+                  </label>
+                  <span className="small" style={{ opacity: 0.55 }}>チェックした種別のページにのみ配信</span>
+                </div>
+                {pageTypeEnabled && (
+                  <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                    {([
+                      ["product", "商品ページ"],
+                      ["blog_post", "ブログ・記事"],
+                      ["other", "その他"],
+                    ] as const).map(([pt, label]) => (
+                      <label key={pt} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", padding: "5px 10px", borderRadius: 6, border: pageTypeIn.includes(pt) ? "1.5px solid #3b82f6" : "1.5px solid rgba(15,23,42,.14)", background: pageTypeIn.includes(pt) ? "rgba(59,130,246,.08)" : "transparent" }}>
+                        <input type="checkbox" checked={pageTypeIn.includes(pt)} onChange={() => togglePageType(pt)} />
+                        <span style={{ fontSize: 12, fontWeight: 600 }}>{label}</span>
+                      </label>
+                    ))}
+                    {pageTypeIn.length === 0 && (
+                      <span className="small" style={{ color: "#ef4444", alignSelf: "center" }}>1つ以上選択してください</span>
+                    )}
+                  </div>
+                )}
+
+                <div style={{ height: 14 }} />
                 <div className="h2">配信頻度</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   {/* 配信単位 */}
@@ -1835,10 +1869,10 @@ export default function ScenariosPage() {
                 <div style={{ height: 10 }} />
                 <div className="h2">ターゲットURL条件</div>
                 <div className="row" style={{ alignItems: "center", gap: 10, flexWrap: "wrap", opacity: targetingEnabled ? 1 : 0.6 }}>
-                  <select className="input" style={{ width: 160 }} disabled={!targetingEnabled} value={targetUrlMode} onChange={(e) => setTargetUrlMode(e.target.value as any)}>
-                    <option value="contains">contains</option>
-                    <option value="equals">equals</option>
-                    <option value="startsWith">startsWith</option>
+                  <select className="input" style={{ width: 220 }} disabled={!targetingEnabled} value={targetUrlMode} onChange={(e) => setTargetUrlMode(e.target.value as any)}>
+                    <option value="contains">URLに含む</option>
+                    <option value="equals">URLと完全一致</option>
+                    <option value="startsWith">URLがこれで始まる</option>
                   </select>
                   <input className="input" style={{ flex: 1, minWidth: 220 }} disabled={!targetingEnabled} value={targetUrlValue} onChange={(e) => setTargetUrlValue(e.target.value)} placeholder="例: /products/" />
                 </div>

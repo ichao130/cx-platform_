@@ -53,7 +53,10 @@ export async function callOpenAIJson<T extends z.ZodTypeAny>(params: {
   const apiKey = process.env.OPENAI_API_KEY || "";
   if (!apiKey) throw new Error("missing OPENAI_API_KEY");
 
-  const client = new OpenAI({ apiKey });
+  // api関数のtimeoutSeconds(60s)より前にfail-fastさせる。
+  // OpenAIが遅いとインフラ504(CORSヘッダ無し)→ブラウザ側"Failed to fetch"になるため、
+  // 25s×(1リトライ)=最悪50sで打ち切り、catchでCORS付きエラーを返す。
+  const client = new OpenAI({ apiKey, timeout: 25_000, maxRetries: 1 });
 
   const sys = params.systemPrompt ?? [
     "You are an analytics assistant for a website personalization tool.",
