@@ -3593,18 +3593,22 @@ export function registerV1Routes(app: Express) {
           "anonymous"
       );
 
-      const reqUrl = String(req.query.url || req.query.path || "");
+      const reqUrl = String(req.query.url || "");
+      const reqPath = String(req.query.path || "");
 
       for (const doc of scenarioSnap.docs) {
         const s = doc.data() as any;
 
         // 1.4 ターゲティング: URL条件をサーバー側で評価（合致しないページには配信しない）。
-        //     サーバーが確実に取れるのは url のみのため、URL条件だけをここで判定する。
+        //     サーバーが確実に取れるのは url/path のみのため、URL条件だけをここで判定する。
         //     device/visitorType/loginStatus/cartStatus/UTM 等はクライアント情報が必要なため対象外。
+        //     ユーザーはパス（例:/products）を入れるので path と href の両方で判定（どちらか一致でOK）。
         if (s?.targeting?.enabled && !isTestMode) {
           const t = normalizeScenarioTargeting(s.targeting);
           if (t.audience.urlRules.length > 0) {
-            const urlOk = t.audience.urlRules.some((rule) => matchStringRule(reqUrl, rule));
+            const urlOk = t.audience.urlRules.some(
+              (rule) => matchStringRule(reqPath, rule) || (!!reqUrl && matchStringRule(reqUrl, rule))
+            );
             if (!urlOk) continue; // このページはURL条件に合致しない → スキップ
           }
         }

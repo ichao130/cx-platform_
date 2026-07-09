@@ -1360,10 +1360,14 @@
     var a = t.audience || {};
 
     // URL条件（contains/equals/startsWith のいずれか一致でOK）
+    // ユーザーはパス（例:/products）を入れるので path と href の両方で判定（どちらか一致でOK）
     var urlRules = Array.isArray(a.urlRules) ? a.urlRules.filter(function (r) { return r && r.value; }) : [];
     if (urlRules.length > 0) {
-      var url = String(ctx.url || "");
-      var urlOk = urlRules.some(function (r) { return matchTargetingStringRule(url, r); });
+      var href = String(ctx.url || "");
+      var pathOnly = String(ctx.path || "");
+      var urlOk = urlRules.some(function (r) {
+        return matchTargetingStringRule(pathOnly, r) || (href && matchTargetingStringRule(href, r));
+      });
       if (!urlOk) return false;
     }
 
