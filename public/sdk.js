@@ -1922,6 +1922,27 @@
       clearCartFlag();
     }
 
+    // UV/セッションの重複排除をSDK側で実施（サーバーは初回のみカウンタ加算＝分散カウンタ）
+    //  uv_first: その日そのブラウザで最初のpageview（localStorageの日次マーカー）
+    //  session_first: そのセッションで最初のpageview（sessionStorageマーカー）
+    var uvFirst = false, sessionFirst = false;
+    try {
+      // サーバーの stats_daily day はJST基準なので、日次マーカーもJSTで切って境界を揃える
+      var todayKey = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+      var uvMarkKey = "cx_uvday_" + siteId;
+      if (localStorage.getItem(uvMarkKey) !== todayKey) {
+        localStorage.setItem(uvMarkKey, todayKey);
+        uvFirst = true;
+      }
+    } catch (e) { uvFirst = true; } // localStorage不可の環境では毎回カウント（従来より過大方向・安全側）
+    try {
+      var sessMarkKey = "cx_sessmark_" + siteId;
+      if (!sessionStorage.getItem(sessMarkKey)) {
+        sessionStorage.setItem(sessMarkKey, "1");
+        sessionFirst = true;
+      }
+    } catch (e) { sessionFirst = true; }
+
     // pageview ログを送信
     postLog(apiBase, {
       site_id: siteId,
@@ -1935,6 +1956,8 @@
       utm_medium: utm.utm_medium || null,
       utm_campaign: utm.utm_campaign || null,
       is_new: isNewVisitor,
+      uv_first: uvFirst,
+      session_first: sessionFirst,
     }, siteId, siteKey);
 
     // 滞在時間・離脱計測

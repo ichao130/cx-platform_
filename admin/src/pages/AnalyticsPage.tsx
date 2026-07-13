@@ -1235,17 +1235,18 @@ export default function AnalyticsPage() {
       if (!d) continue;
       revByDay.set(d, (revByDay.get(d) || 0) + (typeof l.revenue === "number" ? l.revenue : 0));
     }
-    const statAgg = new Map<string, { pv: number; imp: number; cv: number; uvDoc?: any; sessionDoc?: any }>();
+    const statAgg = new Map<string, { pv: number; imp: number; cv: number; uv: number; session: number }>();
     for (const r of statRows as any[]) {
       const d = r.day;
       if (!d) continue;
       let a = statAgg.get(d);
-      if (!a) { a = { pv: 0, imp: 0, cv: 0 }; statAgg.set(d, a); }
+      if (!a) { a = { pv: 0, imp: 0, cv: 0, uv: 0, session: 0 }; statAgg.set(d, a); }
       if (r.event === "pageview") a.pv += safeNum(r.count);
       else if (r.event === "impression") a.imp += safeNum(r.count);
       else if (r.event === "conversion") a.cv += safeNum(r.count);
-      else if (r.event === "uv" && r.siteId === siteId) a.uvDoc = r;
-      else if (r.event === "session" && r.siteId === siteId) a.sessionDoc = r;
+      // UV/セッションは分散カウンタ(count)を合算。旧データ(vids/sids配列)は length でフォールバック
+      else if (r.event === "uv" && r.siteId === siteId) a.uv += safeNum(r.count) || (Array.isArray(r.vids) ? r.vids.length : 0);
+      else if (r.event === "session" && r.siteId === siteId) a.session += safeNum(r.count) || (Array.isArray(r.sids) ? r.sids.length : 0);
     }
 
     const result: TrendPoint[] = [];
@@ -1260,8 +1261,8 @@ export default function AnalyticsPage() {
       const pa = pvAgg.get(day);
       // PV: stats_daily（JST集計で正確）。UV/セッションはサーバー集計優先、無ければログから
       const pv = sa?.pv ?? 0;
-      const uv = sa?.uvDoc?.vids?.length ?? (pa ? pa.vids.size : 0);
-      const session = sa?.sessionDoc?.sids?.length ?? (pa ? pa.sids.size : 0);
+      const uv = (sa && sa.uv > 0) ? sa.uv : (pa ? pa.vids.size : 0);
+      const session = (sa && sa.session > 0) ? sa.session : (pa ? pa.sids.size : 0);
       const imp = sa?.imp ?? 0;
       const cv = sa?.cv ?? 0;
       const revenue = revByDay.get(day) || 0;
@@ -1551,15 +1552,19 @@ export default function AnalyticsPage() {
   // stats_daily の "new_vids" / "repeat_vids" ドキュメントを優先（limit制限なし）
   // デプロイ前の旧データのみ visitorList フォールバック
   const newRepeatTrend = useMemo(() => {
+    // 分散カウンタ(count)を合算。旧データ(vids配列)は length でフォールバック。シャードで複数docになるため filter+sum
+    const sumEvent = (day: string, ev: string) => statRows
+      .filter((r: any) => r.day === day && r.event === ev && r.siteId === siteId)
+      .reduce((acc: number, r: any) => acc + (safeNum(r.count) || (Array.isArray(r.vids) ? r.vids.length : 0)), 0);
     return dailyTrend.map((d) => {
-      const newDoc = statRows.find((r: any) => r.day === d.day && r.event === "new_vids" && r.siteId === siteId);
-      const repeatDoc = statRows.find((r: any) => r.day === d.day && r.event === "repeat_vids" && r.siteId === siteId);
+      const nc = sumEvent(d.day, "new_vids");
+      const rc = sumEvent(d.day, "repeat_vids");
       return {
         ...d,
-        newCount: newDoc?.vids?.length
-          ?? visitorList.filter((v) => v.isNew === true && utcIsoToJstDay(v.firstSeen) === d.day).length,
-        repeatCount: repeatDoc?.vids?.length
-          ?? visitorList.filter((v) => v.isNew === false && utcIsoToJstDay(v.firstSeen) === d.day).length,
+        newCount: nc > 0 ? nc
+          : visitorList.filter((v) => v.isNew === true && utcIsoToJstDay(v.firstSeen) === d.day).length,
+        repeatCount: rc > 0 ? rc
+          : visitorList.filter((v) => v.isNew === false && utcIsoToJstDay(v.firstSeen) === d.day).length,
       };
     });
   }, [dailyTrend, visitorList, statRows, siteId]);

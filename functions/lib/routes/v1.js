@@ -54,6 +54,16 @@ const web_push_1 = __importDefault(require("web-push"));
 const geo_1 = require("../geo");
 const weather_1 = require("../weather");
 /* =========================================
+   スケール対応: 分散カウンタ（sharded counter）
+   stats_daily の集計を単一ドキュメントに集中させると Firestore の
+   「1ドキュメント≈1書き込み/秒」上限に当たるため、書き込みを N シャードに分散する。
+   読み取りは siteId+day の範囲クエリで event 単位に count を合算するので透過的。
+========================================= */
+const STAT_SHARD_COUNT = 10;
+function pickStatShard() {
+    return Math.floor(Math.random() * STAT_SHARD_COUNT);
+}
+/* =========================================
    Schemas
 ========================================= */
 const AiReviewReqSchema = zod_1.z.object({
@@ -105,6 +115,11 @@ const LogReqSchema = zod_1.z.object({
     utm_campaign: zod_1.z.string().nullable().optional(),
     // 新規/リピート判定（SDK側でlocalStorageの cx_vid 存在有無で判定）
     is_new: zod_1.z.boolean().nullable().optional(),
+    // スケール対応: UV/セッションの重複排除をSDK側で行い、初回のみカウンタ加算する
+    //  uv_first: その日そのブラウザで最初のpageview（localStorage日次マーカー）
+    //  session_first: そのセッションで最初のpageview（sessionStorageマーカー）
+    uv_first: zod_1.z.boolean().nullable().optional(),
+    session_first: zod_1.z.boolean().nullable().optional(),
     // 購入イベント用（Shopify Web Pixelから送信）
     revenue: zod_1.z.number().nonnegative().nullable().optional(),
     order_id: zod_1.z.string().nullable().optional(),
@@ -3408,7 +3423,10 @@ function registerV1Routes(app) {
             }
             // ---- stats_daily (集計) ----
             // 重要: docId に variantId を含めないと A/B が上書きされる
-            const statsDocId = `${siteId}__${day}__${scenarioId}__${actionId}__${variantId}__${event}`;
+            // スケール対応(分散カウンタ): 単一ホットドキュメントへの集中書き込み(≈1write/s上限)を避けるため
+            //   docId末尾に __s{0..N-1} のシャードを付けて書き込みを分散する。読み取り側は
+            //   siteId+day の範囲クエリで event 単位に count を合算するため、シャードは透過的に加算される。
+            const statsDocId = `${siteId}__${day}__${scenarioId}__${actionId}__${variantId}__${event}__s${pickStatShard()}`;
             const statsRef = db.collection("stats_daily").doc(statsDocId);
             const statsPayload = {
                 siteId,
@@ -3462,43 +3480,57 @@ function registerV1Routes(app) {
                 }
                 batch.set(vrRef, vrUpdate, { merge: true });
             }
-            // UV / セッション / 新規・リピーター追跡: pageview イベントのみ vid/sid を arrayUnion で保存（自動デデュプ）
-            // journeyLogs の limit 制限に依存せずサーバー側で正確に集計する
+            // UV / セッション / 新規・リピーター追跡（pageview のみ）
+            // スケール対応: 旧実装は「1日1ドキュメントに全vidを arrayUnion」で、Firestoreの
+            //   1MiBドキュメント上限（≈日3.5万vidで破綻）とホットドキュメント競合の二重リスクがあった。
+            //   → 重複排除はSDK側（localStorage/sessionStorageの初回マーカー）で行い、初回のみ
+            //     分散カウンタ（__s{shard}）を +1 する方式に変更。読み取りは count 合算。
             if (event === "pageview" && body.vid) {
-                // UV（全訪問者）
-                const uvDocId = `${siteId}__${day}__all__all__na__uv`;
-                const uvRef = db.collection("stats_daily").doc(uvDocId);
-                batch.set(uvRef, {
-                    siteId, day,
-                    scenarioId: null, actionId: null, templateId: null, variantId: "na",
-                    event: "uv",
-                    vids: firestore_1.FieldValue.arrayUnion(body.vid),
-                    updatedAt: firestore_1.FieldValue.serverTimestamp(),
-                }, { merge: true });
-                // セッション（sid 単位でデデュプ）
-                if (body.sid) {
-                    const sessionDocId = `${siteId}__${day}__all__all__na__session`;
-                    const sessionRef = db.collection("stats_daily").doc(sessionDocId);
-                    batch.set(sessionRef, {
-                        siteId, day,
-                        scenarioId: null, actionId: null, templateId: null, variantId: "na",
-                        event: "session",
-                        sids: firestore_1.FieldValue.arrayUnion(body.sid),
-                        updatedAt: firestore_1.FieldValue.serverTimestamp(),
-                    }, { merge: true });
+                // 新SDKは uv_first/session_first を必ず送る（false含む）。未送信＝旧SDK（ブラウザキャッシュに残存）
+                // とみなし、移行期間中は従来の arrayUnion 方式にフォールバックしてUV欠損を防ぐ。
+                const hasFirstFlags = body.uv_first !== undefined || body.session_first !== undefined;
+                if (hasFirstFlags) {
+                    // ▼ 新方式: 重複排除はSDK側。初回のみ分散カウンタを +1
+                    const bumpCounter = (ev) => {
+                        const ref = db.collection("stats_daily").doc(`${siteId}__${day}__all__all__na__${ev}__s${pickStatShard()}`);
+                        batch.set(ref, {
+                            siteId, day,
+                            scenarioId: null, actionId: null, templateId: null, variantId: "na",
+                            event: ev,
+                            count: firestore_1.FieldValue.increment(1),
+                            updatedAt: firestore_1.FieldValue.serverTimestamp(),
+                        }, { merge: true });
+                    };
+                    if (body.uv_first)
+                        bumpCounter("uv");
+                    if (body.sid && body.session_first)
+                        bumpCounter("session");
+                    if (body.uv_first && typeof body.is_new === "boolean") {
+                        bumpCounter(body.is_new ? "new_vids" : "repeat_vids");
+                    }
                 }
-                // 新規 / リピーター（is_new フラグが送られてきた場合のみ）
-                if (typeof body.is_new === "boolean") {
-                    const nrEvent = body.is_new ? "new_vids" : "repeat_vids";
-                    const nrDocId = `${siteId}__${day}__all__all__na__${nrEvent}`;
-                    const nrRef = db.collection("stats_daily").doc(nrDocId);
-                    batch.set(nrRef, {
-                        siteId, day,
-                        scenarioId: null, actionId: null, templateId: null, variantId: "na",
-                        event: nrEvent,
-                        vids: firestore_1.FieldValue.arrayUnion(body.vid),
-                        updatedAt: firestore_1.FieldValue.serverTimestamp(),
+                else {
+                    // ▼ 旧方式フォールバック（旧SDK互換）: arrayUnion で vid/sid を蓄積
+                    const uvRef = db.collection("stats_daily").doc(`${siteId}__${day}__all__all__na__uv`);
+                    batch.set(uvRef, {
+                        siteId, day, scenarioId: null, actionId: null, templateId: null, variantId: "na",
+                        event: "uv", vids: firestore_1.FieldValue.arrayUnion(body.vid), updatedAt: firestore_1.FieldValue.serverTimestamp(),
                     }, { merge: true });
+                    if (body.sid) {
+                        const sessionRef = db.collection("stats_daily").doc(`${siteId}__${day}__all__all__na__session`);
+                        batch.set(sessionRef, {
+                            siteId, day, scenarioId: null, actionId: null, templateId: null, variantId: "na",
+                            event: "session", sids: firestore_1.FieldValue.arrayUnion(body.sid), updatedAt: firestore_1.FieldValue.serverTimestamp(),
+                        }, { merge: true });
+                    }
+                    if (typeof body.is_new === "boolean") {
+                        const nrEvent = body.is_new ? "new_vids" : "repeat_vids";
+                        const nrRef = db.collection("stats_daily").doc(`${siteId}__${day}__all__all__na__${nrEvent}`);
+                        batch.set(nrRef, {
+                            siteId, day, scenarioId: null, actionId: null, templateId: null, variantId: "na",
+                            event: nrEvent, vids: firestore_1.FieldValue.arrayUnion(body.vid), updatedAt: firestore_1.FieldValue.serverTimestamp(),
+                        }, { merge: true });
+                    }
                 }
             }
             await batch.commit();
