@@ -43,6 +43,13 @@ function pickStatShard(): number {
   return Math.floor(Math.random() * STAT_SHARD_COUNT);
 }
 
+// 【移行の要】UV/セッション/新規リピートの二重書き込みフラグ。
+//   true（デフォルト）: レガシー arrayUnion（完全なUVソース）＋新方式(分散カウンタ)を並行書き込み。
+//     読み取りはレガシー優先なので、移行中もダッシュボードの数値は一切ズレない・欠損しない。
+//   false: レガシー arrayUnion を停止し新方式のみ。大型トラフィック投入前にこれへ切替えて
+//     1MiBドキュメント上限リスクを断つ。環境変数 STATS_LEGACY_DUAL_WRITE=false で無停止切替可。
+const STATS_LEGACY_DUAL_WRITE = (process.env.STATS_LEGACY_DUAL_WRITE ?? "true") !== "false";
+
 /* =========================================
    Schemas
 ========================================= */
@@ -3938,31 +3945,12 @@ export function registerV1Routes(app: Express) {
       //   → 重複排除はSDK側（localStorage/sessionStorageの初回マーカー）で行い、初回のみ
       //     分散カウンタ（__s{shard}）を +1 する方式に変更。読み取りは count 合算。
       if (event === "pageview" && body.vid) {
-        // 新SDKは uv_first/session_first を必ず送る（false含む）。未送信＝旧SDK（ブラウザキャッシュに残存）
-        // とみなし、移行期間中は従来の arrayUnion 方式にフォールバックしてUV欠損を防ぐ。
-        const hasFirstFlags = body.uv_first !== undefined || body.session_first !== undefined;
+        const hasFirstFlags = body.uv_first !== undefined || body.session_first !== undefined; // 新SDK判定
 
-        if (hasFirstFlags) {
-          // ▼ 新方式: 重複排除はSDK側。初回のみ分散カウンタを +1
-          const bumpCounter = (ev: string) => {
-            const ref = db.collection("stats_daily").doc(
-              `${siteId}__${day}__all__all__na__${ev}__s${pickStatShard()}`
-            );
-            batch.set(ref, {
-              siteId, day,
-              scenarioId: null, actionId: null, templateId: null, variantId: "na",
-              event: ev,
-              count: FieldValue.increment(1),
-              updatedAt: FieldValue.serverTimestamp(),
-            }, { merge: true });
-          };
-          if (body.uv_first) bumpCounter("uv");
-          if (body.sid && body.session_first) bumpCounter("session");
-          if (body.uv_first && typeof body.is_new === "boolean") {
-            bumpCounter(body.is_new ? "new_vids" : "repeat_vids");
-          }
-        } else {
-          // ▼ 旧方式フォールバック（旧SDK互換）: arrayUnion で vid/sid を蓄積
+        // ── (A) レガシー方式（arrayUnion）: 二重書き込み中は「完全なUVソース」として常時書く ──
+        //   全SDK・全PVの vid/sid を蓄積するため、移行中の読み取りはこちらを優先＝ズレも欠損もゼロ。
+        //   STATS_LEGACY_DUAL_WRITE=false（スケール投入前に切替）で停止し1MiB上限リスクを断つ。
+        if (STATS_LEGACY_DUAL_WRITE) {
           const uvRef = db.collection("stats_daily").doc(`${siteId}__${day}__all__all__na__uv`);
           batch.set(uvRef, {
             siteId, day, scenarioId: null, actionId: null, templateId: null, variantId: "na",
@@ -3982,6 +3970,25 @@ export function registerV1Routes(app: Express) {
               siteId, day, scenarioId: null, actionId: null, templateId: null, variantId: "na",
               event: nrEvent, vids: FieldValue.arrayUnion(body.vid), updatedAt: FieldValue.serverTimestamp(),
             }, { merge: true });
+          }
+        }
+
+        // ── (B) 新方式（分散カウンタ）: 新SDKの初回フラグがある時のみ +1 ──
+        //   重複排除はSDK側(uv_first/session_first)。arrayUnion停止後はこちらが唯一のソースになる。
+        if (hasFirstFlags) {
+          const bumpCounter = (ev: string) => {
+            const ref = db.collection("stats_daily").doc(
+              `${siteId}__${day}__all__all__na__${ev}__s${pickStatShard()}`
+            );
+            batch.set(ref, {
+              siteId, day, scenarioId: null, actionId: null, templateId: null, variantId: "na",
+              event: ev, count: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp(),
+            }, { merge: true });
+          };
+          if (body.uv_first) bumpCounter("uv");
+          if (body.sid && body.session_first) bumpCounter("session");
+          if (body.uv_first && typeof body.is_new === "boolean") {
+            bumpCounter(body.is_new ? "new_vids" : "repeat_vids");
           }
         }
       }
