@@ -4274,11 +4274,19 @@ function registerV1Routes(app) {
                 return res.status(404).json({ error: "scenario not found" });
             const s = (sSnap.data() || {});
             // v1/serve と同じ: actionRefs[{actionId, enabled}]
-            const actionRefs = Array.isArray(s.actionRefs) ? s.actionRefs : [];
-            const enabledActionIds = actionRefs
+            // A/Bテスト時はアクションが experiment.variants[*].actionRefs に入りベースが空になるため、
+            // ベース＋（experiment有効時は）各バリアントの actionRefs を集約してレビュー対象にする。
+            const collectEnabledIds = (refs) => (Array.isArray(refs) ? refs : [])
                 .filter((r) => r && r.enabled)
                 .map((r) => String(r.actionId || ""))
                 .filter((id) => Boolean(id));
+            const idSet = new Set(collectEnabledIds(s.actionRefs));
+            const expR = s.experiment;
+            if (expR?.enabled && Array.isArray(expR.variants)) {
+                for (const v of expR.variants)
+                    collectEnabledIds(v?.actionRefs).forEach((id) => idSet.add(id));
+            }
+            const enabledActionIds = Array.from(idSet);
             if (!enabledActionIds.length) {
                 return res.status(400).json({ ok: false, error: "no_actions" });
             }

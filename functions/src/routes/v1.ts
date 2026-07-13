@@ -4787,11 +4787,20 @@ export function registerV1Routes(app: Express) {
       const s = (sSnap.data() || {}) as any;
 
       // v1/serve と同じ: actionRefs[{actionId, enabled}]
-      const actionRefs = Array.isArray(s.actionRefs) ? s.actionRefs : [];
-      const enabledActionIds: string[] = actionRefs
-        .filter((r: any) => r && r.enabled)
-        .map((r: any) => String(r.actionId || ""))
-        .filter((id: string) => Boolean(id));
+      // A/Bテスト時はアクションが experiment.variants[*].actionRefs に入りベースが空になるため、
+      // ベース＋（experiment有効時は）各バリアントの actionRefs を集約してレビュー対象にする。
+      const collectEnabledIds = (refs: any): string[] =>
+        (Array.isArray(refs) ? refs : [])
+          .filter((r: any) => r && r.enabled)
+          .map((r: any) => String(r.actionId || ""))
+          .filter((id: string) => Boolean(id));
+
+      const idSet = new Set<string>(collectEnabledIds(s.actionRefs));
+      const expR = s.experiment;
+      if (expR?.enabled && Array.isArray(expR.variants)) {
+        for (const v of expR.variants) collectEnabledIds(v?.actionRefs).forEach((id) => idSet.add(id));
+      }
+      const enabledActionIds: string[] = Array.from(idSet);
 
       if (!enabledActionIds.length) {
         return res.status(400).json({ ok: false, error: "no_actions" });
