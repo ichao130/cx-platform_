@@ -3,6 +3,21 @@
 
 ---
 
+## 🔔 大型案件・大口クライアント投入前の必須チェック（忘れやすい）
+
+**大型案件／大口クライアント／アクセス急増が見込まれる時は、投入前に必ず stats 集計の cutover を行うこと。**
+
+現状 `stats_daily` のUV/セッション集計は **dual-write（安全側）** で動作中（`STATS_LEGACY_DUAL_WRITE=true`）。この状態のままだと**レガシーの arrayUnion 方式が残り、大型トラフィックで Firestore の 1MiBドキュメント上限に当たってログ欠損する**。
+
+**cutover手順:**
+1. 新しい分散カウンタ（uv/session/new/repeat）がレガシーと概ね一致するか数日で確認
+2. `functions/.env.cx-platform-v1` に `STATS_LEGACY_DUAL_WRITE=false` を追加 → `firebase deploy --only functions:api --project cx-platform-v1`
+3. これで arrayUnion 停止＝1MiBリスク消滅。読み取りは自動で分散カウンタにフォールバック（無停止）
+
+詳細は本ファイル末尾「stats集計のスケール設計」節、または実装は `functions/src/routes/v1.ts` の `STATS_LEGACY_DUAL_WRITE` / `pickStatShard()`。
+
+---
+
 ## プロジェクト構成
 
 | ディレクトリ | 役割 |
