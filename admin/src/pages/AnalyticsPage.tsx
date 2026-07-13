@@ -1235,17 +1235,24 @@ export default function AnalyticsPage() {
       if (!d) continue;
       revByDay.set(d, (revByDay.get(d) || 0) + (typeof l.revenue === "number" ? l.revenue : 0));
     }
-    const statAgg = new Map<string, { pv: number; imp: number; cv: number; uvDoc?: any; sessionDoc?: any }>();
+    const statAgg = new Map<string, { pv: number; imp: number; cv: number; uvLegacy: number | null; uvCount: number; sessLegacy: number | null; sessCount: number }>();
     for (const r of statRows as any[]) {
       const d = r.day;
       if (!d) continue;
       let a = statAgg.get(d);
-      if (!a) { a = { pv: 0, imp: 0, cv: 0 }; statAgg.set(d, a); }
+      if (!a) { a = { pv: 0, imp: 0, cv: 0, uvLegacy: null, uvCount: 0, sessLegacy: null, sessCount: 0 }; statAgg.set(d, a); }
       if (r.event === "pageview") a.pv += safeNum(r.count);
       else if (r.event === "impression") a.imp += safeNum(r.count);
       else if (r.event === "conversion") a.cv += safeNum(r.count);
-      else if (r.event === "uv" && r.siteId === siteId) a.uvDoc = r;
-      else if (r.event === "session" && r.siteId === siteId) a.sessionDoc = r;
+      // UV/セッション: レガシー(vids/sids配列)があればそれを優先＝完全。無ければ分散カウンタ(count)を合算
+      else if (r.event === "uv" && r.siteId === siteId) {
+        if (Array.isArray(r.vids)) a.uvLegacy = r.vids.length;
+        else a.uvCount += safeNum(r.count);
+      }
+      else if (r.event === "session" && r.siteId === siteId) {
+        if (Array.isArray(r.sids)) a.sessLegacy = r.sids.length;
+        else a.sessCount += safeNum(r.count);
+      }
     }
 
     const result: TrendPoint[] = [];
@@ -1258,10 +1265,10 @@ export default function AnalyticsPage() {
       const label = `${cur.getMonth() + 1}/${cur.getDate()}`;
       const sa = statAgg.get(day);
       const pa = pvAgg.get(day);
-      // PV: stats_daily（JST集計で正確）。UV/セッションはサーバー集計優先、無ければログから
+      // PV: stats_daily（JST集計で正確）。UV/セッションはレガシー優先→分散カウンタ→ログの順でフォールバック
       const pv = sa?.pv ?? 0;
-      const uv = sa?.uvDoc?.vids?.length ?? (pa ? pa.vids.size : 0);
-      const session = sa?.sessionDoc?.sids?.length ?? (pa ? pa.sids.size : 0);
+      const uv = (sa && sa.uvLegacy != null) ? sa.uvLegacy : (sa && sa.uvCount > 0 ? sa.uvCount : (pa ? pa.vids.size : 0));
+      const session = (sa && sa.sessLegacy != null) ? sa.sessLegacy : (sa && sa.sessCount > 0 ? sa.sessCount : (pa ? pa.sids.size : 0));
       const imp = sa?.imp ?? 0;
       const cv = sa?.cv ?? 0;
       const revenue = revByDay.get(day) || 0;
@@ -1551,15 +1558,26 @@ export default function AnalyticsPage() {
   // stats_daily の "new_vids" / "repeat_vids" ドキュメントを優先（limit制限なし）
   // デプロイ前の旧データのみ visitorList フォールバック
   const newRepeatTrend = useMemo(() => {
+    // レガシー(vids配列)があれば優先＝完全。無ければ分散カウンタ(count)を合算（シャードで複数docになるためsum）
+    const countEvent = (day: string, ev: string) => {
+      let legacy: number | null = null;
+      let counter = 0;
+      for (const r of statRows as any[]) {
+        if (r.day !== day || r.event !== ev || r.siteId !== siteId) continue;
+        if (Array.isArray(r.vids)) legacy = r.vids.length;
+        else counter += safeNum(r.count);
+      }
+      return legacy != null ? legacy : counter;
+    };
     return dailyTrend.map((d) => {
-      const newDoc = statRows.find((r: any) => r.day === d.day && r.event === "new_vids" && r.siteId === siteId);
-      const repeatDoc = statRows.find((r: any) => r.day === d.day && r.event === "repeat_vids" && r.siteId === siteId);
+      const nc = countEvent(d.day, "new_vids");
+      const rc = countEvent(d.day, "repeat_vids");
       return {
         ...d,
-        newCount: newDoc?.vids?.length
-          ?? visitorList.filter((v) => v.isNew === true && utcIsoToJstDay(v.firstSeen) === d.day).length,
-        repeatCount: repeatDoc?.vids?.length
-          ?? visitorList.filter((v) => v.isNew === false && utcIsoToJstDay(v.firstSeen) === d.day).length,
+        newCount: nc > 0 ? nc
+          : visitorList.filter((v) => v.isNew === true && utcIsoToJstDay(v.firstSeen) === d.day).length,
+        repeatCount: rc > 0 ? rc
+          : visitorList.filter((v) => v.isNew === false && utcIsoToJstDay(v.firstSeen) === d.day).length,
       };
     });
   }, [dailyTrend, visitorList, statRows, siteId]);
