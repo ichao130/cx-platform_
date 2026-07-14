@@ -9,6 +9,7 @@ import {
 } from "firebase/firestore";
 import { db, apiPostJson } from "../firebase";
 import RightDrawer from "../components/RightDrawer";
+import MediaPickerModal from "../components/MediaPickerModal";
 
 type AnswerSummary = {
   by_key: Record<string, Record<string, number>>;
@@ -159,13 +160,14 @@ export default function QuestionsPage() {
       .map((c) => ({ label: (c.label || "").trim(), value: (c.value || slugify(c.label)).trim() }))
       .filter((c) => c.label && c.value);
     if (!f.title.trim()) { alert("質問文を入力してください"); return; }
-    if (!f.attribute_key.trim()) { alert("保存する属性キーを入力してください（例: concerns.uv）"); return; }
     if (choices.length < 1) { alert("選択肢を1つ以上入力してください"); return; }
+    // 属性キーは自動採番（未設定なら質問IDを使う。既存/AI提案で入っていればそれを尊重）
+    const attributeKey = (f.attribute_key || "").trim() || `attr_${editing.id}`;
     const payload: QuestionDoc = {
       siteId, workspaceId,
       title: f.title.trim(),
       answer_mode: f.answer_mode,
-      attribute_key: f.attribute_key.trim(),
+      attribute_key: attributeKey,
       choices,
       creative: { ...DEFAULT_CREATIVE, ...(f.creative || {}) },
       re_ask: f.re_ask,
@@ -349,6 +351,7 @@ function QuestionEditor(props: {
   const c = f.creative || {};
   const setF = (patch: Partial<QuestionDoc>) => onChange({ ...f, ...patch });
   const setC = (patch: Partial<Creative>) => onChange({ ...f, creative: { ...c, ...patch } });
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const previewChoices = useMemo(() => (f.choices || []).filter((x) => (x.label || "").trim()), [f.choices]);
 
@@ -371,8 +374,10 @@ function QuestionEditor(props: {
               </div>
               <div style={{ flex: 1 }}>
                 <div className="h2">保存する属性キー</div>
-                <input className="input" value={f.attribute_key} onChange={(e) => setF({ attribute_key: e.target.value })} placeholder="例: concerns.uv" />
-                <div className="small" style={{ opacity: 0.6, marginTop: 2 }}>ドット区切りのフラットキー。接客条件で使えます。</div>
+                <div className="input" style={{ display: "flex", alignItems: "center", opacity: 0.7, background: "rgba(15,23,42,.04)" }}>
+                  <code style={{ fontSize: 12 }}>{f.attribute_key || "（保存時に自動採番）"}</code>
+                </div>
+                <div className="small" style={{ opacity: 0.6, marginTop: 2 }}>自動で割り当てられます。接客条件（属性条件）やAI提案で自動的に使われます。</div>
               </div>
             </div>
 
@@ -415,7 +420,24 @@ function QuestionEditor(props: {
             <div>
               <div className="h2">クリエイティブ（トンマナ）</div>
               <div style={{ display: "grid", gap: 8 }}>
-                <input className="input" value={c.header_image_url || ""} onChange={(e) => setC({ header_image_url: e.target.value })} placeholder="ヘッダー画像URL（任意）https://..." />
+                {/* ヘッダー画像: イメージピッカーから選択 */}
+                <div className="row" style={{ gap: 10, alignItems: "center" }}>
+                  {c.header_image_url ? (
+                    <img src={c.header_image_url} alt="" style={{ width: 72, height: 48, objectFit: "cover", borderRadius: 6, border: "1px solid rgba(15,23,42,.12)", flexShrink: 0 }} />
+                  ) : (
+                    <div style={{ width: 72, height: 48, borderRadius: 6, border: "1px dashed rgba(15,23,42,.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, opacity: 0.5, flexShrink: 0 }}>画像なし</div>
+                  )}
+                  <button className="btn" type="button" onClick={() => setPickerOpen(true)}>🖼 画像を選択</button>
+                  {c.header_image_url && (
+                    <button className="btn" type="button" style={{ fontSize: 12 }} onClick={() => setC({ header_image_url: "" })}>クリア</button>
+                  )}
+                </div>
+                <MediaPickerModal
+                  open={pickerOpen}
+                  siteId={f.siteId}
+                  onClose={() => setPickerOpen(false)}
+                  onPick={(row) => { setC({ header_image_url: row.data.downloadURL }); setPickerOpen(false); }}
+                />
                 <div className="row" style={{ gap: 12, flexWrap: "wrap" }}>
                   <ColorField label="アクセント" value={c.accent_color || "#6366f1"} onChange={(v) => setC({ accent_color: v })} />
                   <ColorField label="背景" value={c.bg_color || "#ffffff"} onChange={(v) => setC({ bg_color: v })} />
