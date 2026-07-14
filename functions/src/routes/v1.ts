@@ -175,6 +175,22 @@ const VisitorTagsSetReqSchema = z.object({
   note: z.string().max(500).optional().default(""),
 });
 
+// 質問型接客: 回答保存（SDK→サーバー）。回答をUserIDの属性として蓄積する
+const QuestionAnswerReqSchema = z.object({
+  site_id: z.string().min(1),
+  vid: z.string().min(1),
+  question_id: z.string().min(1),
+  attribute_key: z.string().trim().min(1).max(80), // 例: "concerns.uv"（フラットなドットキー）
+  values: z.array(z.string().trim().min(1).max(80)).max(20).default([]), // 保存値（選択肢のvalue）
+  answer_mode: z.enum(["single", "multi"]).optional().default("single"),
+});
+
+// 質問型接客: 訪問者属性の取得（SDKが回答済み判定・属性ターゲティングに使う）
+const VisitorAttributesGetReqSchema = z.object({
+  site_id: z.string().min(1),
+  vid: z.string().min(1),
+});
+
 // Workspace management schemas
 const WorkspaceCreateReqSchema = z.object({
   name: z.string().min(1).max(80),
@@ -4472,6 +4488,86 @@ export function registerV1Routes(app: Express) {
     } catch (e: any) {
       return res.status(403).send(e?.message || "forbidden");
     }
+  });
+
+  // ── 質問型接客: 回答保存（SDK→サーバー・公開）──────────────────
+  //   回答をUserID(vid)の属性として蓄積。single=置き換え / multi=和集合。回答済みも記録。
+  app.post("/v1/questions/answer", async (req, res) => {
+    try {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Vary", "Origin");
+      const body = QuestionAnswerReqSchema.parse(req.body);
+
+      const site = await pickSiteById(body.site_id);
+      if (!site) return res.status(404).json({ error: "site not found" });
+
+      const db = adminDb();
+      const nowIso = new Date().toISOString();
+      const key = body.attribute_key.trim();
+      const vals = Array.from(new Set(body.values.map((v) => String(v).trim()).filter(Boolean))).slice(0, 20);
+      const ref = db.collection("visitor_attributes").doc(`${body.site_id}__${body.vid}`);
+
+      // 読んで統合して書く（single=置換 / multi=和集合、回答済みマーク）
+      await db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        const cur = (snap.exists ? snap.data() : {}) as any;
+        const attrs = (cur.attrs || {}) as Record<string, string[]>;
+        const answered = (cur.answered || {}) as Record<string, string>;
+        const existing = Array.isArray(attrs[key]) ? attrs[key] : [];
+        attrs[key] = body.answer_mode === "multi"
+          ? Array.from(new Set([...existing, ...vals])).slice(0, 50)
+          : vals;
+        answered[body.question_id] = nowIso;
+        tx.set(ref, {
+          site_id: body.site_id,
+          vid: body.vid,
+          attrs,
+          answered,
+          updatedAt: nowIso,
+        }, { merge: true });
+      });
+
+      return res.json({ ok: true, site_id: body.site_id, vid: body.vid, attribute_key: key, values: vals });
+    } catch (e: any) {
+      console.error("[/v1/questions/answer] error:", e);
+      return res.status(400).json({ error: "answer_failed", message: e?.message || String(e) });
+    }
+  });
+
+  app.options("/v1/questions/answer", (_req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type,X-Site-Id,X-Site-Key");
+    res.status(204).send("");
+  });
+
+  // ── 質問型接客: 訪問者属性の取得（SDK→サーバー・公開）────────────
+  //   SDKが起動時に取得し、回答済み判定・属性ターゲティングに使う（localStorageキャッシュ想定）。
+  app.post("/v1/visitors/attributes/get", async (req, res) => {
+    try {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Vary", "Origin");
+      const body = VisitorAttributesGetReqSchema.parse(req.body);
+
+      const db = adminDb();
+      const snap = await db.collection("visitor_attributes").doc(`${body.site_id}__${body.vid}`).get();
+      const data = (snap.exists ? snap.data() : {}) as any;
+      return res.json({
+        ok: true,
+        attrs: (data.attrs || {}) as Record<string, string[]>,
+        answered: (data.answered || {}) as Record<string, string>,
+      });
+    } catch (e: any) {
+      console.error("[/v1/visitors/attributes/get] error:", e);
+      return res.status(400).json({ error: "attributes_get_failed", message: e?.message || String(e) });
+    }
+  });
+
+  app.options("/v1/visitors/attributes/get", (_req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type,X-Site-Id,X-Site-Key");
+    res.status(204).send("");
   });
 
   app.options("/v1/log", (req, res) => {
