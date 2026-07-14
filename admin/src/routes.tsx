@@ -6,6 +6,7 @@ import { Route, Routes, Navigate } from "react-router-dom";
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const ScenariosPage = lazy(() => import("./pages/ScenariosPage"));
 const ActionsPage = lazy(() => import("./pages/ActionsPage"));
+const QuestionsPage = lazy(() => import("./pages/QuestionsPage"));
 const SitesPage = lazy(() => import("./pages/SitesPage"));
 const TemplatesPage = lazy(() => import("./pages/TemplatesPage"));
 const WorkspacesPage = lazy(() => import("./pages/WorkspacesPage"));
@@ -80,6 +81,7 @@ export default function AppRoutes({ canAccess, workspaceRole, isPlatformAdmin, w
         <Route path="/sites" element={<Guard allow={canShow(canAccess, "sites")} title="サイト"><SitesPage /></Guard>} />
         <Route path="/scenarios" element={<Guard allow={canShow(canAccess, "scenarios")} title="シナリオ"><ScenariosPage /></Guard>} />
         <Route path="/actions" element={<Guard allow={canShow(canAccess, "actions")} title="アクション"><ActionsPage /></Guard>} />
+        <Route path="/questions" element={<Guard allow={canShow(canAccess, "actions")} title="質問接客"><QuestionsPage /></Guard>} />
         <Route path="/templates" element={<Guard allow={canShow(canAccess, "templates")} title="テンプレート"><TemplatesPage /></Guard>} />
         <Route path="/media" element={<Guard allow={canShow(canAccess, "media")} title="メディア"><MediaLibraryPage /></Guard>} />
         {/* シナリオ関連 */}
