@@ -128,6 +128,19 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // ── 質問型接客（siteId 絞りクエリ → そのサイトのメンバー。書き込みはAPI/クライアント両対応）
+    match /questions/{questionId} {
+      allow read: if isSiteMember(resource.data.siteId)
+        || isMember(resource.data.workspaceId);
+      allow write: if isMember(request.resource.data.workspaceId);
+    }
+
+    // ── 訪問者属性（質問回答の蓄積。site_id 絞りクエリ → メンバーのみread。書き込みはAPIのみ）
+    match /visitor_attributes/{attrId} {
+      allow read: if isSiteMember(resource.data.site_id);
+      allow write: if false;
+    }
+
     // ── プラン（読み取りは認証済み、書き込みはAPIのみ）──────────
     match /plans/{planId} {
       allow read: if isSignedIn();

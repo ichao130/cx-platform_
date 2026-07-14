@@ -868,6 +868,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
             {canShow(canAccess, "dashboard") && <SidebarLink to="/dashboard">ダッシュボード</SidebarLink>}
             {canShow(canAccess, "scenarios") && <SidebarLink to="/scenarios">シナリオ</SidebarLink>}
             {canShow(canAccess, "actions") && <SidebarLink to="/actions">アクション</SidebarLink>}
+            {canShow(canAccess, "actions") && <SidebarLink to="/questions">質問接客</SidebarLink>}
             {canShow(canAccess, "templates") && <SidebarLink to="/templates">テンプレート</SidebarLink>}
             {canShow(canAccess, "media") && <SidebarLink to="/media">メディア</SidebarLink>}
             {canShow(canAccess, "analytics") && <SidebarLink to="/analytics">流入計測</SidebarLink>}
