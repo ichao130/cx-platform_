@@ -1294,6 +1294,34 @@
   var _cartItemCount = null; // null = 未取得（カート条件はスキップ）
   var _loginState = null;    // "member" | "guest" | null（不明時はログイン条件をスキップ）
 
+  // 質問型接客: 訪問者属性（回答の蓄積）。起動時にサーバーから取得しキャッシュ。
+  var _visitorAttrs = {};        // { "concerns.uv": ["sticky"], ... }
+  var _answeredQuestions = {};   // { questionId: ISO }
+  function loadVisitorAttributes(apiBase, ctx) {
+    try {
+      var base = String(apiBase || "").replace(/\/serve(\?.*)?$/, "/visitors/attributes/get");
+      fetch(base, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ site_id: ctx.site_id, vid: ctx.vid }),
+      })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (j) {
+          if (j && j.ok) {
+            _visitorAttrs = j.attrs || {};
+            _answeredQuestions = j.answered || {};
+          }
+        })
+        .catch(function () {});
+    } catch (e) {}
+  }
+  // 属性ターゲティング判定用: 指定キーに指定値が含まれるか
+  function visitorAttrHas(key, value) {
+    var arr = _visitorAttrs[key];
+    if (!Array.isArray(arr)) return false;
+    return arr.indexOf(String(value)) >= 0;
+  }
+
   // 除外条件（直近表示除外/最大表示回数/CV済み除外）用: シナリオ単位の表示・CV履歴をlocalStorageに記録
   function tgtRecKey(siteId, scenarioId) { return "cx_tgt_" + siteId + "_" + scenarioId; }
   function readScenarioRec(siteId, scenarioId) {
@@ -1408,6 +1436,17 @@
     if (Array.isArray(ur.medium) && ur.medium.length > 0 && ur.medium.indexOf(String(utm.utm_medium || "")) < 0) return false;
     if (Array.isArray(ur.campaign) && ur.campaign.length > 0 && ur.campaign.indexOf(String(utm.utm_campaign || "")) < 0) return false;
 
+    // 属性条件（質問型接客で蓄積した属性で絞る。例: concerns.uv に sticky を含む）
+    // attributeRules: [{ key, op:"has"|"not", value }] を全て満たす（AND）
+    var attrRules = Array.isArray(a.attributeRules) ? a.attributeRules : [];
+    for (var ai = 0; ai < attrRules.length; ai++) {
+      var ar = attrRules[ai];
+      if (!ar || !ar.key || ar.value == null || ar.value === "") continue;
+      var has = visitorAttrHas(ar.key, ar.value);
+      if (ar.op === "not") { if (has) return false; }
+      else { if (!has) return false; } // 既定 op="has"
+    }
+
     // 除外条件（直近表示除外(日) / 最大表示回数/user / CV済み除外）
     var ex = t.exclude || {};
     var needRec = !!ex.converted ||
@@ -1503,6 +1542,141 @@
     return true;
   }
 
+  // ─── 質問型接客: 回答済み判定 ─────────────────────────────────────
+  function isQuestionAnswered(siteId, q) {
+    var qid = q.question_id;
+    var answeredAt = _answeredQuestions[qid];
+    if (!answeredAt) {
+      try { answeredAt = localStorage.getItem("cx_q_" + siteId + "_" + qid) || null; } catch (e) {}
+    }
+    if (!answeredAt) return false;
+    // 再質問設定（days）: 前回回答からN日経過で再度出す
+    if (q.re_ask === "days" && Number(q.re_ask_days) > 0) {
+      var t = new Date(answeredAt).getTime();
+      if (!isNaN(t) && (Date.now() - t) >= Number(q.re_ask_days) * 86400000) return false;
+    }
+    return true; // 回答済み → 出さない
+  }
+
+  function runQuestions(questions, apiBase, ctx) {
+    for (var i = 0; i < questions.length; i++) {
+      var q = questions[i];
+      if (!q || !q.question_id) continue;
+      if (isQuestionAnswered(ctx.site_id, q)) continue;
+      renderQuestion(q, apiBase, ctx);
+      break; // 一度に1問（積み重ね防止）
+    }
+  }
+
+  // ─── 質問型接客: 描画＋回答キャプチャ ────────────────────────────
+  function renderQuestion(q, apiBase, ctx) {
+    try {
+      var c = q.creative || {};
+      var mode = q.answer_mode === "multi" ? "multi" : "single";
+      var accent = c.accent_color || "#6366f1";
+      var selected = {};
+
+      var overlay = document.createElement("div");
+      overlay.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:2147483000;display:flex;justify-content:center;padding:16px;pointer-events:none;font-family:system-ui,-apple-system,sans-serif;";
+
+      var card = document.createElement("div");
+      card.style.cssText = "position:relative;pointer-events:auto;max-width:420px;width:100%;background:" + (c.bg_color || "#ffffff") + ";color:" + (c.text_color || "#1e293b") + ";border-radius:16px;box-shadow:0 12px 40px rgba(0,0,0,.22);overflow:hidden;";
+
+      if (c.header_image_url) {
+        var img = document.createElement("img");
+        img.src = c.header_image_url;
+        img.alt = "";
+        img.style.cssText = "width:100%;display:block;max-height:140px;object-fit:cover;";
+        card.appendChild(img);
+      }
+
+      var closeBtn = document.createElement("button");
+      closeBtn.type = "button";
+      closeBtn.textContent = "✕";
+      closeBtn.style.cssText = "position:absolute;top:8px;right:8px;width:28px;height:28px;border:none;border-radius:99px;background:rgba(0,0,0,.35);color:#fff;cursor:pointer;font-size:13px;line-height:1;z-index:2;";
+      card.appendChild(closeBtn);
+
+      var bodyWrap = document.createElement("div");
+      bodyWrap.style.cssText = "padding:16px 18px 18px;";
+
+      var title = document.createElement("div");
+      title.textContent = q.title || "";
+      title.style.cssText = "font-weight:700;font-size:15px;margin-bottom:12px;line-height:1.5;";
+      bodyWrap.appendChild(title);
+
+      var choicesWrap = document.createElement("div");
+      choicesWrap.style.cssText = "display:flex;flex-direction:column;gap:8px;";
+      (q.choices || []).forEach(function (ch) {
+        if (!ch) return;
+        var val = String(ch.value != null ? ch.value : ch.label || "");
+        var b = document.createElement("button");
+        b.type = "button";
+        b.textContent = ch.label || val;
+        b.style.cssText = "text-align:left;padding:10px 14px;border-radius:10px;border:1.5px solid rgba(15,23,42,.15);background:#fff;color:#1e293b;cursor:pointer;font-size:14px;transition:all .12s;";
+        b.onclick = function () {
+          if (mode === "single") { submit([val]); return; }
+          selected[val] = !selected[val];
+          b.style.borderColor = selected[val] ? accent : "rgba(15,23,42,.15)";
+          b.style.background = selected[val] ? "rgba(99,102,241,.08)" : "#fff";
+        };
+        choicesWrap.appendChild(b);
+      });
+      bodyWrap.appendChild(choicesWrap);
+
+      if (mode === "multi") {
+        var submitBtn = document.createElement("button");
+        submitBtn.type = "button";
+        submitBtn.textContent = c.submit_label || "回答する";
+        submitBtn.style.cssText = "margin-top:12px;width:100%;padding:11px;border:none;border-radius:10px;background:" + accent + ";color:#fff;font-weight:700;cursor:pointer;font-size:14px;";
+        submitBtn.onclick = function () {
+          var vals = Object.keys(selected).filter(function (k) { return selected[k]; });
+          if (vals.length) submit(vals);
+        };
+        bodyWrap.appendChild(submitBtn);
+      }
+
+      card.appendChild(bodyWrap);
+      overlay.appendChild(card);
+      (document.body || document.documentElement).appendChild(overlay);
+
+      // 表示ログ（既存のimpressionに乗せる。action_id=question_id）
+      try {
+        postLog(apiBase, {
+          site_id: ctx.site_id, scenario_id: ctx.scenario_id, action_id: q.question_id,
+          variant_id: ctx.variant_id || null, event: "impression",
+          url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid
+        }, ctx.site_id, ctx.site_key);
+      } catch (e) {}
+
+      function submit(values) {
+        // サーバーへ回答保存
+        try {
+          var base = String(apiBase || "").replace(/\/serve(\?.*)?$/, "/questions/answer");
+          fetch(base, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              site_id: ctx.site_id, vid: ctx.vid, question_id: q.question_id,
+              attribute_key: q.attribute_key, values: values, answer_mode: mode
+            })
+          }).catch(function () {});
+        } catch (e) {}
+        // ローカル即時反映（回答済み＋属性）
+        var nowIso = new Date().toISOString();
+        _answeredQuestions[q.question_id] = nowIso;
+        if (q.attribute_key) {
+          var ex = Array.isArray(_visitorAttrs[q.attribute_key]) ? _visitorAttrs[q.attribute_key] : [];
+          _visitorAttrs[q.attribute_key] = mode === "multi"
+            ? ex.concat(values.filter(function (v) { return ex.indexOf(v) < 0; }))
+            : values;
+        }
+        try { localStorage.setItem("cx_q_" + ctx.site_id + "_" + q.question_id, nowIso); } catch (e) {}
+        close();
+      }
+      function close() { try { overlay.parentNode && overlay.parentNode.removeChild(overlay); } catch (e) {} }
+      closeBtn.onclick = close;
+    } catch (e) { log("[cx] renderQuestion error", e); }
+  }
+
   function scheduleScenario(s, ctx, apiBase) {
     var er = s.entry_rules || {};
     var waitMs = Number((er.trigger && er.trigger.ms) || 0);
@@ -1512,8 +1686,9 @@
     var scrollPct = er.behavior && er.behavior.scroll_depth_pct ? Number(er.behavior.scroll_depth_pct) : 0;
 
     var actions = Array.isArray(s.actions) ? s.actions : [];
-    if (!actions.length) {
-      log("[cx] no actions in scenario", s.scenario_id);
+    var questions = Array.isArray(s.questions) ? s.questions : [];
+    if (!actions.length && !questions.length) {
+      log("[cx] no actions/questions in scenario", s.scenario_id);
       return;
     }
     ctx.scenario_id = s.scenario_id || s.id;
@@ -1565,6 +1740,7 @@
 
     function fire() {
       runActions(actions, apiBase, ctx);
+      if (questions.length) runQuestions(questions, apiBase, ctx);
     }
 
     // 即時トリガー
@@ -1783,6 +1959,7 @@
     // ターゲティング用: ログイン状態を同期検出、カート状態を非同期取得
     _loginState = detectLoginState();
     loadCartStatus();
+    loadVisitorAttributes(apiBase, ctx); // 質問型接客: 属性を取得（回答済み判定・属性ターゲティング用）
 
     // テストモード: CV計測・カート属性更新はスキップ
     if (!_testMode) {

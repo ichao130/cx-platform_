@@ -3283,7 +3283,42 @@ function registerV1Routes(app) {
                         mount: a.mount || null,
                     });
                 }
-                if (!actions.length)
+                // 3. 質問型接客の展開（questionRefs → questions）。actionRefsの兄弟。
+                const questionRefs = Array.isArray(s.questionRefs) ? s.questionRefs : [];
+                const questions = [];
+                for (const qref of questionRefs) {
+                    if (!qref?.enabled)
+                        continue;
+                    const qSnap = await db.collection("questions").doc(qref.questionId).get();
+                    if (!qSnap.exists)
+                        continue;
+                    const q = qSnap.data();
+                    if (q.siteId && q.siteId !== site_id)
+                        continue;
+                    if (q.status === "deleted" || q.status === "archived")
+                        continue;
+                    let qTemplate = q.template || null;
+                    if (!qTemplate && q.templateId) {
+                        const tSnap = await db.collection("templates").doc(q.templateId).get();
+                        if (tSnap.exists) {
+                            const t = tSnap.data();
+                            qTemplate = { template_id: q.templateId, html: t.html || "", css: t.css || "", ...(t.js ? { js: t.js } : {}) };
+                        }
+                    }
+                    questions.push({
+                        question_id: qSnap.id,
+                        title: q.title || "",
+                        answer_mode: q.answer_mode || "single",
+                        attribute_key: q.attribute_key || "",
+                        choices: Array.isArray(q.choices) ? q.choices : [], // [{label, value}]
+                        creative: q.creative || {}, // header_image_url / トンマナ 等
+                        template: qTemplate,
+                        mount: q.mount || null,
+                        re_ask: q.re_ask || "never", // never / days
+                        re_ask_days: Number(q.re_ask_days || 0),
+                    });
+                }
+                if (!actions.length && !questions.length)
                     continue;
                 scenarios.push({
                     scenario_id: doc.id,
@@ -3293,6 +3328,7 @@ function registerV1Routes(app) {
                     schedule: s.schedule || null,
                     goal: s.goal || null,
                     actions,
+                    questions,
                     experiment: s.experiment || null,
                     variant_id: variantId, // A/B割り当て結果（experiment無効時はnull）。SDKがログに載せる
                     targeting: s.targeting || null, // ターゲティング条件（SDKがdevice/訪問種別/ログイン/カート/UTMを評価）
