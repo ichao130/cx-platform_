@@ -73,7 +73,21 @@ export default function QuestionsPage() {
   const [editing, setEditing] = useState<{ id: string; form: QuestionDoc } | null>(null);
   const [summary, setSummary] = useState<AnswerSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [ai, setAi] = useState<{ segment_suggestions: any[]; question_suggestions: any[] } | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiErr, setAiErr] = useState("");
   const navigate = useNavigate();
+
+  const loadAiSuggest = useCallback(async () => {
+    if (!siteId) return;
+    setAiLoading(true); setAiErr("");
+    try {
+      const j = await apiPostJson<any>("/v1/questions/ai/suggest", { site_id: siteId, distribution: summary?.by_key || {} }, { siteId });
+      setAi({ segment_suggestions: j.segment_suggestions || [], question_suggestions: j.question_suggestions || [] });
+    } catch (e: any) {
+      setAiErr(e?.message || String(e)); setAi(null);
+    } finally { setAiLoading(false); }
+  }, [siteId, summary]);
 
   const loadSummary = useCallback(async () => {
     if (!siteId) { setSummary(null); return; }
@@ -186,6 +200,64 @@ export default function QuestionsPage() {
           <div className="small" style={{ opacity: 0.7 }}>訪問者に質問し、回答をユーザー属性として蓄積 → 次の接客条件に使えます。</div>
         </div>
         <button className="btn btn--primary" onClick={openCreate}>+ 質問を作成</button>
+      </div>
+
+      {/* 🤖 AI提案（Phase3） */}
+      <div style={{ marginBottom: 16, padding: "12px 14px", borderRadius: 12, background: "rgba(99,102,241,.06)", border: "1px solid rgba(99,102,241,.18)" }}>
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontWeight: 700, color: "#4338ca" }}>🤖 AI提案</div>
+            <div className="small" style={{ opacity: 0.7 }}>回答分布とサイト情報から、狙うべきセグメントと次に聞くべき質問をAIが提案します。</div>
+          </div>
+          <button className="btn" onClick={loadAiSuggest} disabled={aiLoading}>{aiLoading ? "考え中…" : ai ? "🔄 再提案" : "AIに提案してもらう"}</button>
+        </div>
+        {aiErr && <div className="small" style={{ color: "#dc2626", marginTop: 8 }}>AI提案に失敗: {aiErr}</div>}
+        {ai && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 12 }}>
+            {/* セグメント提案 */}
+            <div>
+              <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>🎯 セグメント提案</div>
+              <div style={{ display: "grid", gap: 8 }}>
+                {(ai.segment_suggestions || []).length === 0 && <div className="small" style={{ opacity: 0.5 }}>提案なし（回答が溜まると精度が上がります）</div>}
+                {(ai.segment_suggestions || []).map((s, i) => (
+                  <div key={i} style={{ padding: "10px 12px", background: "#fff", borderRadius: 8, border: "1px solid rgba(15,23,42,.1)" }}>
+                    <div style={{ fontWeight: 700, fontSize: 13 }}>{s.segment_label}</div>
+                    <div className="small" style={{ opacity: 0.7, margin: "4px 0" }}>{s.why}</div>
+                    <div className="small" style={{ background: "rgba(99,102,241,.08)", borderRadius: 6, padding: "6px 8px", marginBottom: 6 }}>💡 {s.message_idea}</div>
+                    <div className="small" style={{ opacity: 0.6 }}>条件: <code>{s.attribute_key} = {s.attribute_value}</code></div>
+                    <button className="btn" style={{ marginTop: 6, fontSize: 11, padding: "3px 8px" }}
+                      onClick={() => { try { sessionStorage.setItem("cx_seg_hint", JSON.stringify({ key: s.attribute_key, value: s.attribute_value, label: s.segment_label })); } catch {} navigate("/scenarios"); }}>
+                      この層に施策を作成 →
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* 質問提案 */}
+            <div>
+              <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>❓ 質問提案</div>
+              <div style={{ display: "grid", gap: 8 }}>
+                {(ai.question_suggestions || []).length === 0 && <div className="small" style={{ opacity: 0.5 }}>提案なし</div>}
+                {(ai.question_suggestions || []).map((qs, i) => (
+                  <div key={i} style={{ padding: "10px 12px", background: "#fff", borderRadius: 8, border: "1px solid rgba(15,23,42,.1)" }}>
+                    <div style={{ fontWeight: 700, fontSize: 13 }}>{qs.title}</div>
+                    <div className="small" style={{ opacity: 0.7, margin: "4px 0" }}>{qs.why}</div>
+                    <div className="small" style={{ opacity: 0.6 }}>選択肢: {(qs.choices || []).map((c: any) => c.label).join(" / ")}</div>
+                    <button className="btn" style={{ marginTop: 6, fontSize: 11, padding: "3px 8px" }}
+                      onClick={() => {
+                        const f = emptyForm(); f.siteId = siteId; f.workspaceId = workspaceId;
+                        f.title = qs.title || ""; f.attribute_key = qs.attribute_key || "";
+                        f.choices = (qs.choices || []).map((c: any) => ({ label: String(c.label || ""), value: String(c.value || slugify(c.label || "")) }));
+                        setEditing({ id: `q_${Math.random().toString(36).slice(2, 10)}`, form: f });
+                      }}>
+                      この質問を作成 →
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {rows.length === 0 ? (

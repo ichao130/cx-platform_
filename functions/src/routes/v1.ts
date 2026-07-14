@@ -4682,6 +4682,103 @@ export function registerV1Routes(app: Express) {
     }
   });
 
+  // ── 質問型接客: AI提案（Phase3）──────────────────────────────────
+  //   サイトのAIコンテキスト＋既存質問＋回答分布を渡し、AIに
+  //   ①セグメント提案（この層にこの訴求）②新しい質問提案 を出させる。
+  //   実データが薄いうちはコンテキスト主体、溜まるほど分布主体になる。
+  app.post("/v1/questions/ai/suggest", async (req, res) => {
+    corsByAdminOrigins(req, res);
+    try {
+      const site_id = String(req.body?.site_id || "");
+      if (!site_id) return res.status(400).json({ error: "site_id required" });
+      await requireWorkspaceAccessBySiteId(req, site_id, "ai", ["owner", "admin", "member"]);
+
+      const db = adminDb();
+      const siteDoc = await db.collection("sites").doc(site_id).get();
+      if (!siteDoc.exists) return res.status(404).json({ error: "site not found" });
+      const aiContext = (siteDoc.data()?.aiContext || {}) as any;
+
+      // 既存の質問（タイトル・属性キー・選択肢）
+      const qSnap = await db.collection("questions").where("siteId", "==", site_id).get();
+      const existingQuestions = qSnap.docs
+        .map((d) => d.data() as any)
+        .filter((q) => q.status !== "deleted")
+        .map((q) => ({
+          title: q.title || "",
+          attribute_key: q.attribute_key || "",
+          choices: (Array.isArray(q.choices) ? q.choices : []).map((c: any) => ({ label: c.label, value: c.value })),
+        }))
+        .slice(0, 30);
+
+      // 回答分布（by_key）はクライアントが集計済みのものを受け取る（無ければ空）
+      const distribution = (req.body?.distribution && typeof req.body.distribution === "object") ? req.body.distribution : {};
+
+      const prompt = {
+        language: "必ず日本語で回答してください",
+        goal: "質問型接客の運用支援。ゼロパーティデータ(本人が申告した意図/関心/悩み)を活かす。",
+        site_context: {
+          sells: aiContext.sells || "不明",
+          target: aiContext.target || "不明",
+          brand_do: aiContext.brandDo || "特になし",
+          brand_dont: aiContext.brandDont || "特になし",
+          current_campaign: aiContext.campaign || "特になし",
+        },
+        existing_questions: existingQuestions,
+        answer_distribution: distribution, // { "concerns.uv": { "sticky": 124, ... } }
+        instructions: [
+          "segment_suggestions: 回答分布があれば、多い/特徴的な層を優先し『この属性の層にこの訴求』を提案。attribute_key/attribute_value は既存質問の選択肢のvalueに一致させる。",
+          "question_suggestions: 行動データだけでは意図が分からない場面を想定し、新しい質問を提案。既存質問と重複させない。choicesのvalueは英数と_のみの短いスラッグ。",
+          "site_context(何を売る/ターゲット/ブランド方針)を必ず踏まえる。brand_dontは避ける。",
+          "各提案は短く実務的に。誇大表現・英語は避ける。",
+        ],
+        constraints: { max_segment_suggestions: 4, max_question_suggestions: 3 },
+      };
+
+      const out = await callOpenAIJson({
+        model: "gpt-4.1-mini",
+        systemPrompt: "あなたはECの接客・CRMに強いデータアナリストです。ゼロパーティデータ(質問回答)と行動データを組み合わせた具体的な運用提案を、必ず日本語のJSONで返してください。",
+        input: prompt,
+        schema: z.object({
+          segment_suggestions: z.array(z.object({
+            segment_label: z.string(),
+            attribute_key: z.string(),
+            attribute_value: z.string(),
+            why: z.string(),
+            message_idea: z.string(),
+          })).max(4),
+          question_suggestions: z.array(z.object({
+            title: z.string(),
+            attribute_key: z.string(),
+            why: z.string(),
+            choices: z.array(z.object({ label: z.string(), value: z.string() })).min(2).max(6),
+          })).max(3),
+        }),
+      });
+
+      return res.json({ ok: true, ...out });
+    } catch (e: any) {
+      console.error("[/v1/questions/ai/suggest] error:", e);
+      return res
+        .status(
+          e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401
+          : String(e?.message || "").startsWith("workspace_access_denied:") ? 403
+          : 400
+        )
+        .json({ error: "ai_suggest_failed", message: e?.message || String(e) });
+    }
+  });
+
+  app.options("/v1/questions/ai/suggest", (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+      res.status(204).send("");
+    } catch (e: any) {
+      return res.status(403).send(e?.message || "forbidden");
+    }
+  });
+
   app.options("/v1/log", (req, res) => {
     // ログはcredentials不要 → ワイルドカードCORSで常にpreflightを通す
     res.setHeader("Access-Control-Allow-Origin", "*");
