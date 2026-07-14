@@ -35,6 +35,7 @@ type QuestionDoc = {
   creative: Creative;
   re_ask: "never" | "days";
   re_ask_days: number;
+  templateId?: string; // 質問カードのデザインテンプレート（空=デフォルトカード）
   status: string;
   updatedAt?: string;
 };
@@ -57,7 +58,7 @@ function emptyForm(): QuestionDoc {
     title: "", answer_mode: "single", attribute_key: "",
     choices: [{ label: "", value: "" }],
     creative: { ...DEFAULT_CREATIVE },
-    re_ask: "never", re_ask_days: 90, status: "active",
+    re_ask: "never", re_ask_days: 90, templateId: "", status: "active",
   };
 }
 
@@ -72,6 +73,7 @@ export default function QuestionsPage() {
   const [workspaceId, setWorkspaceId] = useState("");
   const [siteId, setSiteId] = useState("");
   const [rows, setRows] = useState<Array<{ id: string; data: QuestionDoc }>>([]);
+  const [templates, setTemplates] = useState<Array<{ id: string; name: string }>>([]);
   const [editing, setEditing] = useState<{ id: string; form: QuestionDoc } | null>(null);
   const [summary, setSummary] = useState<AnswerSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -144,6 +146,20 @@ export default function QuestionsPage() {
   // 回答集計（Phase2）
   useEffect(() => { loadSummary(); }, [loadSummary]);
 
+  // 質問デザイン用テンプレート（type==="question"）を購読
+  useEffect(() => {
+    if (!workspaceId) { setTemplates([]); return; }
+    const q = query(collection(db, "templates"), where("workspaceId", "==", workspaceId));
+    return onSnapshot(q, (snap) =>
+      setTemplates(
+        snap.docs
+          .map((d) => ({ id: d.id, data: d.data() as any }))
+          .filter((x) => x.data.type === "question" && (!x.data.siteId || x.data.siteId === siteId))
+          .map((x) => ({ id: x.id, name: String(x.data.name || x.id) }))
+      )
+    );
+  }, [workspaceId, siteId]);
+
   const openCreate = () => {
     const f = emptyForm();
     f.siteId = siteId; f.workspaceId = workspaceId;
@@ -172,6 +188,7 @@ export default function QuestionsPage() {
       creative: { ...DEFAULT_CREATIVE, ...(f.creative || {}) },
       re_ask: f.re_ask,
       re_ask_days: Number(f.re_ask_days) || 0,
+      templateId: (f.templateId || "").trim(),
       status: "active",
       updatedAt: new Date().toISOString(),
     };
@@ -330,6 +347,7 @@ export default function QuestionsPage() {
         {editing && (
           <QuestionEditor
             editing={editing}
+            templates={templates}
             onChange={(form) => setEditing({ ...editing, form })}
             onClose={() => setEditing(null)}
             onSave={save}
@@ -342,11 +360,12 @@ export default function QuestionsPage() {
 
 function QuestionEditor(props: {
   editing: { id: string; form: QuestionDoc };
+  templates: Array<{ id: string; name: string }>;
   onChange: (f: QuestionDoc) => void;
   onClose: () => void;
   onSave: () => void;
 }) {
-  const { editing, onChange, onClose, onSave } = props;
+  const { editing, templates, onChange, onClose, onSave } = props;
   const f = editing.form;
   const c = f.creative || {};
   const setF = (patch: Partial<QuestionDoc>) => onChange({ ...f, ...patch });
@@ -418,6 +437,15 @@ function QuestionEditor(props: {
             </div>
 
             <div>
+              <div className="h2">デザイン</div>
+              <select className="input" value={f.templateId || ""} onChange={(e) => setF({ templateId: e.target.value })}>
+                <option value="">デフォルト（シンプルカード）</option>
+                {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+              <div className="small" style={{ opacity: 0.6, marginTop: 2 }}>
+                「テンプレート」ページで種別＝<b>質問接客</b>のテンプレートを作ると、ここで選んでデザインを差し替えられます。デフォルト以外を選ぶと下の色設定よりテンプレートのデザインが優先されます。
+              </div>
+              <div style={{ height: 12 }} />
               <div className="h2">クリエイティブ（トンマナ）</div>
               <div style={{ display: "grid", gap: 8 }}>
                 {/* ヘッダー画像: イメージピッカーから選択 */}

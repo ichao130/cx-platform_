@@ -1579,64 +1579,106 @@
       var overlay = document.createElement("div");
       overlay.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:2147483000;display:flex;justify-content:center;padding:16px;pointer-events:none;font-family:system-ui,-apple-system,sans-serif;";
 
-      var card = document.createElement("div");
-      card.style.cssText = "position:relative;pointer-events:auto;max-width:420px;width:100%;background:" + (c.bg_color || "#ffffff") + ";color:" + (c.text_color || "#1e293b") + ";border-radius:16px;box-shadow:0 12px 40px rgba(0,0,0,.22);overflow:hidden;";
-
-      if (c.header_image_url) {
-        var img = document.createElement("img");
-        img.src = c.header_image_url;
-        img.alt = "";
-        img.style.cssText = "width:100%;display:block;max-height:140px;object-fit:cover;";
-        card.appendChild(img);
+      // 選択肢ボタンを生成して container に差し込む（クリック配線込み）
+      //   data-cx-choice=値 / 選択時 data-selected="1" を付与（テンプレのCSSでスタイル可能）
+      function buildChoices(container, styleDefault) {
+        (q.choices || []).forEach(function (ch) {
+          if (!ch) return;
+          var val = String(ch.value != null ? ch.value : ch.label || "");
+          var b = document.createElement("button");
+          b.type = "button";
+          b.textContent = ch.label || val;
+          b.setAttribute("data-cx-choice", val);
+          if (styleDefault) b.style.cssText = "text-align:left;padding:10px 14px;border-radius:10px;border:1.5px solid rgba(15,23,42,.15);background:#fff;color:#1e293b;cursor:pointer;font-size:14px;transition:all .12s;";
+          b.onclick = function () {
+            if (mode === "single") { submit([val]); return; }
+            selected[val] = !selected[val];
+            if (selected[val]) b.setAttribute("data-selected", "1"); else b.removeAttribute("data-selected");
+            if (styleDefault) {
+              b.style.borderColor = selected[val] ? accent : "rgba(15,23,42,.15)";
+              b.style.background = selected[val] ? "rgba(99,102,241,.08)" : "#fff";
+            }
+          };
+          container.appendChild(b);
+        });
+      }
+      function multiSubmit() {
+        var vals = Object.keys(selected).filter(function (k) { return selected[k]; });
+        if (vals.length) submit(vals);
       }
 
-      var closeBtn = document.createElement("button");
-      closeBtn.type = "button";
-      closeBtn.textContent = "✕";
-      closeBtn.style.cssText = "position:absolute;top:8px;right:8px;width:28px;height:28px;border:none;border-radius:99px;background:rgba(0,0,0,.35);color:#fff;cursor:pointer;font-size:13px;line-height:1;z-index:2;";
-      card.appendChild(closeBtn);
+      var pointerCard;
 
-      var bodyWrap = document.createElement("div");
-      bodyWrap.style.cssText = "padding:16px 18px 18px;";
-
-      var title = document.createElement("div");
-      title.textContent = q.title || "";
-      title.style.cssText = "font-weight:700;font-size:15px;margin-bottom:12px;line-height:1.5;";
-      bodyWrap.appendChild(title);
-
-      var choicesWrap = document.createElement("div");
-      choicesWrap.style.cssText = "display:flex;flex-direction:column;gap:8px;";
-      (q.choices || []).forEach(function (ch) {
-        if (!ch) return;
-        var val = String(ch.value != null ? ch.value : ch.label || "");
-        var b = document.createElement("button");
-        b.type = "button";
-        b.textContent = ch.label || val;
-        b.style.cssText = "text-align:left;padding:10px 14px;border-radius:10px;border:1.5px solid rgba(15,23,42,.15);background:#fff;color:#1e293b;cursor:pointer;font-size:14px;transition:all .12s;";
-        b.onclick = function () {
-          if (mode === "single") { submit([val]); return; }
-          selected[val] = !selected[val];
-          b.style.borderColor = selected[val] ? accent : "rgba(15,23,42,.15)";
-          b.style.background = selected[val] ? "rgba(99,102,241,.08)" : "#fff";
-        };
-        choicesWrap.appendChild(b);
-      });
-      bodyWrap.appendChild(choicesWrap);
-
-      if (mode === "multi") {
-        var submitBtn = document.createElement("button");
-        submitBtn.type = "button";
-        submitBtn.textContent = c.submit_label || "回答する";
-        submitBtn.style.cssText = "margin-top:12px;width:100%;padding:11px;border:none;border-radius:10px;background:" + accent + ";color:#fff;font-weight:700;cursor:pointer;font-size:14px;";
-        submitBtn.onclick = function () {
-          var vals = Object.keys(selected).filter(function (k) { return selected[k]; });
-          if (vals.length) submit(vals);
-        };
-        bodyWrap.appendChild(submitBtn);
+      if (q.template && q.template.html) {
+        // ── テンプレート駆動（HTML/CSSでデザイン。{{title}}/{{header_image_url}}等を置換、
+        //    [data-cx-choices]に選択肢を差し込み、[data-cx-submit]/[data-cx-close]を配線）──
+        var host = document.createElement("div");
+        host.style.cssText = "pointer-events:auto;max-width:460px;width:100%;";
+        var root;
+        var shadow = host.attachShadow ? host.attachShadow({ mode: "open" }) : null;
+        if (shadow) {
+          var st = document.createElement("style");
+          st.textContent = (q.template.css || "");
+          shadow.appendChild(st);
+          root = document.createElement("div");
+          root.className = "cx-scope";
+          shadow.appendChild(root);
+        } else {
+          root = host;
+        }
+        var vars = {};
+        for (var vk in c) vars[vk] = c[vk];
+        vars.title = q.title || "";
+        vars.submit_label = c.submit_label || "回答する";
+        root.innerHTML = renderTemplate(q.template.html, vars);
+        var choicesEl = root.querySelector("[data-cx-choices]");
+        if (choicesEl) buildChoices(choicesEl, false);
+        var submitEl = root.querySelector("[data-cx-submit]");
+        if (submitEl) {
+          if (mode !== "multi") { submitEl.style.display = "none"; } // 単一選択は即送信なので送信ボタン不要
+          else submitEl.addEventListener("click", function () { multiSubmit(); });
+        }
+        var closers = root.querySelectorAll("[data-cx-close]");
+        for (var ci = 0; ci < closers.length; ci++) closers[ci].addEventListener("click", function () { close(); });
+        try { execTemplateScripts(root, q.template); } catch (e) {}
+        pointerCard = host;
+      } else {
+        // ── デフォルトカード ──
+        var card = document.createElement("div");
+        card.style.cssText = "position:relative;pointer-events:auto;max-width:420px;width:100%;background:" + (c.bg_color || "#ffffff") + ";color:" + (c.text_color || "#1e293b") + ";border-radius:16px;box-shadow:0 12px 40px rgba(0,0,0,.22);overflow:hidden;";
+        if (c.header_image_url) {
+          var img = document.createElement("img");
+          img.src = c.header_image_url; img.alt = "";
+          img.style.cssText = "width:100%;display:block;max-height:140px;object-fit:cover;";
+          card.appendChild(img);
+        }
+        var closeBtn = document.createElement("button");
+        closeBtn.type = "button"; closeBtn.textContent = "✕";
+        closeBtn.style.cssText = "position:absolute;top:8px;right:8px;width:28px;height:28px;border:none;border-radius:99px;background:rgba(0,0,0,.35);color:#fff;cursor:pointer;font-size:13px;line-height:1;z-index:2;";
+        closeBtn.onclick = function () { close(); };
+        card.appendChild(closeBtn);
+        var bodyWrap = document.createElement("div");
+        bodyWrap.style.cssText = "padding:16px 18px 18px;";
+        var title = document.createElement("div");
+        title.textContent = q.title || "";
+        title.style.cssText = "font-weight:700;font-size:15px;margin-bottom:12px;line-height:1.5;";
+        bodyWrap.appendChild(title);
+        var choicesWrap = document.createElement("div");
+        choicesWrap.style.cssText = "display:flex;flex-direction:column;gap:8px;";
+        buildChoices(choicesWrap, true);
+        bodyWrap.appendChild(choicesWrap);
+        if (mode === "multi") {
+          var submitBtn = document.createElement("button");
+          submitBtn.type = "button"; submitBtn.textContent = c.submit_label || "回答する";
+          submitBtn.style.cssText = "margin-top:12px;width:100%;padding:11px;border:none;border-radius:10px;background:" + accent + ";color:#fff;font-weight:700;cursor:pointer;font-size:14px;";
+          submitBtn.onclick = function () { multiSubmit(); };
+          bodyWrap.appendChild(submitBtn);
+        }
+        card.appendChild(bodyWrap);
+        pointerCard = card;
       }
 
-      card.appendChild(bodyWrap);
-      overlay.appendChild(card);
+      overlay.appendChild(pointerCard);
       (document.body || document.documentElement).appendChild(overlay);
 
       // 表示ログ（既存のimpressionに乗せる。action_id=question_id）
@@ -1673,7 +1715,6 @@
         close();
       }
       function close() { try { overlay.parentNode && overlay.parentNode.removeChild(overlay); } catch (e) {} }
-      closeBtn.onclick = close;
     } catch (e) { log("[cx] renderQuestion error", e); }
   }
 

@@ -42,7 +42,7 @@ function siteLabel(site: SiteRow | undefined) {
 type TemplateDoc = {
   workspaceId: string;
   siteId?: string;
-  type: 'modal' | 'banner' | 'toast' | 'launcher';
+  type: 'modal' | 'banner' | 'toast' | 'launcher' | 'question';
   name: string;
   html: string;
   css: string;
@@ -210,6 +210,31 @@ const DEFAULTS: Record<TemplateDoc['type'], { html: string; css: string }> = {
 .cx-toast__body{font-size:13px;opacity:.8;line-height:1.5;white-space:pre-wrap;margin-bottom:12px;}
 .cx-btn{display:block;width:100%;border:none;border-radius:10px;padding:9px;font-weight:700;font-size:13px;cursor:pointer;text-decoration:none;text-align:center;background:rgba(255,255,255,.14);color:#fff;box-sizing:border-box;transition:background .15s;}
 .cx-btn:hover{background:rgba(255,255,255,.22);}
+`.trim(),
+  },
+  question: {
+    html: `
+<div class="cxq">
+  {{#if header_image_url}}<img class="cxq__img" src="{{header_image_url}}" alt="" />{{/if}}
+  <button class="cxq__close" data-cx-close aria-label="閉じる">✕</button>
+  <div class="cxq__body">
+    <div class="cxq__title">{{title}}</div>
+    <div class="cxq__choices" data-cx-choices></div>
+    <button class="cxq__submit" data-cx-submit>{{submit_label}}</button>
+  </div>
+</div>
+`.trim(),
+    css: `
+.cxq{position:relative;max-width:420px;width:100%;background:#ffffff;color:#1e293b;border-radius:18px;overflow:hidden;box-shadow:0 14px 44px rgba(0,0,0,.22);font-family:system-ui,-apple-system,Segoe UI,Roboto;}
+.cxq__img{width:100%;display:block;max-height:150px;object-fit:cover;}
+.cxq__close{position:absolute;top:10px;right:10px;width:28px;height:28px;border:none;border-radius:50%;background:rgba(0,0,0,.35);color:#fff;cursor:pointer;font-size:13px;}
+.cxq__body{padding:16px 18px 18px;}
+.cxq__title{font-weight:800;font-size:16px;line-height:1.5;margin-bottom:12px;}
+.cxq__choices{display:flex;flex-direction:column;gap:8px;}
+.cxq__choices [data-cx-choice]{text-align:left;padding:11px 14px;border-radius:12px;border:1.5px solid rgba(15,23,42,.14);background:#fff;color:#1e293b;cursor:pointer;font-size:14px;transition:all .12s;}
+.cxq__choices [data-cx-choice]:hover{border-color:#6366f1;}
+.cxq__choices [data-cx-choice][data-selected]{border-color:#6366f1;background:rgba(99,102,241,.08);font-weight:700;}
+.cxq__submit{margin-top:12px;width:100%;padding:12px;border:none;border-radius:12px;background:#6366f1;color:#fff;font-weight:800;font-size:14px;cursor:pointer;}
 `.trim(),
   },
 };
@@ -607,12 +632,14 @@ export default function TemplatesPage() {
                       <option value="banner">バナー — 画面下に固定表示されるフローティングバー。告知・誘導に。</option>
                       <option value="toast">トースト — 画面右下の小さい通知。邪魔せず伝えたいときに。</option>
                       <option value="launcher">ランチャー — 画面隅に常駐するボタン。クリックでモーダルを開く。</option>
+                      <option value="question">質問接客 — 質問カード。選択肢を差し込む位置は data-cx-choices。</option>
                     </select>
                     <div className="small" style={{ marginTop: 6, opacity: 0.72 }}>
                       {type === 'modal' && '💡 画面全体を覆うオーバーレイ型。インパクト大。クーポン・初回訴求・アンケートなどに向いています。'}
                       {type === 'banner' && '💡 ページ下部に常駐する帯型。スクロールしても消えないので告知・セール情報の常時表示に最適。'}
                       {type === 'toast' && '💡 画面右下にそっと出る小型通知。「クーポンあります」「残り3点」など邪魔にならず伝えたい情報に。'}
                       {type === 'launcher' && '💡 画面隅に常駐するフローティングボタン。差し込み変数: launcher_image_url（ボタン画像）/ cta_text（ボタン文言）。data-cx-launcher-open 属性の要素をクリックするとモーダルが開きます。'}
+                      {type === 'question' && '💡 質問接客カード。差し込み変数: title（質問文）/ header_image_url / submit_label。選択肢を出す位置に data-cx-choices、閉じるに data-cx-close、複数選択の送信に data-cx-submit を付けてください。選択肢は [data-cx-choice] でスタイル指定でき、選択時は [data-selected] が付きます。'}
                     </div>
                   </div>
                 </div>
