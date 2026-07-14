@@ -59,6 +59,8 @@ type ScenarioTargeting = {
       medium?: string[];
       campaign?: string[];
     };
+    // 質問接客で蓄積した属性で絞る（例: concerns.uv に sticky を含む）
+    attributeRules?: Array<{ key: string; op: "has" | "not"; value: string }>;
   };
   exclude?: {
     shownWithinDays?: number;
@@ -88,6 +90,9 @@ type Scenario = {
 
   // non-AB mode: scenario.actionRefs
   actionRefs?: ActionRef[];
+
+  // 質問型接客の紐付け（actionRefsの兄弟）
+  questionRefs?: Array<{ questionId: string; enabled: boolean }>;
 
   targeting?: ScenarioTargeting;
 
@@ -306,6 +311,10 @@ export default function ScenariosPage() {
 
   // non-AB actionRefs
   const [actionRefs, setActionRefs] = useState<ActionRef[]>([]);
+
+  // 質問型接客の紐付け
+  const [questionRefs, setQuestionRefs] = useState<Array<{ questionId: string; enabled: boolean }>>([]);
+  const [availableQuestions, setAvailableQuestions] = useState<Array<{ id: string; title: string }>>([]);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
 
   // goal
@@ -333,6 +342,8 @@ export default function ScenariosPage() {
   const [excludeShownWithinDays, setExcludeShownWithinDays] = useState<number | "">("");
   const [excludeMaxImpressionsPerUser, setExcludeMaxImpressionsPerUser] = useState<number | "">("");
   const [excludeConverted, setExcludeConverted] = useState(false);
+  // 属性条件（質問接客の蓄積属性で絞る）
+  const [attributeRules, setAttributeRules] = useState<Array<{ key: string; op: "has" | "not"; value: string }>>([]);
 
   // experiment (A/B)
   const [expEnabled, setExpEnabled] = useState(false);
@@ -444,6 +455,20 @@ export default function ScenariosPage() {
       setActions(snap.docs.map((d) => ({ id: d.id, data: d.data() })))
     );
   }, [workspaceId]);
+
+  // 質問型接客の一覧（このサイト）
+  useEffect(() => {
+    if (!siteId) { setAvailableQuestions([]); return; }
+    const q = query(collection(db, "questions"), where("siteId", "==", siteId));
+    return onSnapshot(q, (snap) =>
+      setAvailableQuestions(
+        snap.docs
+          .map((d) => ({ id: d.id, title: String((d.data() as any).title || d.id), status: String((d.data() as any).status || "") }))
+          .filter((x) => x.status !== "deleted")
+          .map((x) => ({ id: x.id, title: x.title }))
+      )
+    );
+  }, [siteId]);
 
   useEffect(() => {
     // siteId が「自分がメンバーのサイト（sites=memberUids絞り済み）」かつ現ワークスペースに
@@ -619,6 +644,9 @@ export default function ScenariosPage() {
           medium: parseCsv(targetUtmMedium),
           campaign: parseCsv(targetUtmCampaign),
         },
+        attributeRules: attributeRules
+          .map((r) => ({ key: (r.key || "").trim(), op: r.op || "has", value: (r.value || "").trim() }))
+          .filter((r) => r.key && r.value),
       },
       exclude: {
         shownWithinDays:
@@ -642,6 +670,7 @@ export default function ScenariosPage() {
     excludeShownWithinDays,
     excludeMaxImpressionsPerUser,
     excludeConverted,
+    attributeRules,
   ]);
 
   const experiment: Experiment | null = useMemo(() => {
@@ -684,10 +713,13 @@ export default function ScenariosPage() {
       // 非ABのときだけ使う（AB有効でも残してOK。serverはvariant優先にしてる）
       actionRefs: reorder(normalizeActionRefs(actionRefs)),
 
+      // 質問型接客の紐付け（有効なもののみ）
+      questionRefs: questionRefs.filter((r) => r.questionId),
+
       targeting,
       experiment: experiment || undefined,
     }),
-    [workspaceId, siteId, name, status, priority, memo, schedule, goal, couponCode, entry_rules, actionRefs, targeting, experiment]
+    [workspaceId, siteId, name, status, priority, memo, schedule, goal, couponCode, entry_rules, actionRefs, questionRefs, targeting, experiment]
   );
 
   function togglePageType(pt: (typeof PAGE_TYPES)[number]) {
@@ -827,6 +859,7 @@ export default function ScenariosPage() {
     setTriggerType('stay');
 
     setActionRefs([]);
+    setQuestionRefs([]);
 
     setGoalEnabled(false);
     setGoalType("path_prefix");
@@ -846,6 +879,7 @@ export default function ScenariosPage() {
     setExcludeShownWithinDays("");
     setExcludeMaxImpressionsPerUser("");
     setExcludeConverted(false);
+    setAttributeRules([]);
 
     setExpEnabled(false);
     setExpSticky("vid");
@@ -961,6 +995,7 @@ export default function ScenariosPage() {
     );
 
     setActionRefs(reorder(normalizeActionRefs(s.actionRefs)));
+    setQuestionRefs(Array.isArray((s as any).questionRefs) ? (s as any).questionRefs.filter((r: any) => r && r.questionId).map((r: any) => ({ questionId: String(r.questionId), enabled: r.enabled !== false })) : []);
 
     const savedUrls = s.entry_rules?.page?.urls;
     const savedUrl = s.entry_rules?.page?.url;
@@ -1034,6 +1069,9 @@ export default function ScenariosPage() {
         typeof t?.exclude?.maxImpressionsPerUser === "number" ? t.exclude.maxImpressionsPerUser : ""
       );
       setExcludeConverted(!!t?.exclude?.converted);
+      setAttributeRules(Array.isArray(t?.audience?.attributeRules)
+        ? t.audience.attributeRules.map((r: any) => ({ key: String(r.key || ""), op: r.op === "not" ? "not" : "has", value: String(r.value || "") }))
+        : []);
     } else {
       setTargetingEnabled(false);
       setTargetVisitorType("all");
@@ -1048,6 +1086,7 @@ export default function ScenariosPage() {
       setExcludeShownWithinDays("");
       setExcludeMaxImpressionsPerUser("");
       setExcludeConverted(false);
+      setAttributeRules([]);
     }
 
     // experiment
@@ -1494,6 +1533,34 @@ export default function ScenariosPage() {
                 ) : (
                   <div className="small">まだアクションが追加されていません（このシナリオでは何も表示されません）。</div>
                 )}
+
+                {/* 質問接客の紐付け */}
+                <div style={{ height: 22 }} />
+                <div className="h2">🗣 質問接客（任意）</div>
+                <div className="small" style={{ opacity: 0.72, marginBottom: 8 }}>
+                  このシナリオで表示する質問を選んでください。回答は訪問者の属性として蓄積され、次の接客条件（③ 誰に表示？ の属性条件）に使えます。
+                  {availableQuestions.length === 0 && <>（質問は左メニューの「質問接客」で作成できます）</>}
+                </div>
+                {availableQuestions.length > 0 && (
+                  <div style={{ display: "grid", gap: 6 }}>
+                    {availableQuestions.map((q) => {
+                      const on = questionRefs.some((r) => r.questionId === q.id && r.enabled !== false);
+                      return (
+                        <label key={q.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", border: "1px solid rgba(15,23,42,.12)", borderRadius: 8, cursor: "pointer", background: on ? "rgba(99,102,241,.06)" : "transparent" }}>
+                          <input
+                            type="checkbox"
+                            checked={on}
+                            onChange={(e) => setQuestionRefs((cur) => {
+                              const others = cur.filter((r) => r.questionId !== q.id);
+                              return e.target.checked ? [...others, { questionId: q.id, enabled: true }] : others;
+                            })}
+                          />
+                          <span style={{ fontWeight: 600, fontSize: 13 }}>{q.title}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
 
@@ -1884,6 +1951,33 @@ export default function ScenariosPage() {
                   <input className="input" style={{ flex: 1, minWidth: 220 }} disabled={!targetingEnabled} value={targetUtmMedium} onChange={(e) => setTargetUtmMedium(e.target.value)} placeholder="medium: cpc, social" />
                   <input className="input" style={{ flex: 1, minWidth: 220 }} disabled={!targetingEnabled} value={targetUtmCampaign} onChange={(e) => setTargetUtmCampaign(e.target.value)} placeholder="campaign: spring_sale" />
                 </div>
+
+                <div style={{ height: 10 }} />
+                <div className="h2">🗣 属性条件（質問接客の回答で絞る）</div>
+                <div className="small" style={{ opacity: 0.65, marginBottom: 6 }}>
+                  質問接客で蓄積した属性で絞ります。例: キー <code>concerns.uv</code> / 値 <code>sticky</code>（＝「ベタつき」と回答した人）。複数指定はAND。
+                </div>
+                <div style={{ display: "grid", gap: 6, opacity: targetingEnabled ? 1 : 0.6 }}>
+                  {attributeRules.map((r, i) => (
+                    <div key={i} className="row" style={{ gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                      <input className="input" style={{ flex: 1, minWidth: 160 }} disabled={!targetingEnabled} value={r.key}
+                        onChange={(e) => setAttributeRules((cur) => cur.map((x, j) => j === i ? { ...x, key: e.target.value } : x))}
+                        placeholder="属性キー（例: concerns.uv）" />
+                      <select className="input" style={{ width: 130 }} disabled={!targetingEnabled} value={r.op}
+                        onChange={(e) => setAttributeRules((cur) => cur.map((x, j) => j === i ? { ...x, op: e.target.value as any } : x))}>
+                        <option value="has">を含む</option>
+                        <option value="not">を含まない</option>
+                      </select>
+                      <input className="input" style={{ flex: 1, minWidth: 140 }} disabled={!targetingEnabled} value={r.value}
+                        onChange={(e) => setAttributeRules((cur) => cur.map((x, j) => j === i ? { ...x, value: e.target.value } : x))}
+                        placeholder="値（例: sticky）" />
+                      <button className="btn btn--danger" style={{ fontSize: 12, padding: "4px 8px" }} disabled={!targetingEnabled}
+                        onClick={() => setAttributeRules((cur) => cur.filter((_, j) => j !== i))}>✕</button>
+                    </div>
+                  ))}
+                </div>
+                <button className="btn" style={{ marginTop: 6, fontSize: 12 }} disabled={!targetingEnabled}
+                  onClick={() => setAttributeRules((cur) => [...cur, { key: "", op: "has", value: "" }])}>+ 属性条件を追加</button>
 
                 <div style={{ height: 10 }} />
                 <div className="h2">除外条件</div>
