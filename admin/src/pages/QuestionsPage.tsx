@@ -1,12 +1,19 @@
 // admin/src/pages/QuestionsPage.tsx
 // 質問型接客（質問→回答→属性蓄積）。Actionsの兄弟エンティティ。
 // クリエイティブ（ヘッダー画像・トンマナ）＋質問文＋選択肢(表示名/保存値)＋属性キー＋回答形式 をビルド。
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import {
   collection, query, where, onSnapshot, doc, setDoc, deleteDoc,
 } from "firebase/firestore";
-import { db } from "../firebase";
+import { db, apiPostJson } from "../firebase";
+
+type AnswerSummary = {
+  by_key: Record<string, Record<string, number>>;
+  answered_counts: Record<string, number>;
+  total_with_attrs: number;
+};
 
 type Choice = { label: string; value: string };
 type Creative = {
@@ -64,6 +71,23 @@ export default function QuestionsPage() {
   const [siteId, setSiteId] = useState("");
   const [rows, setRows] = useState<Array<{ id: string; data: QuestionDoc }>>([]);
   const [editing, setEditing] = useState<{ id: string; form: QuestionDoc } | null>(null);
+  const [summary, setSummary] = useState<AnswerSummary | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const navigate = useNavigate();
+
+  const loadSummary = useCallback(async () => {
+    if (!siteId) { setSummary(null); return; }
+    setSummaryLoading(true);
+    try {
+      const j = await apiPostJson<AnswerSummary & { ok: boolean }>("/v1/questions/answers/summary", { site_id: siteId }, { siteId });
+      setSummary({ by_key: j.by_key || {}, answered_counts: j.answered_counts || {}, total_with_attrs: j.total_with_attrs || 0 });
+    } catch (e) {
+      console.error("[questions summary]", e);
+      setSummary(null);
+    } finally {
+      setSummaryLoading(false);
+    }
+  }, [siteId]);
 
   // auth → uid → workspace/site（アプリのグローバル選択と同期）
   useEffect(() => {
@@ -100,6 +124,9 @@ export default function QuestionsPage() {
       );
     }, (e) => console.error("[questions] query error", e));
   }, [siteId]);
+
+  // 回答集計（Phase2）
+  useEffect(() => { loadSummary(); }, [loadSummary]);
 
   const openCreate = () => {
     const f = emptyForm();
@@ -164,21 +191,59 @@ export default function QuestionsPage() {
       {rows.length === 0 ? (
         <div className="small" style={{ opacity: 0.6 }}>まだ質問はありません。「+ 質問を作成」から追加してください。</div>
       ) : (
-        <div style={{ display: "grid", gap: 8 }}>
-          {rows.map((r) => (
-            <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", border: "1px solid rgba(15,23,42,.1)", borderRadius: 10 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700 }}>{r.data.title || "（無題）"}</div>
-                <div className="small" style={{ opacity: 0.7 }}>
-                  {r.data.answer_mode === "multi" ? "複数選択" : "単一選択"} ・ 選択肢{(r.data.choices || []).length} ・ 属性: <code>{r.data.attribute_key}</code>
+        <div style={{ display: "grid", gap: 10 }}>
+          {rows.map((r) => {
+            const key = r.data.attribute_key;
+            const dist = (summary?.by_key || {})[key] || {};
+            const answered = (summary?.answered_counts || {})[r.id] || 0;
+            const maxCount = Math.max(1, ...(r.data.choices || []).map((c) => dist[c.value] || 0));
+            return (
+              <div key={r.id} style={{ padding: "12px 14px", border: "1px solid rgba(15,23,42,.1)", borderRadius: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700 }}>{r.data.title || "（無題）"}</div>
+                    <div className="small" style={{ opacity: 0.7 }}>
+                      {r.data.answer_mode === "multi" ? "複数選択" : "単一選択"} ・ 選択肢{(r.data.choices || []).length} ・ 属性: <code>{key}</code> ・ 回答 <b>{answered}</b>人
+                    </div>
+                  </div>
+                  <button className="btn" onClick={() => openEdit(r)}>編集</button>
+                  <button className="btn btn--danger" onClick={() => remove(r.id)}>削除</button>
+                </div>
+
+                {/* 回答分布（Phase2）＋セグメント施策作成 */}
+                <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+                  {(r.data.choices || []).map((c) => {
+                    const n = dist[c.value] || 0;
+                    const pct = Math.round((n / maxCount) * 100);
+                    return (
+                      <div key={c.value} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div className="small" style={{ width: 120, flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.label}</div>
+                        <div style={{ flex: 1, height: 8, background: "rgba(15,23,42,.06)", borderRadius: 99, overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${pct}%`, background: "#6366f1", borderRadius: 99 }} />
+                        </div>
+                        <div className="small" style={{ width: 48, textAlign: "right", flexShrink: 0, fontWeight: 700 }}>{n}人</div>
+                        <button
+                          className="btn"
+                          style={{ fontSize: 11, padding: "3px 8px", flexShrink: 0 }}
+                          disabled={n === 0}
+                          title={`「${c.label}」と回答した ${n}人 に接客を作成（属性条件 ${key} = ${c.value}）`}
+                          onClick={() => {
+                            try { sessionStorage.setItem("cx_seg_hint", JSON.stringify({ key, value: c.value, label: c.label })); } catch {}
+                            navigate("/scenarios");
+                          }}
+                        >
+                          施策を作成 →
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
-              <button className="btn" onClick={() => openEdit(r)}>編集</button>
-              <button className="btn btn--danger" onClick={() => remove(r.id)}>削除</button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
+      {summaryLoading && <div className="small" style={{ opacity: 0.5, marginTop: 8 }}>回答集計を読み込み中…</div>}
 
       {editing && (
         <QuestionEditor

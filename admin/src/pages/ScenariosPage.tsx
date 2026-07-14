@@ -920,6 +920,20 @@ export default function ScenariosPage() {
     setIsModalOpen(true);
   }
 
+  // 質問接客のセグメントから「施策を作成」で遷移してきた場合、属性条件付きで新規作成を開く
+  useEffect(() => {
+    if (!siteId) return;
+    let hint: any = null;
+    try { const raw = sessionStorage.getItem("cx_seg_hint"); if (raw) hint = JSON.parse(raw); } catch {}
+    if (!hint || !hint.key || !hint.value) return;
+    try { sessionStorage.removeItem("cx_seg_hint"); } catch {}
+    openCreateModal();
+    setName(`${hint.label || hint.value} 向け接客`);
+    setTargetingEnabled(true);
+    setAttributeRules([{ key: String(hint.key), op: "has", value: String(hint.value) }]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [siteId]);
+
   function showToast(msg: string, type: "success" | "error" = "success") {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3000);

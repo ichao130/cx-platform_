@@ -4605,6 +4605,83 @@ export function registerV1Routes(app: Express) {
     res.status(204).send("");
   });
 
+  // ── 質問型接客: 回答データ集計（管理画面向け・Phase2）──────────────
+  //   visitor_attributes を走査し、属性キー×値のユーザー数と質問別回答数を返す。
+  //   ※ 動的キーのため走査集計。大規模化したら別途マテリアライズ設計が必要（[stats-scale-sharding]の思想）。
+  app.post("/v1/questions/answers/summary", async (req, res) => {
+    corsByAdminOrigins(req, res);
+    try {
+      const site_id = String(req.body?.site_id || "");
+      if (!site_id) return res.status(400).json({ error: "site_id required" });
+      await requireWorkspaceAccessBySiteId(req, site_id, "dashboard", ["owner", "admin", "member"]);
+
+      const db = adminDb();
+      const byKey: Record<string, Record<string, number>> = {}; // key -> value -> ユーザー数
+      const answeredCounts: Record<string, number> = {};        // questionId -> 回答者数
+      let totalWithAttrs = 0;
+      let scanned = 0;
+      let truncated = false;
+      const MAX_SCAN = 50000;
+
+      let cursor: any = null; // last document snapshot
+      while (true) {
+        let q = db.collection("visitor_attributes")
+          .where("site_id", "==", site_id)
+          .limit(2000);
+        if (cursor) q = q.startAfter(cursor);
+        const snap = await q.get();
+        if (snap.empty) break;
+        cursor = snap.docs[snap.docs.length - 1];
+
+        for (const d of snap.docs) {
+          const data = d.data() as any;
+          const attrs = (data.attrs || {}) as Record<string, string[]>;
+          const answered = (data.answered || {}) as Record<string, string>;
+          let hasAny = false;
+          for (const key of Object.keys(attrs)) {
+            const vals = Array.isArray(attrs[key]) ? attrs[key] : [];
+            if (vals.length) hasAny = true;
+            const bucket = byKey[key] || (byKey[key] = {});
+            // 同一ユーザーの同値は1回（値単位のユニークユーザー数）
+            const seen = new Set<string>();
+            for (const v of vals) {
+              const vv = String(v);
+              if (seen.has(vv)) continue;
+              seen.add(vv);
+              bucket[vv] = (bucket[vv] || 0) + 1;
+            }
+          }
+          for (const qid of Object.keys(answered)) {
+            answeredCounts[qid] = (answeredCounts[qid] || 0) + 1;
+          }
+          if (hasAny) totalWithAttrs += 1;
+        }
+
+        scanned += snap.size;
+        if (snap.size < 2000) break;
+        if (scanned >= MAX_SCAN) { truncated = true; break; }
+      }
+
+      return res.json({ ok: true, total_with_attrs: totalWithAttrs, by_key: byKey, answered_counts: answeredCounts, scanned, truncated });
+    } catch (e: any) {
+      console.error("[/v1/questions/answers/summary] error:", e);
+      return res
+        .status(String(e?.message || "").startsWith("workspace_access_denied:") ? 403 : 400)
+        .json({ error: "answers_summary_failed", message: e?.message || String(e) });
+    }
+  });
+
+  app.options("/v1/questions/answers/summary", (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+      res.status(204).send("");
+    } catch (e: any) {
+      return res.status(403).send(e?.message || "forbidden");
+    }
+  });
+
   app.options("/v1/log", (req, res) => {
     // ログはcredentials不要 → ワイルドカードCORSで常にpreflightを通す
     res.setHeader("Access-Control-Allow-Origin", "*");
