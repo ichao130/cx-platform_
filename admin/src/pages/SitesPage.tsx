@@ -147,7 +147,6 @@ export default function SitesPage() {
   }
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [tagMode, setTagMode] = useState<'shopify' | 'direct' | 'gtm'>('direct');
-  const [shopifyManualExpanded, setShopifyManualExpanded] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [expandedSiteId, setExpandedSiteId] = useState<string | null>(null);
   const [memberOpLoading, setMemberOpLoading] = useState<string | null>(null);
@@ -784,107 +783,9 @@ export default function SitesPage() {
                   {/* 説明文 */}
                   {tagMode === 'shopify' ? (
                     <div style={{ marginBottom: 12 }}>
-                      {/* アプリ連携（メイン） */}
-                      <div className="small" style={{ opacity: 0.75, marginBottom: 10 }}>
-                        ストアのドメインを入力してインストールするだけ。SDKが自動でセットアップされます。
-                      </div>
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexDirection: 'column', marginBottom: 12 }}>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', width: '100%' }}>
-                          <input
-                            className="input"
-                            placeholder="yourstore.myshopify.com"
-                            style={{ flex: 1, fontSize: 12, padding: '6px 10px', background: '#fff', border: '1px solid rgba(15,23,42,.2)', color: '#1e293b', borderRadius: 7 }}
-                            id="shopify-shop-input"
-                            onChange={() => {
-                              const err = document.getElementById('shopify-shop-error');
-                              if (err) err.style.display = 'none';
-                            }}
-                          />
-                          <button
-                            type="button"
-                            className="btn btn--primary"
-                            style={{ fontSize: 12, padding: '6px 14px', flexShrink: 0 }}
-                            onClick={() => {
-                              const input = document.getElementById('shopify-shop-input') as HTMLInputElement;
-                              const err = document.getElementById('shopify-shop-error');
-                              let shop = (input?.value || '').trim();
-                              if (!shop) {
-                                if (err) { err.style.display = 'block'; }
-                                input?.focus();
-                                return;
-                              }
-                              shop = shop.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
-                              if (!shop.endsWith('.myshopify.com')) shop = shop + '.myshopify.com';
-                              const apiBase = 'https://api-o56523at7q-an.a.run.app';
-                              window.open(`${apiBase}/shopify/install?shop=${encodeURIComponent(shop)}&site_id=${encodeURIComponent(id)}`, '_blank');
-                            }}
-                          >
-                            インストール
-                          </button>
-                        </div>
-                        <div id="shopify-shop-error" style={{ display: 'none', fontSize: 12, color: '#f87171', fontWeight: 600 }}>
-                          ⚠ ストアのドメインを入力してください（例: yourstore.myshopify.com）
-                        </div>
-                      </div>
-                      {/* 連携済みステータス */}
-                      {(() => {
-                        const sd = (rows.find(r => r.id === id)?.data as any)?.shopify;
-                        if (!sd?.connected) return null;
-                        const exp = sd?.tokenExpiresAt ? new Date(sd.tokenExpiresAt) : null;
-                        const expired = exp ? exp < new Date() : false;
-                        const hours = exp ? Math.round((exp.getTime() - Date.now()) / 3600000) : null;
-                        return (
-                          <div style={{ marginBottom: 12 }}>
-                            <div className="small" style={{ color: expired ? '#f87171' : '#4ade80', fontWeight: 600, marginBottom: 6 }}>
-                              {expired ? '⚠ トークン期限切れ — Shopify管理画面でMOKKEDA CONNECTを開いて更新してください' : `✓ 連携済み: ${sd.shop}`}
-                              {!expired && hours !== null && <span style={{ fontWeight: 400, opacity: 0.7 }}>（あと約{hours}時間）</span>}
-                            </div>
-                            <button
-                              type="button"
-                              className="btn"
-                              style={{ fontSize: 11, padding: '3px 10px' }}
-                              onClick={async () => {
-                                const btn = document.getElementById('shopify-reinject-btn') as HTMLButtonElement;
-                                if (btn) btn.textContent = '注入中...';
-                                try {
-                                  const token = await auth.currentUser?.getIdToken();
-                                  const res = await fetch('https://api-o56523at7q-an.a.run.app/shopify/reinject', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                                    body: JSON.stringify({ site_id: id }),
-                                  });
-                                  const json = await res.json();
-                                  if (json.ok) alert('✅ SDKを再注入しました！');
-                                  else alert('❌ エラー: ' + (json.error || 'unknown'));
-                                } catch (e: any) {
-                                  alert('❌ ' + e.message);
-                                } finally {
-                                  if (btn) btn.textContent = 'SDK再注入';
-                                }
-                              }}
-                              id="shopify-reinject-btn"
-                            >
-                              SDK再注入
-                            </button>
-                          </div>
-                        );
-                      })()}
-                      {/* 手動タグ（折りたたみ） */}
-                      <div style={{ borderTop: '1px solid rgba(255,255,255,.1)', paddingTop: 10 }}>
-                        <button
-                          type="button"
-                          onClick={() => setShopifyManualExpanded(v => !v)}
-                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,.5)', fontSize: 12, padding: 0, display: 'flex', alignItems: 'center', gap: 4 }}
-                        >
-                          {shopifyManualExpanded ? '▾' : '▸'} 手動でタグを設置する場合
-                        </button>
-                        {shopifyManualExpanded && (
-                          <div style={{ marginTop: 8 }}>
-                            <div className="small" style={{ opacity: 0.75, marginBottom: 8 }}>
-                              Shopify管理画面 → <b>オンラインストア &gt; テーマ &gt; コードを編集</b> → <code>theme.liquid</code> を開き、<code>&lt;/head&gt;</code> の直前に貼り付けてください。
-                            </div>
-                          </div>
-                        )}
+                      <div className="small" style={{ opacity: 0.8, marginBottom: 8, lineHeight: 1.7 }}>
+                        Shopify管理画面 → <b>オンラインストア &gt; テーマ &gt; コードを編集</b> → <code>theme.liquid</code> を開き、<code>&lt;/head&gt;</code> の直前に下記タグを貼り付けてください。<br />
+                        カート追加の検知はSDKが自動で行います（追加の設定は不要）。
                       </div>
                     </div>
                   ) : (
@@ -894,7 +795,7 @@ export default function SitesPage() {
                         : 'GTM の「カスタムHTML」タグとして貼り付けてください'}
                     </div>
                   )}
-                  {tagMode !== 'shopify' || shopifyManualExpanded ? <div style={{ position: 'relative' }}>
+                  <div style={{ position: 'relative' }}>
                     <button onClick={() => copyText(embedTag, 'embed')} style={{ position: 'absolute', top: 8, right: 8, zIndex: 1, fontSize: 10, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(255,255,255,.2)', background: 'rgba(255,255,255,.1)', color: '#e2f0f5', cursor: 'pointer', fontWeight: 600 }}>
                       {copyingKey === 'embed' ? '✓ コピー済み' : 'コピー'}
                     </button>
@@ -934,7 +835,7 @@ export default function SitesPage() {
                         <span style={{ color: '#7ec8e3' }}>&lt;/script&gt;</span>
                       </>
                     )}
-                  </pre></div> : null}
+                  </pre></div>
 
                   {tagMode === 'shopify' && (
                     <div style={{ marginTop: 16 }}>
@@ -1001,44 +902,9 @@ export default function SitesPage() {
                         </pre></div>
                       </div>
 
-                      <div className="small" style={{ fontWeight: 700, marginBottom: 6, opacity: 0.9 }}>
-                        🛒 カートイベントフック（任意）
+                      <div className="small" style={{ opacity: 0.7, padding: '10px 12px', background: 'rgba(59,130,246,.06)', border: '1px solid rgba(59,130,246,.2)', borderRadius: 8 }}>
+                        🛒 <b>カート追加の検知は自動です</b>。SDKが <code>/cart/add</code> の通信を検知して「カゴ落ち」条件や「カート追加トリガー」を動かします（手動のカートフック設置は不要になりました）。
                       </div>
-                      <div className="small" style={{ opacity: 0.7, marginBottom: 8 }}>
-                        カートに商品が追加されたタイミングでシナリオを起動したい場合は、上のスクリプトの直後に追加してください。「これと一緒によく買われています」などのアップセル訴求に使えます。
-                      </div>
-                      <div style={{ position: 'relative' }}>
-                        <button onClick={() => copyText(`/* Mokkeda: Shopify カートイベントフック */\ndocument.addEventListener('DOMContentLoaded', function() {\n  var _fetch = window.fetch;\n  window.fetch = function(url, opts) {\n    var res = _fetch.apply(this, arguments);\n    if (typeof url === 'string' && url.indexOf('/cart/add') > -1) {\n      res.then(function(r) {\n        if (r.ok) window.dispatchEvent(new CustomEvent('cx:cart:add'));\n      });\n    }\n    return res;\n  };\n});`, 'cartHook')} style={{ position: 'absolute', top: 6, right: 6, zIndex: 1, fontSize: 10, padding: '2px 7px', borderRadius: 4, border: '1px solid rgba(255,255,255,.2)', background: 'rgba(255,255,255,.1)', color: '#e2f0f5', cursor: 'pointer', fontWeight: 600 }}>
-                          {copyingKey === 'cartHook' ? '✓' : 'コピー'}
-                        </button>
-                      <pre style={{
-                        margin: 0,
-                        padding: '14px',
-                        background: '#1a2a3a',
-                        color: '#e2f0f5',
-                        borderRadius: 10,
-                        fontSize: 12,
-                        lineHeight: 1.75,
-                        overflowX: 'auto',
-                        whiteSpace: 'pre',
-                        userSelect: 'all',
-                        cursor: 'text',
-                        border: '1px solid rgba(255,255,255,.06)',
-                      }}>
-                        <span style={{ color: '#94a3b8' }}>{`/* Mokkeda: Shopify カートイベントフック */`}</span>{'\n'}
-                        <span style={{ color: '#7ec8e3' }}>{'document'}</span><span style={{ color: '#94a3b8' }}>{'.'}</span><span style={{ color: '#a8d8a8' }}>{'addEventListener'}</span><span style={{ color: '#94a3b8' }}>{'('}</span><span style={{ color: '#ffd580' }}>{"'DOMContentLoaded'"}</span><span style={{ color: '#94a3b8' }}>{', function() {'}</span>{'\n'}
-                        <span style={{ color: '#94a3b8' }}>{'  var _fetch = window.fetch;'}</span>{'\n'}
-                        <span style={{ color: '#94a3b8' }}>{'  window.fetch = function(url, opts) {'}</span>{'\n'}
-                        <span style={{ color: '#94a3b8' }}>{'    var res = _fetch.apply(this, arguments);'}</span>{'\n'}
-                        <span style={{ color: '#94a3b8' }}>{'    if (typeof url === '}</span><span style={{ color: '#ffd580' }}>{"'string'"}</span><span style={{ color: '#94a3b8' }}>{' && url.indexOf('}</span><span style={{ color: '#ffd580' }}>{"'/cart/add'"}</span><span style={{ color: '#94a3b8' }}>{') > -1) {'}</span>{'\n'}
-                        <span style={{ color: '#94a3b8' }}>{'      res.then(function(r) {'}</span>{'\n'}
-                        <span style={{ color: '#94a3b8' }}>{'        if (r.ok) window.dispatchEvent(new CustomEvent('}</span><span style={{ color: '#ffd580' }}>{"'cx:cart:add'"}</span><span style={{ color: '#94a3b8' }}>{'));'}</span>{'\n'}
-                        <span style={{ color: '#94a3b8' }}>{'      });'}</span>{'\n'}
-                        <span style={{ color: '#94a3b8' }}>{'    }'}</span>{'\n'}
-                        <span style={{ color: '#94a3b8' }}>{'    return res;'}</span>{'\n'}
-                        <span style={{ color: '#94a3b8' }}>{'  };'}</span>{'\n'}
-                        <span style={{ color: '#94a3b8' }}>{'});'}</span>
-                      </pre></div>
                     </div>
                   )}
 
