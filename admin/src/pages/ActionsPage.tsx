@@ -27,7 +27,7 @@ import StickySaveBar from "../components/StickySaveBar";
  * Types
  * ========================= */
 type ActionType = "modal" | "banner" | "toast" | "launcher";
-type MountPlacement = "append" | "prepend" | "before" | "after";
+type MountPlacement = "append" | "prepend" | "before" | "after" | "replace";
 type MountMode = "shadow" | "theme" | "inherit";
 
 
@@ -236,6 +236,7 @@ function placementLabel(v: MountPlacement) {
   if (v === "append") return "末尾に追加";
   if (v === "prepend") return "先頭に追加";
   if (v === "before") return "要素の前";
+  if (v === "replace") return "中身を置き換え";
   return "要素の後";
 }
 
@@ -431,6 +432,10 @@ function MediaPickerModal(props: {
                   textAlign: "left",
                   cursor: "pointer",
                   color: "#fff",
+                  minWidth: 0,
+                  maxWidth: "100%",
+                  overflow: "hidden",
+                  boxSizing: "border-box",
                 }}
                 title={r.data.originalName || r.id}
               >
@@ -471,7 +476,17 @@ function MediaPickerModal(props: {
                   )}
                 </div>
 
-                <div style={{ marginTop: 8, fontSize: 11, opacity: 0.7 }}>
+                <div
+                  style={{
+                    marginTop: 8,
+                    fontSize: 11,
+                    opacity: 0.7,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    maxWidth: "100%",
+                  }}
+                >
                   {r.data.contentType || "unknown"} / {r.id}
                 </div>
               </button>
@@ -1169,8 +1184,8 @@ export default function ActionsPage() {
                         {placementLabel((r.data.mount?.placement ?? "append") as MountPlacement)} / {modeLabel((r.data.mount?.mode ?? "shadow") as MountMode)}
                       </div>
                     </td>
-                    <td>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "nowrap", alignItems: "center" }}>
                         {thumbIds.map((mid) => {
                           const m = mediaById[mid];
                           const isImage = (m?.contentType || "").startsWith("image/");
@@ -1184,6 +1199,7 @@ export default function ActionsPage() {
                                 style={{
                                   width: 36,
                                   height: 36,
+                                  flexShrink: 0,
                                   objectFit: "cover",
                                   borderRadius: 8,
                                   border: "1px solid rgba(15,23,42,.12)",
@@ -1199,6 +1215,7 @@ export default function ActionsPage() {
                               style={{
                                 width: 36,
                                 height: 36,
+                                flexShrink: 0,
                                 borderRadius: 8,
                                 border: "1px solid rgba(15,23,42,.12)",
                                 display: "inline-flex",
@@ -1220,44 +1237,43 @@ export default function ActionsPage() {
                         {!ids.length ? <span className="small" style={{ opacity: 0.72 }}>未設定</span> : null}
                       </div>
                     </td>
-                    <td>
-                      <button className="btn" onClick={() => openEditModal(r)}>
-                        編集
-                      </button>
-                      <span style={{ width: 8, display: 'inline-block' }} />
-                      <button
-                        className="btn"
-                        onClick={async () => {
-                          const newId = `act_${Math.random().toString(36).slice(2, 10)}`;
-                          const copy = { ...r.data, creative: { ...(r.data?.creative || {}), title: `${r.data?.creative?.title || r.id} のコピー` } };
-                          await setDoc(doc(db, "actions", newId), copy);
-                          showToast("アクションを複製しました");
-                        }}
-                      >
-                        複製
-                      </button>
-                      <span style={{ width: 8, display: 'inline-block' }} />
-                      {(r.data as any).archived ? (
-                        <>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      <div style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+                        <button className="btn" onClick={() => openEditModal(r)}>
+                          編集
+                        </button>
+                        <button
+                          className="btn"
+                          onClick={async () => {
+                            const newId = `act_${Math.random().toString(36).slice(2, 10)}`;
+                            const copy = { ...r.data, creative: { ...(r.data?.creative || {}), title: `${r.data?.creative?.title || r.id} のコピー` } };
+                            await setDoc(doc(db, "actions", newId), copy);
+                            showToast("アクションを複製しました");
+                          }}
+                        >
+                          複製
+                        </button>
+                        {(r.data as any).archived ? (
+                          <>
+                            <button className="btn" onClick={async () => {
+                              await setDoc(doc(db, "actions", r.id), { archived: false }, { merge: true });
+                              showToast("アクティブに戻しました");
+                            }}>戻す</button>
+                            <button className="btn btn--danger" onClick={() => setDeleteTarget({ id: r.id, name: String(r.data?.creative?.title || r.id) })}>削除</button>
+                          </>
+                        ) : (
                           <button className="btn" onClick={async () => {
-                            await setDoc(doc(db, "actions", r.id), { archived: false }, { merge: true });
-                            showToast("アクティブに戻しました");
-                          }}>戻す</button>
-                          <span style={{ width: 8, display: "inline-block" }} />
-                          <button className="btn btn--danger" onClick={() => setDeleteTarget({ id: r.id, name: String(r.data?.creative?.title || r.id) })}>削除</button>
-                        </>
-                      ) : (
-                        <button className="btn" onClick={async () => {
-                          const used = actionUsageMap[r.id] || [];
-                          if (used.length) {
-                            const lines = used.slice(0, 5).map((x) => `${x.name || x.scenarioId}`).join("、");
-                            showToast(`施策「${lines}」で使用中のためアーカイブできません`, "error");
-                            return;
-                          }
-                          await setDoc(doc(db, "actions", r.id), { archived: true }, { merge: true });
-                          showToast("アーカイブしました");
-                        }}>アーカイブ</button>
-                      )}
+                            const used = actionUsageMap[r.id] || [];
+                            if (used.length) {
+                              const lines = used.slice(0, 5).map((x) => `${x.name || x.scenarioId}`).join("、");
+                              showToast(`施策「${lines}」で使用中のためアーカイブできません`, "error");
+                              return;
+                            }
+                            await setDoc(doc(db, "actions", r.id), { archived: true }, { merge: true });
+                            showToast("アーカイブしました");
+                          }}>アーカイブ</button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 </React.Fragment>
@@ -1350,6 +1366,7 @@ export default function ActionsPage() {
                       <option value="prepend">先頭に追加（セレクター内の一番上）</option>
                       <option value="before">要素の直前に挿入</option>
                       <option value="after">要素の直後に挿入</option>
+                      <option value="replace">要素の中身を置き換える</option>
                     </select>
                   </div>
                   <div style={{ flex: 1 }}>
@@ -1655,52 +1672,48 @@ export default function ActionsPage() {
 
                             <div style={{ height: 8 }} />
 
-                            <div className="small" style={{ opacity: 0.8 }}>
-                              使用箇所: {used.length} Action
-                            </div>
-
-                            <div className="row" style={{ gap: 8, marginTop: 8 }}>
-                              <button
-                                className="btn"
-                                type="button"
-                                onClick={() => {
-                                  setImageMediaId(mid);
-                                  if (m?.downloadURL) setImageUrl(m.downloadURL);
-                                }}
-                              >
-                                Primaryにする
-                              </button>
-
-                              <button
-                                className="btn btn--danger"
-                                type="button"
-                                onClick={() => {
-                                  const ok = window.confirm(
-                                    `このActionから紐付け解除します。\n\n${mid}\n\n使用箇所（参考）:\n${usedLines || "(なし)"}`
-                                  );
-                                  if (!ok) return;
-
-                                  setMediaIds((prev) => prev.filter((x) => x !== mid));
-                                  if (imageMediaId === mid) setImageMediaId("");
-                                }}
-                              >
-                                紐付け解除
-                              </button>
+                            {/* ステータス（アイコン化）: メイン / 使用中・未使用 */}
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                              {mid === imageMediaId ? (
+                                <span title="このアクションのメイン画像" style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: "#fef9c3", color: "#a16207" }}>
+                                  ⭐ メイン
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  title="メイン画像にする"
+                                  onClick={() => { setImageMediaId(mid); if (m?.downloadURL) setImageUrl(m.downloadURL); }}
+                                  style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 20, border: "1px dashed #cbd5e1", background: "transparent", color: "#64748b", cursor: "pointer" }}
+                                >
+                                  ☆ メインにする
+                                </button>
+                              )}
+                              {used.length > 0 ? (
+                                <span title={`使用中:\n${usedLines}`} style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: "#dcfce7", color: "#15803d" }}>
+                                  🔗 使用中 {used.length}
+                                </span>
+                              ) : (
+                                <span title="どのアクションでも使われていません" style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 20, background: "rgba(15,23,42,.06)", color: "#94a3b8" }}>
+                                  ○ 未使用
+                                </span>
+                              )}
                             </div>
 
                             <div style={{ height: 8 }} />
 
                             <button
-                              className="btn btn--danger"
+                              className="btn"
                               type="button"
-                              onClick={() => onDeleteMedia(workspaceId, mid)}
+                              style={{ fontSize: 12, padding: "3px 10px" }}
+                              onClick={() => {
+                                const ok = window.confirm(`このActionから紐付け解除します。\n\n${mid}`);
+                                if (!ok) return;
+                                setMediaIds((prev) => prev.filter((x) => x !== mid));
+                                if (imageMediaId === mid) setImageMediaId("");
+                              }}
                             >
-                              Media自体を削除（要注意）
+                              紐付け解除
                             </button>
-
-                            <div className="small" style={{ opacity: 0.7, marginTop: 6, whiteSpace: "pre-wrap" }}>
-                              {used.length ? `使用中:\n${usedLines}` : "使用中のActionなし"}
-                            </div>
                           </div>
                         );
                       })}

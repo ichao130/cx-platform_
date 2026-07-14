@@ -250,6 +250,12 @@
       target.parentNode.insertBefore(el, target.nextSibling);
       return true;
     }
+    if (p === "replace") {
+      // 要素の中身を置き換える（対象の子を空にして差し込む）
+      try { target.innerHTML = ""; } catch (e) {}
+      target.appendChild(el);
+      return true;
+    }
     // append
     target.appendChild(el);
     return true;
@@ -1807,6 +1813,60 @@
       } catch (e) {}
     });
 
+    // ── カート追加の自動検知 ──────────────────────────────────────────
+    //   Shopify   : /cart/add(.js) へのPOSTを fetch/XHR で傍受 → cx:cart:add 発火
+    //   その他     : GA4 dataLayer の add_to_cart を監視（下の dataLayer 監視で処理）
+    (function installShopifyCartWatch() {
+      var isShopify = !!(window.Shopify || window.__st ||
+        (document.querySelector && document.querySelector('script[src*="cdn.shopify"]')));
+      if (!isShopify) return;
+      var isCartAddUrl = function (u) {
+        try { return /\/cart\/add(\.js)?(\?|$)/i.test(String(u || "")); } catch (e) { return false; }
+      };
+      // fetch 傍受
+      try {
+        if (window.fetch && !window.__cxCartFetchPatched) {
+          window.__cxCartFetchPatched = true;
+          var origFetch = window.fetch;
+          window.fetch = function (input, init) {
+            var url = (typeof input === "string") ? input : (input && input.url) || "";
+            var method = (init && init.method) || (input && input.method) || "GET";
+            var p = origFetch.apply(this, arguments);
+            try {
+              if (isCartAddUrl(url) && String(method).toUpperCase() === "POST") {
+                p.then(function (res) {
+                  if (res && res.ok) { try { window.dispatchEvent(new Event("cx:cart:add")); } catch (e) {} }
+                }).catch(function () {});
+              }
+            } catch (e) {}
+            return p;
+          };
+        }
+      } catch (e) {}
+      // XHR 傍受（jQuery.ajax等でカート追加するテーマ向け）
+      try {
+        if (window.XMLHttpRequest && !window.__cxCartXhrPatched) {
+          window.__cxCartXhrPatched = true;
+          var OrigOpen = XMLHttpRequest.prototype.open;
+          var OrigSend = XMLHttpRequest.prototype.send;
+          XMLHttpRequest.prototype.open = function (method, url) {
+            try { this.__cxCartAdd = isCartAddUrl(url) && String(method || "").toUpperCase() === "POST"; } catch (e) {}
+            return OrigOpen.apply(this, arguments);
+          };
+          XMLHttpRequest.prototype.send = function () {
+            if (this.__cxCartAdd) {
+              this.addEventListener("load", function () {
+                if (this.status >= 200 && this.status < 300) {
+                  try { window.dispatchEvent(new Event("cx:cart:add")); } catch (e) {}
+                }
+              });
+            }
+            return OrigSend.apply(this, arguments);
+          };
+        }
+      } catch (e) {}
+    })();
+
     // 購入完了でカゴ落ちフラグをクリア
     function clearCartFlag() {
       try { localStorage.removeItem(cartKey); } catch (e) {}
@@ -1867,7 +1927,15 @@
 
       function handleDataLayerItem(item) {
         if (!item || typeof item !== "object") return;
-        if (String(item.event || "").toLowerCase() !== "purchase") return;
+        var evName = String(item.event || "").toLowerCase();
+        // カート追加を自動検知 → cx:cart:add 発火（カゴ落ち判定・cart_addトリガー用）
+        // GA4: event='add_to_cart' / UA: event='addToCart' or ecommerce.add
+        if (evName === "add_to_cart" || evName === "addtocart" || (item.ecommerce && item.ecommerce.add)) {
+          try { window.dispatchEvent(new Event("cx:cart:add")); } catch (e) {}
+          log("[cx] dataLayer add_to_cart detected");
+          return;
+        }
+        if (evName !== "purchase") return;
         if (dlPurchaseFired) return; // 重複防止
         var data = extractPurchaseData(item);
         if (!data) return;
@@ -1904,7 +1972,9 @@
       }
 
       // ② 以降のpushを監視（Array.pushをオーバーライド）
-      if (!dlPurchaseFired) {
+      // 購入検知後も add_to_cart を拾い続けるため、常にインストールする
+      // （purchaseは handleDataLayerItem 内で dlPurchaseFired により重複防止済み）
+      {
         window.dataLayer = window.dataLayer || [];
         var origPush = window.dataLayer.push.bind(window.dataLayer);
         window.dataLayer.push = function () {
