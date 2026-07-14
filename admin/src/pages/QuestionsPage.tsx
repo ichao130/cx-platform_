@@ -8,6 +8,7 @@ import {
   collection, query, where, onSnapshot, doc, setDoc, deleteDoc,
 } from "firebase/firestore";
 import { db, apiPostJson } from "../firebase";
+import RightDrawer from "../components/RightDrawer";
 
 type AnswerSummary = {
   by_key: Record<string, Record<string, number>>;
@@ -317,14 +318,22 @@ export default function QuestionsPage() {
       )}
       {summaryLoading && <div className="small" style={{ opacity: 0.5, marginTop: 8 }}>回答集計を読み込み中…</div>}
 
-      {editing && (
-        <QuestionEditor
-          editing={editing}
-          onChange={(form) => setEditing({ ...editing, form })}
-          onClose={() => setEditing(null)}
-          onSave={save}
-        />
-      )}
+      <RightDrawer
+        open={!!editing}
+        width={1040}
+        title="質問接客の編集"
+        description="質問・選択肢・クリエイティブを設定します。右側にプレビューが出ます。"
+        onClose={() => setEditing(null)}
+      >
+        {editing && (
+          <QuestionEditor
+            editing={editing}
+            onChange={(form) => setEditing({ ...editing, form })}
+            onClose={() => setEditing(null)}
+            onSave={save}
+          />
+        )}
+      </RightDrawer>
     </div>
   );
 }
@@ -344,14 +353,6 @@ function QuestionEditor(props: {
   const previewChoices = useMemo(() => (f.choices || []).filter((x) => (x.label || "").trim()), [f.choices]);
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 9999, display: "flex", justifyContent: "center", alignItems: "flex-start", padding: 20, overflow: "auto" }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ width: "min(920px, 96vw)", background: "#fff", borderRadius: 16, padding: 20, boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
-        <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <div className="h2" style={{ margin: 0 }}>質問接客の編集</div>
-          <button className="btn" onClick={onClose}>✕ 閉じる</button>
-        </div>
-
         <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 20 }}>
           {/* 左: 設定 */}
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -456,8 +457,6 @@ function QuestionEditor(props: {
             <div className="small" style={{ opacity: 0.6, marginTop: 8 }}>実際は画面下部中央にカードで表示されます。</div>
           </div>
         </div>
-      </div>
-    </div>
   );
 }
 
