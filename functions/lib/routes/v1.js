@@ -4112,6 +4112,179 @@ function registerV1Routes(app) {
         res.setHeader("Access-Control-Allow-Headers", "Content-Type,X-Site-Id,X-Site-Key");
         res.status(204).send("");
     });
+    // ── 質問型接客: 回答データ集計（管理画面向け・Phase2）──────────────
+    //   visitor_attributes を走査し、属性キー×値のユーザー数と質問別回答数を返す。
+    //   ※ 動的キーのため走査集計。大規模化したら別途マテリアライズ設計が必要（[stats-scale-sharding]の思想）。
+    app.post("/v1/questions/answers/summary", async (req, res) => {
+        corsByAdminOrigins(req, res);
+        try {
+            const site_id = String(req.body?.site_id || "");
+            if (!site_id)
+                return res.status(400).json({ error: "site_id required" });
+            await requireWorkspaceAccessBySiteId(req, site_id, "dashboard", ["owner", "admin", "member"]);
+            const db = (0, admin_1.adminDb)();
+            const byKey = {}; // key -> value -> ユーザー数
+            const answeredCounts = {}; // questionId -> 回答者数
+            let totalWithAttrs = 0;
+            let scanned = 0;
+            let truncated = false;
+            const MAX_SCAN = 50000;
+            let cursor = null; // last document snapshot
+            while (true) {
+                let q = db.collection("visitor_attributes")
+                    .where("site_id", "==", site_id)
+                    .limit(2000);
+                if (cursor)
+                    q = q.startAfter(cursor);
+                const snap = await q.get();
+                if (snap.empty)
+                    break;
+                cursor = snap.docs[snap.docs.length - 1];
+                for (const d of snap.docs) {
+                    const data = d.data();
+                    const attrs = (data.attrs || {});
+                    const answered = (data.answered || {});
+                    let hasAny = false;
+                    for (const key of Object.keys(attrs)) {
+                        const vals = Array.isArray(attrs[key]) ? attrs[key] : [];
+                        if (vals.length)
+                            hasAny = true;
+                        const bucket = byKey[key] || (byKey[key] = {});
+                        // 同一ユーザーの同値は1回（値単位のユニークユーザー数）
+                        const seen = new Set();
+                        for (const v of vals) {
+                            const vv = String(v);
+                            if (seen.has(vv))
+                                continue;
+                            seen.add(vv);
+                            bucket[vv] = (bucket[vv] || 0) + 1;
+                        }
+                    }
+                    for (const qid of Object.keys(answered)) {
+                        answeredCounts[qid] = (answeredCounts[qid] || 0) + 1;
+                    }
+                    if (hasAny)
+                        totalWithAttrs += 1;
+                }
+                scanned += snap.size;
+                if (snap.size < 2000)
+                    break;
+                if (scanned >= MAX_SCAN) {
+                    truncated = true;
+                    break;
+                }
+            }
+            return res.json({ ok: true, total_with_attrs: totalWithAttrs, by_key: byKey, answered_counts: answeredCounts, scanned, truncated });
+        }
+        catch (e) {
+            console.error("[/v1/questions/answers/summary] error:", e);
+            return res
+                .status(String(e?.message || "").startsWith("workspace_access_denied:") ? 403 : 400)
+                .json({ error: "answers_summary_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/questions/answers/summary", (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+            res.status(204).send("");
+        }
+        catch (e) {
+            return res.status(403).send(e?.message || "forbidden");
+        }
+    });
+    // ── 質問型接客: AI提案（Phase3）──────────────────────────────────
+    //   サイトのAIコンテキスト＋既存質問＋回答分布を渡し、AIに
+    //   ①セグメント提案（この層にこの訴求）②新しい質問提案 を出させる。
+    //   実データが薄いうちはコンテキスト主体、溜まるほど分布主体になる。
+    app.post("/v1/questions/ai/suggest", async (req, res) => {
+        corsByAdminOrigins(req, res);
+        try {
+            const site_id = String(req.body?.site_id || "");
+            if (!site_id)
+                return res.status(400).json({ error: "site_id required" });
+            await requireWorkspaceAccessBySiteId(req, site_id, "ai", ["owner", "admin", "member"]);
+            const db = (0, admin_1.adminDb)();
+            const siteDoc = await db.collection("sites").doc(site_id).get();
+            if (!siteDoc.exists)
+                return res.status(404).json({ error: "site not found" });
+            const aiContext = (siteDoc.data()?.aiContext || {});
+            // 既存の質問（タイトル・属性キー・選択肢）
+            const qSnap = await db.collection("questions").where("siteId", "==", site_id).get();
+            const existingQuestions = qSnap.docs
+                .map((d) => d.data())
+                .filter((q) => q.status !== "deleted")
+                .map((q) => ({
+                title: q.title || "",
+                attribute_key: q.attribute_key || "",
+                choices: (Array.isArray(q.choices) ? q.choices : []).map((c) => ({ label: c.label, value: c.value })),
+            }))
+                .slice(0, 30);
+            // 回答分布（by_key）はクライアントが集計済みのものを受け取る（無ければ空）
+            const distribution = (req.body?.distribution && typeof req.body.distribution === "object") ? req.body.distribution : {};
+            const prompt = {
+                language: "必ず日本語で回答してください",
+                goal: "質問型接客の運用支援。ゼロパーティデータ(本人が申告した意図/関心/悩み)を活かす。",
+                site_context: {
+                    sells: aiContext.sells || "不明",
+                    target: aiContext.target || "不明",
+                    brand_do: aiContext.brandDo || "特になし",
+                    brand_dont: aiContext.brandDont || "特になし",
+                    current_campaign: aiContext.campaign || "特になし",
+                },
+                existing_questions: existingQuestions,
+                answer_distribution: distribution, // { "concerns.uv": { "sticky": 124, ... } }
+                instructions: [
+                    "segment_suggestions: 回答分布があれば、多い/特徴的な層を優先し『この属性の層にこの訴求』を提案。attribute_key/attribute_value は既存質問の選択肢のvalueに一致させる。",
+                    "question_suggestions: 行動データだけでは意図が分からない場面を想定し、新しい質問を提案。既存質問と重複させない。choicesのvalueは英数と_のみの短いスラッグ。",
+                    "site_context(何を売る/ターゲット/ブランド方針)を必ず踏まえる。brand_dontは避ける。",
+                    "各提案は短く実務的に。誇大表現・英語は避ける。",
+                ],
+                constraints: { max_segment_suggestions: 4, max_question_suggestions: 3 },
+            };
+            const out = await (0, openaiJson_1.callOpenAIJson)({
+                model: "gpt-4.1-mini",
+                systemPrompt: "あなたはECの接客・CRMに強いデータアナリストです。ゼロパーティデータ(質問回答)と行動データを組み合わせた具体的な運用提案を、必ず日本語のJSONで返してください。",
+                input: prompt,
+                schema: zod_1.z.object({
+                    segment_suggestions: zod_1.z.array(zod_1.z.object({
+                        segment_label: zod_1.z.string(),
+                        attribute_key: zod_1.z.string(),
+                        attribute_value: zod_1.z.string(),
+                        why: zod_1.z.string(),
+                        message_idea: zod_1.z.string(),
+                    })).max(4),
+                    question_suggestions: zod_1.z.array(zod_1.z.object({
+                        title: zod_1.z.string(),
+                        attribute_key: zod_1.z.string(),
+                        why: zod_1.z.string(),
+                        choices: zod_1.z.array(zod_1.z.object({ label: zod_1.z.string(), value: zod_1.z.string() })).min(2).max(6),
+                    })).max(3),
+                }),
+            });
+            return res.json({ ok: true, ...out });
+        }
+        catch (e) {
+            console.error("[/v1/questions/ai/suggest] error:", e);
+            return res
+                .status(e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401
+                : String(e?.message || "").startsWith("workspace_access_denied:") ? 403
+                    : 400)
+                .json({ error: "ai_suggest_failed", message: e?.message || String(e) });
+        }
+    });
+    app.options("/v1/questions/ai/suggest", (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Site-Id,X-Site-Key");
+            res.status(204).send("");
+        }
+        catch (e) {
+            return res.status(403).send(e?.message || "forbidden");
+        }
+    });
     app.options("/v1/log", (req, res) => {
         // ログはcredentials不要 → ワイルドカードCORSで常にpreflightを通す
         res.setHeader("Access-Control-Allow-Origin", "*");

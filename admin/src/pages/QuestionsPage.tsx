@@ -1,12 +1,19 @@
 // admin/src/pages/QuestionsPage.tsx
 // 質問型接客（質問→回答→属性蓄積）。Actionsの兄弟エンティティ。
 // クリエイティブ（ヘッダー画像・トンマナ）＋質問文＋選択肢(表示名/保存値)＋属性キー＋回答形式 をビルド。
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import {
   collection, query, where, onSnapshot, doc, setDoc, deleteDoc,
 } from "firebase/firestore";
-import { db } from "../firebase";
+import { db, apiPostJson } from "../firebase";
+
+type AnswerSummary = {
+  by_key: Record<string, Record<string, number>>;
+  answered_counts: Record<string, number>;
+  total_with_attrs: number;
+};
 
 type Choice = { label: string; value: string };
 type Creative = {
@@ -64,6 +71,37 @@ export default function QuestionsPage() {
   const [siteId, setSiteId] = useState("");
   const [rows, setRows] = useState<Array<{ id: string; data: QuestionDoc }>>([]);
   const [editing, setEditing] = useState<{ id: string; form: QuestionDoc } | null>(null);
+  const [summary, setSummary] = useState<AnswerSummary | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [ai, setAi] = useState<{ segment_suggestions: any[]; question_suggestions: any[] } | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiErr, setAiErr] = useState("");
+  const navigate = useNavigate();
+
+  const loadAiSuggest = useCallback(async () => {
+    if (!siteId) return;
+    setAiLoading(true); setAiErr("");
+    try {
+      const j = await apiPostJson<any>("/v1/questions/ai/suggest", { site_id: siteId, distribution: summary?.by_key || {} }, { siteId });
+      setAi({ segment_suggestions: j.segment_suggestions || [], question_suggestions: j.question_suggestions || [] });
+    } catch (e: any) {
+      setAiErr(e?.message || String(e)); setAi(null);
+    } finally { setAiLoading(false); }
+  }, [siteId, summary]);
+
+  const loadSummary = useCallback(async () => {
+    if (!siteId) { setSummary(null); return; }
+    setSummaryLoading(true);
+    try {
+      const j = await apiPostJson<AnswerSummary & { ok: boolean }>("/v1/questions/answers/summary", { site_id: siteId }, { siteId });
+      setSummary({ by_key: j.by_key || {}, answered_counts: j.answered_counts || {}, total_with_attrs: j.total_with_attrs || 0 });
+    } catch (e) {
+      console.error("[questions summary]", e);
+      setSummary(null);
+    } finally {
+      setSummaryLoading(false);
+    }
+  }, [siteId]);
 
   // auth → uid → workspace/site（アプリのグローバル選択と同期）
   useEffect(() => {
@@ -100,6 +138,9 @@ export default function QuestionsPage() {
       );
     }, (e) => console.error("[questions] query error", e));
   }, [siteId]);
+
+  // 回答集計（Phase2）
+  useEffect(() => { loadSummary(); }, [loadSummary]);
 
   const openCreate = () => {
     const f = emptyForm();
@@ -161,24 +202,120 @@ export default function QuestionsPage() {
         <button className="btn btn--primary" onClick={openCreate}>+ 質問を作成</button>
       </div>
 
+      {/* 🤖 AI提案（Phase3） */}
+      <div style={{ marginBottom: 16, padding: "12px 14px", borderRadius: 12, background: "rgba(99,102,241,.06)", border: "1px solid rgba(99,102,241,.18)" }}>
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontWeight: 700, color: "#4338ca" }}>🤖 AI提案</div>
+            <div className="small" style={{ opacity: 0.7 }}>回答分布とサイト情報から、狙うべきセグメントと次に聞くべき質問をAIが提案します。</div>
+          </div>
+          <button className="btn" onClick={loadAiSuggest} disabled={aiLoading}>{aiLoading ? "考え中…" : ai ? "🔄 再提案" : "AIに提案してもらう"}</button>
+        </div>
+        {aiErr && <div className="small" style={{ color: "#dc2626", marginTop: 8 }}>AI提案に失敗: {aiErr}</div>}
+        {ai && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 12 }}>
+            {/* セグメント提案 */}
+            <div>
+              <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>🎯 セグメント提案</div>
+              <div style={{ display: "grid", gap: 8 }}>
+                {(ai.segment_suggestions || []).length === 0 && <div className="small" style={{ opacity: 0.5 }}>提案なし（回答が溜まると精度が上がります）</div>}
+                {(ai.segment_suggestions || []).map((s, i) => (
+                  <div key={i} style={{ padding: "10px 12px", background: "#fff", borderRadius: 8, border: "1px solid rgba(15,23,42,.1)" }}>
+                    <div style={{ fontWeight: 700, fontSize: 13 }}>{s.segment_label}</div>
+                    <div className="small" style={{ opacity: 0.7, margin: "4px 0" }}>{s.why}</div>
+                    <div className="small" style={{ background: "rgba(99,102,241,.08)", borderRadius: 6, padding: "6px 8px", marginBottom: 6 }}>💡 {s.message_idea}</div>
+                    <div className="small" style={{ opacity: 0.6 }}>条件: <code>{s.attribute_key} = {s.attribute_value}</code></div>
+                    <button className="btn" style={{ marginTop: 6, fontSize: 11, padding: "3px 8px" }}
+                      onClick={() => { try { sessionStorage.setItem("cx_seg_hint", JSON.stringify({ key: s.attribute_key, value: s.attribute_value, label: s.segment_label })); } catch {} navigate("/scenarios"); }}>
+                      この層に施策を作成 →
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* 質問提案 */}
+            <div>
+              <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>❓ 質問提案</div>
+              <div style={{ display: "grid", gap: 8 }}>
+                {(ai.question_suggestions || []).length === 0 && <div className="small" style={{ opacity: 0.5 }}>提案なし</div>}
+                {(ai.question_suggestions || []).map((qs, i) => (
+                  <div key={i} style={{ padding: "10px 12px", background: "#fff", borderRadius: 8, border: "1px solid rgba(15,23,42,.1)" }}>
+                    <div style={{ fontWeight: 700, fontSize: 13 }}>{qs.title}</div>
+                    <div className="small" style={{ opacity: 0.7, margin: "4px 0" }}>{qs.why}</div>
+                    <div className="small" style={{ opacity: 0.6 }}>選択肢: {(qs.choices || []).map((c: any) => c.label).join(" / ")}</div>
+                    <button className="btn" style={{ marginTop: 6, fontSize: 11, padding: "3px 8px" }}
+                      onClick={() => {
+                        const f = emptyForm(); f.siteId = siteId; f.workspaceId = workspaceId;
+                        f.title = qs.title || ""; f.attribute_key = qs.attribute_key || "";
+                        f.choices = (qs.choices || []).map((c: any) => ({ label: String(c.label || ""), value: String(c.value || slugify(c.label || "")) }));
+                        setEditing({ id: `q_${Math.random().toString(36).slice(2, 10)}`, form: f });
+                      }}>
+                      この質問を作成 →
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
       {rows.length === 0 ? (
         <div className="small" style={{ opacity: 0.6 }}>まだ質問はありません。「+ 質問を作成」から追加してください。</div>
       ) : (
-        <div style={{ display: "grid", gap: 8 }}>
-          {rows.map((r) => (
-            <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", border: "1px solid rgba(15,23,42,.1)", borderRadius: 10 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700 }}>{r.data.title || "（無題）"}</div>
-                <div className="small" style={{ opacity: 0.7 }}>
-                  {r.data.answer_mode === "multi" ? "複数選択" : "単一選択"} ・ 選択肢{(r.data.choices || []).length} ・ 属性: <code>{r.data.attribute_key}</code>
+        <div style={{ display: "grid", gap: 10 }}>
+          {rows.map((r) => {
+            const key = r.data.attribute_key;
+            const dist = (summary?.by_key || {})[key] || {};
+            const answered = (summary?.answered_counts || {})[r.id] || 0;
+            const maxCount = Math.max(1, ...(r.data.choices || []).map((c) => dist[c.value] || 0));
+            return (
+              <div key={r.id} style={{ padding: "12px 14px", border: "1px solid rgba(15,23,42,.1)", borderRadius: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700 }}>{r.data.title || "（無題）"}</div>
+                    <div className="small" style={{ opacity: 0.7 }}>
+                      {r.data.answer_mode === "multi" ? "複数選択" : "単一選択"} ・ 選択肢{(r.data.choices || []).length} ・ 属性: <code>{key}</code> ・ 回答 <b>{answered}</b>人
+                    </div>
+                  </div>
+                  <button className="btn" onClick={() => openEdit(r)}>編集</button>
+                  <button className="btn btn--danger" onClick={() => remove(r.id)}>削除</button>
+                </div>
+
+                {/* 回答分布（Phase2）＋セグメント施策作成 */}
+                <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+                  {(r.data.choices || []).map((c) => {
+                    const n = dist[c.value] || 0;
+                    const pct = Math.round((n / maxCount) * 100);
+                    return (
+                      <div key={c.value} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div className="small" style={{ width: 120, flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.label}</div>
+                        <div style={{ flex: 1, height: 8, background: "rgba(15,23,42,.06)", borderRadius: 99, overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${pct}%`, background: "#6366f1", borderRadius: 99 }} />
+                        </div>
+                        <div className="small" style={{ width: 48, textAlign: "right", flexShrink: 0, fontWeight: 700 }}>{n}人</div>
+                        <button
+                          className="btn"
+                          style={{ fontSize: 11, padding: "3px 8px", flexShrink: 0 }}
+                          disabled={n === 0}
+                          title={`「${c.label}」と回答した ${n}人 に接客を作成（属性条件 ${key} = ${c.value}）`}
+                          onClick={() => {
+                            try { sessionStorage.setItem("cx_seg_hint", JSON.stringify({ key, value: c.value, label: c.label })); } catch {}
+                            navigate("/scenarios");
+                          }}
+                        >
+                          施策を作成 →
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
-              <button className="btn" onClick={() => openEdit(r)}>編集</button>
-              <button className="btn btn--danger" onClick={() => remove(r.id)}>削除</button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
+      {summaryLoading && <div className="small" style={{ opacity: 0.5, marginTop: 8 }}>回答集計を読み込み中…</div>}
 
       {editing && (
         <QuestionEditor
