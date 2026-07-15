@@ -73,6 +73,35 @@ function fmtInt(n: any) {
   return safeNum(n).toLocaleString("ja-JP");
 }
 
+// 天気アイコン: WMO weather code → 絵文字。codeが無い古いログはラベルから推定。
+function weatherIcon(code: any, label?: string | null) {
+  const c = typeof code === "number" ? code : null;
+  if (c !== null) {
+    if (c === 0) return "☀️";                    // 快晴
+    if (c === 1) return "🌤️";                   // ほぼ晴れ
+    if (c === 2) return "⛅";                    // 一部曇り
+    if (c === 3) return "☁️";                    // 曇り
+    if (c === 45 || c === 48) return "🌫️";      // 霧
+    if (c >= 51 && c <= 57) return "🌦️";        // 霧雨
+    if (c >= 61 && c <= 67) return "🌧️";        // 雨
+    if (c >= 71 && c <= 77) return "❄️";         // 雪
+    if (c >= 80 && c <= 82) return "🌦️";        // にわか雨
+    if (c === 85 || c === 86) return "🌨️";      // にわか雪
+    if (c >= 95) return "⛈️";                    // 雷雨
+  }
+  const l = String(label || "");
+  if (l.includes("快晴")) return "☀️";
+  if (l.includes("にわか雪")) return "🌨️";
+  if (l.includes("にわか雨")) return "🌦️";
+  if (l.includes("雷")) return "⛈️";
+  if (l.includes("雪")) return "❄️";
+  if (l.includes("雨")) return "🌧️";
+  if (l.includes("霧")) return "🌫️";
+  if (l.includes("晴れ")) return "🌤️";
+  if (l.includes("曇")) return "☁️";
+  return "🌡️";
+}
+
 function pct(num: number, denom: number) {
   if (!denom) return "—";
   return (Math.round((num / denom) * 1000) / 10).toFixed(1) + "%";
@@ -2882,7 +2911,7 @@ export default function AnalyticsPage() {
                           const rpv = w.pv > 0 ? w.revenue / w.pv : 0;
                           return (
                             <tr key={w.label} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                              <td style={{ padding: "7px 10px", fontWeight: 600 }}>{w.label}</td>
+                              <td style={{ padding: "7px 10px", fontWeight: 600 }}>{weatherIcon(null, w.label)} {w.label}</td>
                               <td style={{ textAlign: "right", padding: "7px 10px", opacity: 0.7 }}>{fmtInt(w.pv)}</td>
                               <td style={{ textAlign: "right", padding: "7px 10px" }}>{w.purchases > 0 ? fmtInt(w.purchases) : <span style={{ opacity: 0.3 }}>—</span>}</td>
                               <td style={{ textAlign: "right", padding: "7px 10px", fontWeight: w.revenue > 0 ? 700 : 400 }}>{w.revenue > 0 ? `¥${Math.round(w.revenue).toLocaleString()}` : <span style={{ opacity: 0.3 }}>—</span>}</td>
@@ -3631,7 +3660,7 @@ export default function AnalyticsPage() {
                                             <span>📍 {ev.geo_region}{ev.geo_city ? ` ${ev.geo_city}` : ""}</span>
                                           )}
                                           {ev.weather_label && (
-                                            <span>🌤️ {ev.weather_label}{typeof ev.weather_temp === "number" ? ` ${Math.round(ev.weather_temp)}℃` : ""}</span>
+                                            <span>{weatherIcon(ev.weather_code, ev.weather_label)} {ev.weather_label}{typeof ev.weather_temp === "number" ? ` ${Math.round(ev.weather_temp)}℃` : ""}</span>
                                           )}
                                         </div>
                                       )}
