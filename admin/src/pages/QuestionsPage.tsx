@@ -80,8 +80,10 @@ export default function QuestionsPage() {
   const [ai, setAi] = useState<{ segment_suggestions: any[]; question_suggestions: any[] } | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiErr, setAiErr] = useState("");
-  const [tab, setTab] = useState<"list" | "stats">("list");
+  const [tab, setTab] = useState<"list" | "archived" | "stats">("list");
   const [siteName, setSiteName] = useState("");
+  // questionId -> 使用中のシナリオ名（アーカイブ前の警告用）
+  const [usage, setUsage] = useState<Record<string, string[]>>({});
   const navigate = useNavigate();
 
   const loadAiSuggest = useCallback(async () => {
@@ -154,6 +156,24 @@ export default function QuestionsPage() {
     return onSnapshot(doc(db, "sites", siteId), (snap) => setSiteName(String((snap.data() as any)?.name || "")));
   }, [siteId]);
 
+  // シナリオでの使用状況（questionRefs から逆引き）
+  useEffect(() => {
+    if (!siteId) { setUsage({}); return; }
+    const q = query(collection(db, "scenarios"), where("siteId", "==", siteId));
+    return onSnapshot(q, (snap) => {
+      const m: Record<string, string[]> = {};
+      snap.docs.forEach((d) => {
+        const s = d.data() as any;
+        const name = String(s.name || d.id);
+        (Array.isArray(s.questionRefs) ? s.questionRefs : []).forEach((r: any) => {
+          if (!r?.questionId) return;
+          (m[r.questionId] = m[r.questionId] || []).push(name);
+        });
+      });
+      setUsage(m);
+    }, (e) => console.error("[questions usage]", e));
+  }, [siteId]);
+
   // 質問デザイン用テンプレート（type==="question"）を購読
   useEffect(() => {
     if (!workspaceId) { setTemplates([]); return; }
@@ -197,7 +217,7 @@ export default function QuestionsPage() {
       re_ask: f.re_ask,
       re_ask_days: Number(f.re_ask_days) || 0,
       templateId: (f.templateId || "").trim(),
-      status: "active",
+      status: f.status || "active", // 編集でアーカイブ状態を解除しない
       updatedAt: new Date().toISOString(),
     };
     await setDoc(doc(db, "questions", editing.id), payload, { merge: true });
@@ -210,6 +230,23 @@ export default function QuestionsPage() {
       await setDoc(doc(db, "questions", id), { status: "deleted" }, { merge: true });
     });
   }
+
+  // アーカイブ（配信停止）。シナリオで使用中なら止める（配信が黙って壊れるのを防ぐ）
+  async function archive(id: string) {
+    const used = usage[id] || [];
+    if (used.length) {
+      alert(`シナリオ「${used.slice(0, 5).join("、")}」で使用中のためアーカイブできません。\n先にシナリオから外してください。`);
+      return;
+    }
+    await setDoc(doc(db, "questions", id), { status: "archived", updatedAt: new Date().toISOString() }, { merge: true });
+  }
+  async function unarchive(id: string) {
+    await setDoc(doc(db, "questions", id), { status: "active", updatedAt: new Date().toISOString() }, { merge: true });
+  }
+
+  // アクティブ / アーカイブ の振り分け
+  const activeRows = rows.filter((r) => r.data.status !== "archived");
+  const archivedRows = rows.filter((r) => r.data.status === "archived");
 
   return (
     <div className="container liquid-page">
@@ -245,9 +282,9 @@ export default function QuestionsPage() {
           </div>
         </div>
 
-        {/* タブ切替: 質問（管理） / 集計 */}
+        {/* タブ切替: 質問（アクティブ） / アーカイブ / 集計 */}
         <div style={{ display: "flex", gap: 0, marginBottom: 12, border: "1px solid rgba(15,23,42,.12)", borderRadius: 8, overflow: "hidden", width: "fit-content" }}>
-          {([["list", `質問 (${rows.length})`], ["stats", "集計・AI提案"]] as const).map(([t, label]) => (
+          {([["list", `アクティブ (${activeRows.length})`], ["archived", `アーカイブ (${archivedRows.length})`], ["stats", "集計・AI提案"]] as const).map(([t, label]) => (
             <button key={t} type="button" onClick={() => setTab(t)}
               style={{ padding: "6px 16px", border: "none", fontSize: 13, fontWeight: tab === t ? 700 : 500, background: tab === t ? "#1f6573" : "transparent", color: tab === t ? "#fff" : "inherit", cursor: "pointer" }}>
               {label}
@@ -255,8 +292,8 @@ export default function QuestionsPage() {
           ))}
         </div>
 
-        {/* ── 質問タブ（管理）── */}
-        {tab === "list" && (
+        {/* ── 質問タブ（アクティブ / アーカイブ）── */}
+        {(tab === "list" || tab === "archived") && (
           <div className="liquid-scroll-x">
             <table className="table">
               <thead>
@@ -270,26 +307,45 @@ export default function QuestionsPage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.length === 0 ? (
-                  <tr><td colSpan={6}><div className="small" style={{ opacity: 0.6 }}>まだ質問はありません。「新規質問」から追加してください。</div></td></tr>
-                ) : rows.map((r) => (
-                  <tr key={r.id}>
-                    <td>
-                      <div style={{ fontWeight: 700 }}>{r.data.title || "（無題）"}</div>
-                      <div className="small" style={{ opacity: 0.72 }}>ID: <code>{r.id}</code></div>
-                    </td>
-                    <td>{r.data.answer_mode === "multi" ? "複数選択" : "単一選択"}</td>
-                    <td>{(r.data.choices || []).length}</td>
-                    <td><code className="small">{r.data.attribute_key}</code></td>
-                    <td className="small">{r.data.templateId ? "テンプレート" : "デフォルト"}</td>
-                    <td style={{ whiteSpace: "nowrap" }}>
-                      <div style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
-                        <button className="btn" onClick={() => openEdit(r)}>編集</button>
-                        <button className="btn btn--danger" onClick={() => remove(r.id)}>削除</button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {(tab === "list" ? activeRows : archivedRows).length === 0 ? (
+                  <tr><td colSpan={6}><div className="small" style={{ opacity: 0.6 }}>
+                    {tab === "list" ? "まだ質問はありません。「新規質問」から追加してください。" : "アーカイブされた質問はありません。"}
+                  </div></td></tr>
+                ) : (tab === "list" ? activeRows : archivedRows).map((r) => {
+                  const used = usage[r.id] || [];
+                  return (
+                    <tr key={r.id}>
+                      <td>
+                        <div style={{ fontWeight: 700 }}>{r.data.title || "（無題）"}</div>
+                        <div className="small" style={{ opacity: 0.72 }}>ID: <code>{r.id}</code></div>
+                        {used.length > 0 && (
+                          <div className="small" style={{ marginTop: 4 }}>
+                            <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 20, background: "#dcfce7", color: "#15803d" }} title={used.join("、")}>
+                              🔗 使用中 {used.length}
+                            </span>
+                          </div>
+                        )}
+                      </td>
+                      <td>{r.data.answer_mode === "multi" ? "複数選択" : "単一選択"}</td>
+                      <td>{(r.data.choices || []).length}</td>
+                      <td><code className="small">{r.data.attribute_key}</code></td>
+                      <td className="small">{r.data.templateId ? "テンプレート" : "デフォルト"}</td>
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        <div style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+                          <button className="btn" onClick={() => openEdit(r)}>編集</button>
+                          {tab === "list" ? (
+                            <button className="btn" onClick={() => archive(r.id)}>アーカイブ</button>
+                          ) : (
+                            <>
+                              <button className="btn" onClick={() => unarchive(r.id)}>戻す</button>
+                              <button className="btn btn--danger" onClick={() => remove(r.id)}>削除</button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
