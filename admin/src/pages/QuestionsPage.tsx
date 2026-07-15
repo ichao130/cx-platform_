@@ -81,6 +81,7 @@ export default function QuestionsPage() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiErr, setAiErr] = useState("");
   const [tab, setTab] = useState<"list" | "stats">("list");
+  const [siteName, setSiteName] = useState("");
   const navigate = useNavigate();
 
   const loadAiSuggest = useCallback(async () => {
@@ -147,6 +148,12 @@ export default function QuestionsPage() {
   // 回答集計（Phase2）
   useEffect(() => { loadSummary(); }, [loadSummary]);
 
+  // 対象サイト名（ヘッダー表示用）
+  useEffect(() => {
+    if (!siteId) { setSiteName(""); return; }
+    return onSnapshot(doc(db, "sites", siteId), (snap) => setSiteName(String((snap.data() as any)?.name || "")));
+  }, [siteId]);
+
   // 質問デザイン用テンプレート（type==="question"）を購読
   useEffect(() => {
     if (!workspaceId) { setTemplates([]); return; }
@@ -204,57 +211,89 @@ export default function QuestionsPage() {
     });
   }
 
-  if (!siteId) {
-    return (
-      <div className="card">
-        <div className="h1">質問接客</div>
-        <div className="small" style={{ opacity: 0.7 }}>上部でサイトを選択してください。</div>
-      </div>
-    );
-  }
-
   return (
-    <div className="card">
-      <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <div>
-          <div className="h1" style={{ margin: 0 }}>🗣 質問接客</div>
-          <div className="small" style={{ opacity: 0.7 }}>訪問者に質問し、回答をユーザー属性として蓄積 → 次の接客条件に使えます。</div>
-        </div>
-        <button className="btn btn--primary" onClick={openCreate}>+ 質問を作成</button>
-      </div>
-
-      {/* タブ切替: 質問（管理） / 集計 */}
-      <div style={{ display: "flex", gap: 0, marginBottom: 14, border: "1px solid rgba(15,23,42,.12)", borderRadius: 8, overflow: "hidden", width: "fit-content" }}>
-        {([["list", `質問 (${rows.length})`], ["stats", "集計・AI提案"]] as const).map(([t, label]) => (
-          <button key={t} type="button" onClick={() => setTab(t)}
-            style={{ padding: "6px 16px", border: "none", fontSize: 13, fontWeight: tab === t ? 700 : 500, background: tab === t ? "#1f6573" : "transparent", color: tab === t ? "#fff" : "inherit", cursor: "pointer" }}>
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {/* ── 質問タブ（管理）── */}
-      {tab === "list" && (
-        rows.length === 0 ? (
-          <div className="small" style={{ opacity: 0.6 }}>まだ質問はありません。「+ 質問を作成」から追加してください。</div>
-        ) : (
-          <div style={{ display: "grid", gap: 8 }}>
-            {rows.map((r) => (
-              <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", border: "1px solid rgba(15,23,42,.1)", borderRadius: 10 }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 700 }}>{r.data.title || "（無題）"}</div>
-                  <div className="small" style={{ opacity: 0.7 }}>
-                    {r.data.answer_mode === "multi" ? "複数選択" : "単一選択"} ・ 選択肢{(r.data.choices || []).length} ・ 属性: <code>{r.data.attribute_key}</code>
-                    {r.data.templateId ? " ・ テンプレ有" : ""}
-                  </div>
-                </div>
-                <button className="btn" onClick={() => openEdit(r)}>編集</button>
-                <button className="btn btn--danger" onClick={() => remove(r.id)}>削除</button>
-              </div>
-            ))}
+    <div className="container liquid-page">
+      <div className="page-header">
+        <div className="page-header__meta">
+          <div className="small" style={{ marginBottom: 6, opacity: 0.7 }}>MOKKEDA / Main</div>
+          <h1 className="h1">質問接客</h1>
+          <div className="small">訪問者に質問し、回答をユーザー属性として蓄積して、次の接客条件に使う画面です。まずは一覧で確認し、必要なときだけ登録・編集します。</div>
+          <div className="small" style={{ marginTop: 6, opacity: 0.72 }}>
+            対象サイト: <b>{siteName || "（未選択）"}</b>
+            {siteId ? <span style={{ opacity: 0.62 }}> / ID: <code>{siteId}</code></span> : null}
           </div>
-        )
-      )}
+        </div>
+        <div className="page-header__actions">
+          <button className="btn btn--primary" onClick={openCreate} disabled={!siteId}>新規質問</button>
+        </div>
+      </div>
+
+      {!siteId ? (
+        <div className="card">
+          <div className="small" style={{ opacity: 0.7 }}>上部でサイトを選択してください。</div>
+        </div>
+      ) : (
+      <div className="card">
+        <div className="list-toolbar">
+          <div className="list-toolbar__filters">
+            <div className="small" style={{ opacity: 0.74 }}>
+              質問と回答状況を管理します。回答は訪問者の属性として蓄積され、接客条件に使えます。
+            </div>
+          </div>
+          <div className="list-toolbar__actions">
+            <button className="btn" onClick={openCreate}>作成</button>
+          </div>
+        </div>
+
+        {/* タブ切替: 質問（管理） / 集計 */}
+        <div style={{ display: "flex", gap: 0, marginBottom: 12, border: "1px solid rgba(15,23,42,.12)", borderRadius: 8, overflow: "hidden", width: "fit-content" }}>
+          {([["list", `質問 (${rows.length})`], ["stats", "集計・AI提案"]] as const).map(([t, label]) => (
+            <button key={t} type="button" onClick={() => setTab(t)}
+              style={{ padding: "6px 16px", border: "none", fontSize: 13, fontWeight: tab === t ? 700 : 500, background: tab === t ? "#1f6573" : "transparent", color: tab === t ? "#fff" : "inherit", cursor: "pointer" }}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* ── 質問タブ（管理）── */}
+        {tab === "list" && (
+          <div className="liquid-scroll-x">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>質問</th>
+                  <th>回答形式</th>
+                  <th>選択肢</th>
+                  <th>属性キー</th>
+                  <th>デザイン</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.length === 0 ? (
+                  <tr><td colSpan={6}><div className="small" style={{ opacity: 0.6 }}>まだ質問はありません。「新規質問」から追加してください。</div></td></tr>
+                ) : rows.map((r) => (
+                  <tr key={r.id}>
+                    <td>
+                      <div style={{ fontWeight: 700 }}>{r.data.title || "（無題）"}</div>
+                      <div className="small" style={{ opacity: 0.72 }}>ID: <code>{r.id}</code></div>
+                    </td>
+                    <td>{r.data.answer_mode === "multi" ? "複数選択" : "単一選択"}</td>
+                    <td>{(r.data.choices || []).length}</td>
+                    <td><code className="small">{r.data.attribute_key}</code></td>
+                    <td className="small">{r.data.templateId ? "テンプレート" : "デフォルト"}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      <div style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+                        <button className="btn" onClick={() => openEdit(r)}>編集</button>
+                        <button className="btn btn--danger" onClick={() => remove(r.id)}>削除</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
       {/* ── 集計タブ（回答分布＋AI提案）── */}
       {tab === "stats" && (
@@ -368,6 +407,8 @@ export default function QuestionsPage() {
             </div>
           )}
         </div>
+      )}
+      </div>
       )}
 
       <RightDrawer
