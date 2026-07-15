@@ -4245,25 +4245,57 @@ function registerV1Routes(app) {
             };
             const out = await (0, openaiJson_1.callOpenAIJson)({
                 model: "gpt-4.1-mini",
-                systemPrompt: "あなたはECの接客・CRMに強いデータアナリストです。ゼロパーティデータ(質問回答)と行動データを組み合わせた具体的な運用提案を、必ず日本語のJSONで返してください。",
-                input: prompt,
+                systemPrompt: [
+                    "あなたはECの接客・CRMに強いデータアナリストです。",
+                    "ゼロパーティデータ(質問回答)と行動データを組み合わせた具体的な運用提案を、必ず日本語で返してください。",
+                    "出力は input.output_json_shape に示すキー名・構造と完全に一致するJSONのみ。キー名を変更・省略してはいけません。",
+                    "配列の各要素は全フィールドを必ず埋めてください。",
+                ].join(" "),
+                input: {
+                    ...prompt,
+                    // ★重要: json_objectモードではモデルにスキーマが渡らないため、キー名を明示する
+                    output_json_shape: {
+                        segment_suggestions: [
+                            { segment_label: "string", attribute_key: "string", attribute_value: "string", why: "string", message_idea: "string" },
+                        ],
+                        question_suggestions: [
+                            { title: "string", attribute_key: "string", why: "string", choices: [{ label: "string", value: "string" }] },
+                        ],
+                    },
+                    output_rules: [
+                        "出力は output_json_shape のキー名と構造に完全に一致させること（キー名を変えない・省略しない）。",
+                        "各要素の全フィールドを必ず埋めること（空文字にしない）。",
+                    ],
+                },
+                // モデルの形ブレで全体が落ちないよう寛容に受け、後段で不完全な提案だけ捨てる
                 schema: zod_1.z.object({
                     segment_suggestions: zod_1.z.array(zod_1.z.object({
-                        segment_label: zod_1.z.string(),
-                        attribute_key: zod_1.z.string(),
-                        attribute_value: zod_1.z.string(),
-                        why: zod_1.z.string(),
-                        message_idea: zod_1.z.string(),
-                    })).max(4),
+                        segment_label: zod_1.z.string().optional().default(""),
+                        attribute_key: zod_1.z.string().optional().default(""),
+                        attribute_value: zod_1.z.string().optional().default(""),
+                        why: zod_1.z.string().optional().default(""),
+                        message_idea: zod_1.z.string().optional().default(""),
+                    })).optional().default([]),
                     question_suggestions: zod_1.z.array(zod_1.z.object({
-                        title: zod_1.z.string(),
-                        attribute_key: zod_1.z.string(),
-                        why: zod_1.z.string(),
-                        choices: zod_1.z.array(zod_1.z.object({ label: zod_1.z.string(), value: zod_1.z.string() })).min(2).max(6),
-                    })).max(3),
+                        title: zod_1.z.string().optional().default(""),
+                        attribute_key: zod_1.z.string().optional().default(""),
+                        why: zod_1.z.string().optional().default(""),
+                        choices: zod_1.z.array(zod_1.z.object({
+                            label: zod_1.z.string().optional().default(""),
+                            value: zod_1.z.string().optional().default(""),
+                        })).optional().default([]),
+                    })).optional().default([]),
                 }),
             });
-            return res.json({ ok: true, ...out });
+            // 必須項目が欠けた提案は捨てる（表示できないものを出さない）
+            const segment_suggestions = (out.segment_suggestions || [])
+                .filter((s) => s.segment_label && s.attribute_key && s.attribute_value)
+                .slice(0, 4);
+            const question_suggestions = (out.question_suggestions || [])
+                .map((q) => ({ ...q, choices: (q.choices || []).filter((c) => c.label) }))
+                .filter((q) => q.title && q.choices.length >= 2)
+                .slice(0, 3);
+            return res.json({ ok: true, segment_suggestions, question_suggestions });
         }
         catch (e) {
             console.error("[/v1/questions/ai/suggest] error:", e);
