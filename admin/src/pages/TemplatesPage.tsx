@@ -21,14 +21,27 @@ function readSelectedWorkspaceId(uid?: string | null) {
   );
 }
 
-const LS_SITE_KEY = 'cx_admin_site_id';
-function readSelectedSiteId(): string {
-  try { return localStorage.getItem(LS_SITE_KEY) || ''; } catch { return ''; }
+// ★他画面と同じ「ワークスペース別キー」に統一（以前はワークスペース非依存の
+//   'cx_admin_site_id' を使っていたため、この画面だけ選択が同期しなかった）
+const LS_SITE_KEY_LEGACY = 'cx_admin_site_id';
+function siteKeyForWs(workspaceId: string) {
+  return `cx_admin_site_id:${workspaceId}`;
 }
-function writeSelectedSiteId(siteId: string) {
+function readSelectedSiteId(workspaceId?: string): string {
+  if (!workspaceId) return '';
   try {
-    localStorage.setItem(LS_SITE_KEY, siteId);
-    window.dispatchEvent(new CustomEvent('cx_admin_site_changed', { detail: { siteId } }));
+    return (
+      localStorage.getItem(siteKeyForWs(workspaceId)) ||
+      localStorage.getItem(LS_SITE_KEY_LEGACY) || // 旧キーからのフォールバック（移行用）
+      ''
+    );
+  } catch { return ''; }
+}
+function writeSelectedSiteId(workspaceId: string, siteId: string) {
+  if (!workspaceId) return;
+  try {
+    localStorage.setItem(siteKeyForWs(workspaceId), siteId);
+    window.dispatchEvent(new CustomEvent('cx_admin_site_changed', { detail: { workspaceId, siteId } }));
   } catch { /* ignore */ }
 }
 
@@ -301,7 +314,7 @@ export default function TemplatesPage() {
 
   const [id, setId] = useState(() => genId('tpl'));
   const [workspaceId, setWorkspaceId] = useState('');
-  const [siteId, setSiteId] = useState(() => readSelectedSiteId());
+  const [siteId, setSiteId] = useState(''); // workspaceId確定後に復元する（下のeffect）
   const templateLimit = usePlanLimit(workspaceId, "templates");
   const [type, setType] = useState<TemplateDoc['type']>('modal');
   const [codeTab, setCodeTab] = useState<'html' | 'css' | 'js'>('html');
@@ -367,16 +380,25 @@ export default function TemplatesPage() {
   const selectedSite = useMemo(() => visibleSites.find((s) => s.id === siteId), [visibleSites, siteId]);
   const selectedSiteName = useMemo(() => siteLabel(selectedSite), [selectedSite]);
 
-  // サイト選択が無効になった場合、最初のサイトへ自動切替
+  // サイト選択が無効になった場合の自動切替。
+  // ★workspaceId確定前は自動選択しない（未確定のまま先頭を選ぶと保存値を壊す）。
+  //   保存値を優先して復元し、無ければ先頭（初回のみ初期化として保存）。
   useEffect(() => {
+    if (!workspaceId) return;
     if (!visibleSites.length) { setSiteId(''); return; }
     const exists = siteId && visibleSites.some((s) => s.id === siteId);
     if (!exists) {
-      const nextSiteId = visibleSites[0]?.id || '';
-      setSiteId(nextSiteId);
-      if (nextSiteId) writeSelectedSiteId(nextSiteId);
+      const saved = readSelectedSiteId(workspaceId);
+      const hit = visibleSites.find((s) => s.id === saved);
+      if (hit) {
+        setSiteId(hit.id);
+      } else {
+        const nextSiteId = visibleSites[0]?.id || '';
+        setSiteId(nextSiteId);
+        if (nextSiteId && !saved) writeSelectedSiteId(workspaceId, nextSiteId);
+      }
     }
-  }, [visibleSites, siteId]);
+  }, [visibleSites, siteId, workspaceId]);
 
   // サイト変更イベントを受け取る
   useEffect(() => {
@@ -541,7 +563,7 @@ export default function TemplatesPage() {
           <select
             className="input"
             value={siteId}
-            onChange={(e) => { setSiteId(e.target.value); writeSelectedSiteId(e.target.value); }}
+            onChange={(e) => { setSiteId(e.target.value); writeSelectedSiteId(workspaceId, e.target.value); }}
           >
             {visibleSites.map((s) => (
               <option key={s.id} value={s.id}>
@@ -675,7 +697,7 @@ export default function TemplatesPage() {
                   <select
                     className="input"
                     value={siteId}
-                    onChange={(e) => { setSiteId(e.target.value); writeSelectedSiteId(e.target.value); }}
+                    onChange={(e) => { setSiteId(e.target.value); writeSelectedSiteId(workspaceId, e.target.value); }}
                   >
                     {visibleSites.map((s) => (
                       <option key={s.id} value={s.id}>

@@ -125,7 +125,10 @@
     return String(apiBase).replace(/\/serve(\?.*)?$/, "/log");
   }
 
-  function postLog(apiBase, payload, siteId, siteKey) {
+  // onOk: 送信が成功した時だけ呼ばれる（UV/セッションの初回マーカーを
+  //       「送信成功後」に立てるために使う。送信前に立てるとログが落ちた訪問者を
+  //        二度とカウントできず取りこぼす）
+  function postLog(apiBase, payload, siteId, siteKey, onOk) {
     // テストモード: ログ送信スキップ（計測データを汚さない）
     if (_testMode) {
       log("[cx:test] ログ送信スキップ →", payload.event, payload);
@@ -146,6 +149,8 @@
         body: JSON.stringify(payload),
         credentials: "omit",
         keepalive: true
+      }).then(function (r) {
+        if (r && r.ok && typeof onOk === "function") { try { onOk(); } catch (e) {} }
       }).catch(function () { });
     } catch (e) { }
   }
@@ -2295,23 +2300,27 @@
     // UV/セッションの重複排除をSDK側で実施（サーバーは初回のみカウンタ加算＝分散カウンタ）
     //  uv_first: その日そのブラウザで最初のpageview（localStorageの日次マーカー）
     //  session_first: そのセッションで最初のpageview（sessionStorageマーカー）
+    // ★マーカーはここでは立てない（判定だけ）。送信が成功してから立てる。
+    //   送信前に立てると、ログが落ちた訪問者（離脱・回線断・広告ブロック等）は
+    //   「今日はもう初回ではない」状態になり二度とカウントされず、UVを取りこぼす。
+    //   成功後に立てれば、失敗時は次のページビューで再挑戦できる。
     var uvFirst = false, sessionFirst = false;
+    var todayKey = "", uvMarkKey = "", sessMarkKey = "";
     try {
       // サーバーの stats_daily day はJST基準なので、日次マーカーもJSTで切って境界を揃える
-      var todayKey = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
-      var uvMarkKey = "cx_uvday_" + siteId;
-      if (localStorage.getItem(uvMarkKey) !== todayKey) {
-        localStorage.setItem(uvMarkKey, todayKey);
-        uvFirst = true;
-      }
+      todayKey = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+      uvMarkKey = "cx_uvday_" + siteId;
+      uvFirst = localStorage.getItem(uvMarkKey) !== todayKey;
     } catch (e) { uvFirst = true; } // localStorage不可の環境では毎回カウント（従来より過大方向・安全側）
     try {
-      var sessMarkKey = "cx_sessmark_" + siteId;
-      if (!sessionStorage.getItem(sessMarkKey)) {
-        sessionStorage.setItem(sessMarkKey, "1");
-        sessionFirst = true;
-      }
+      sessMarkKey = "cx_sessmark_" + siteId;
+      sessionFirst = !sessionStorage.getItem(sessMarkKey);
     } catch (e) { sessionFirst = true; }
+    // 送信成功時にだけマーカーを確定させる
+    function markCountedOnSuccess() {
+      if (uvFirst && uvMarkKey) { try { localStorage.setItem(uvMarkKey, todayKey); } catch (e) {} }
+      if (sessionFirst && sessMarkKey) { try { sessionStorage.setItem(sessMarkKey, "1"); } catch (e) {} }
+    }
 
     // pageview ログを送信
     postLog(apiBase, {
@@ -2328,7 +2337,7 @@
       is_new: isNewVisitor,
       uv_first: uvFirst,
       session_first: sessionFirst,
-    }, siteId, siteKey);
+    }, siteId, siteKey, markCountedOnSuccess); // ★成功後にマーカー確定（取りこぼし防止）
 
     // 滞在時間・離脱計測
     var pageEnterTime = Date.now();
