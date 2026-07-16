@@ -3755,7 +3755,8 @@ export function registerV1Routes(app: Express) {
             title: q.title || "",
             answer_mode: q.answer_mode || "single",
             attribute_key: q.attribute_key || "",
-            choices: Array.isArray(q.choices) ? q.choices : [], // [{label, value}]
+            choices: Array.isArray(q.choices) ? q.choices : [], // [{label, value, thanks?}]
+            thanks: q.thanks || null,                            // 回答後のお礼（共通）。選択肢側が優先
             creative: q.creative || {},                          // header_image_url / トンマナ 等
             template: qTemplate,
             mount: q.mount || null,

@@ -267,6 +267,11 @@ const DEFAULTS: Record<TemplateDoc['type'], { html: string; css: string }> = {
     <div class="cxq__title">{{title}}</div>
     <div class="cxq__choices" data-cx-choices></div>
     <button class="cxq__submit" data-cx-submit>{{submit_label}}</button>
+    <!-- 回答後のお礼。SDKが自動で表示・文言差し込みします（既定は非表示） -->
+    <div class="cxq__thanks" data-cx-thanks>
+      <div class="cxq__thanks-msg" data-cx-thanks-message></div>
+      <a class="cxq__thanks-cta" data-cx-thanks-cta href="#" target="_blank" rel="noopener"></a>
+    </div>
   </div>
 </div>
 `.trim(),
@@ -281,6 +286,9 @@ const DEFAULTS: Record<TemplateDoc['type'], { html: string; css: string }> = {
 .cxq__choices [data-cx-choice]:hover{border-color:#6366f1;}
 .cxq__choices [data-cx-choice][data-selected]{border-color:#6366f1;background:rgba(99,102,241,.08);font-weight:700;}
 .cxq__submit{margin-top:12px;width:100%;padding:12px;border:none;border-radius:12px;background:#6366f1;color:#fff;font-weight:800;font-size:14px;cursor:pointer;}
+.cxq__thanks{display:none;text-align:center;padding:6px 0 2px;}
+.cxq__thanks-msg{font-weight:700;font-size:15px;line-height:1.6;}
+.cxq__thanks-cta{display:inline-block;margin-top:12px;padding:10px 18px;border-radius:10px;background:#6366f1;color:#fff;font-weight:700;font-size:14px;text-decoration:none;}
 `.trim(),
   },
 };

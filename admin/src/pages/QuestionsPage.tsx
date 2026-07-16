@@ -17,7 +17,9 @@ type AnswerSummary = {
   total_with_attrs: number;
 };
 
-type Choice = { label: string; value: string };
+// 回答後のお礼（任意）。選択肢ごとに上書きでき、未設定なら質問共通のお礼が使われる。
+type ThanksSpec = { message?: string; cta_url?: string; cta_text?: string };
+type Choice = { label: string; value: string; thanks?: ThanksSpec };
 type Creative = {
   header_image_url?: string;
   accent_color?: string;
@@ -36,6 +38,8 @@ type QuestionDoc = {
   re_ask: "never" | "days";
   re_ask_days: number;
   templateId?: string; // 質問カードのデザインテンプレート（空=デフォルトカード）
+  // 回答後のお礼（共通）。選択肢側に個別設定があればそちらが優先。
+  thanks?: { message?: string; auto_close_sec?: number };
   status: string;
   updatedAt?: string;
 };
@@ -58,7 +62,9 @@ function emptyForm(): QuestionDoc {
     title: "", answer_mode: "single", attribute_key: "",
     choices: [{ label: "", value: "" }],
     creative: { ...DEFAULT_CREATIVE },
-    re_ask: "never", re_ask_days: 90, templateId: "", status: "active",
+    re_ask: "never", re_ask_days: 90, templateId: "",
+    thanks: { message: "ご回答ありがとうございました！", auto_close_sec: 3 },
+    status: "active",
   };
 }
 
@@ -201,7 +207,16 @@ export default function QuestionsPage() {
     if (!editing) return;
     const f = editing.form;
     const choices = (f.choices || [])
-      .map((c) => ({ label: (c.label || "").trim(), value: (c.value || slugify(c.label)).trim() }))
+      .map((c) => {
+        const base: Choice = { label: (c.label || "").trim(), value: (c.value || slugify(c.label)).trim() };
+        // 選択肢ごとのお礼（任意）。空の項目は保存しない（undefinedはFirestoreで落ちるため空文字を使わない）
+        const t: ThanksSpec = {};
+        if ((c.thanks?.message || "").trim()) t.message = c.thanks!.message!.trim();
+        if ((c.thanks?.cta_url || "").trim()) t.cta_url = c.thanks!.cta_url!.trim();
+        if ((c.thanks?.cta_text || "").trim()) t.cta_text = c.thanks!.cta_text!.trim();
+        if (Object.keys(t).length) base.thanks = t;
+        return base;
+      })
       .filter((c) => c.label && c.value);
     if (!f.title.trim()) { alert("質問文を入力してください"); return; }
     if (choices.length < 1) { alert("選択肢を1つ以上入力してください"); return; }
@@ -217,6 +232,10 @@ export default function QuestionsPage() {
       re_ask: f.re_ask,
       re_ask_days: Number(f.re_ask_days) || 0,
       templateId: (f.templateId || "").trim(),
+      thanks: {
+        message: (f.thanks?.message || "").trim(),
+        auto_close_sec: Math.max(0, Number(f.thanks?.auto_close_sec ?? 3) || 0),
+      },
       status: f.status || "active", // 編集でアーカイブ状態を解除しない
       updatedAt: new Date().toISOString(),
     };
@@ -500,7 +519,16 @@ function QuestionEditor(props: {
   const c = f.creative || {};
   const setF = (patch: Partial<QuestionDoc>) => onChange({ ...f, ...patch });
   const setC = (patch: Partial<Creative>) => onChange({ ...f, creative: { ...c, ...patch } });
+  const setThanks = (patch: Partial<{ message: string; auto_close_sec: number }>) =>
+    onChange({ ...f, thanks: { ...(f.thanks || {}), ...patch } });
+  // 選択肢ごとのお礼を更新
+  const setChoiceThanks = (i: number, patch: Partial<ThanksSpec>) => {
+    const arr = [...(f.choices || [])];
+    arr[i] = { ...arr[i], thanks: { ...(arr[i].thanks || {}), ...patch } };
+    onChange({ ...f, choices: arr });
+  };
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [openThanksIdx, setOpenThanksIdx] = useState<number | null>(null); // 個別お礼を開いている選択肢
 
   const previewChoices = useMemo(() => (f.choices || []).filter((x) => (x.label || "").trim()), [f.choices]);
 
@@ -543,11 +571,62 @@ function QuestionEditor(props: {
                       onBlur={(e) => { if (!e.target.value.trim() && ch.label.trim()) { const arr = [...f.choices]; arr[i] = { ...arr[i], value: slugify(ch.label) }; setF({ choices: arr }); } }}
                       placeholder="保存値（例: sticky）" />
                     <button className="btn btn--danger" style={{ fontSize: 12, padding: "4px 8px" }}
-                      onClick={() => setF({ choices: f.choices.filter((_, j) => j !== i) })}>✕</button>
+                      onClick={() => { setF({ choices: f.choices.filter((_, j) => j !== i) }); setOpenThanksIdx(null); }}>✕</button>
                   </div>
                 ))}
               </div>
               <button className="btn" style={{ marginTop: 8, fontSize: 12 }} onClick={() => setF({ choices: [...f.choices, { label: "", value: "" }] })}>+ 選択肢を追加</button>
+            </div>
+
+            {/* 回答後のお礼（共通＋選択肢ごとの上書き） */}
+            <div>
+              <div className="h2">お礼（回答後）</div>
+              <div className="small" style={{ opacity: 0.65, marginBottom: 6 }}>
+                回答するとカードがその場でお礼に切り替わります。選択肢ごとに個別のお礼・誘導リンクを設定すると、「その回答をした人だけ」に響く訴求ができます。
+              </div>
+              <input className="input" value={f.thanks?.message || ""} onChange={(e) => setThanks({ message: e.target.value })}
+                placeholder="共通のお礼メッセージ（例: ご回答ありがとうございました！）" />
+              <div className="row" style={{ gap: 8, alignItems: "center", marginTop: 8 }}>
+                <span className="small" style={{ opacity: 0.7 }}>自動で閉じる</span>
+                <input className="input" type="number" min={0} style={{ width: 90 }}
+                  value={f.thanks?.auto_close_sec ?? 3}
+                  onChange={(e) => setThanks({ auto_close_sec: Number(e.target.value) })} />
+                <span className="small" style={{ opacity: 0.7 }}>秒後（0で閉じない）</span>
+              </div>
+
+              <div style={{ height: 10 }} />
+              <div className="small" style={{ fontWeight: 700, opacity: 0.8, marginBottom: 4 }}>選択肢ごとのお礼（任意・未設定なら共通を使用）</div>
+              <div style={{ display: "grid", gap: 6 }}>
+                {(f.choices || []).filter((ch) => (ch.label || "").trim()).map((ch) => {
+                  const i = f.choices.indexOf(ch);
+                  const has = !!(ch.thanks?.message || ch.thanks?.cta_url);
+                  const open = openThanksIdx === i;
+                  return (
+                    <div key={i} style={{ border: "1px solid rgba(15,23,42,.12)", borderRadius: 8, padding: "8px 10px", background: has ? "rgba(99,102,241,.04)" : "transparent" }}>
+                      <div className="row" style={{ alignItems: "center", gap: 8, cursor: "pointer" }} onClick={() => setOpenThanksIdx(open ? null : i)}>
+                        <span className="small" style={{ fontWeight: 700 }}>{open ? "▾" : "▸"} {ch.label}</span>
+                        {has && <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 20, background: "#eef2ff", color: "#4f46e5" }}>個別設定あり</span>}
+                        <span className="small" style={{ opacity: 0.5, marginLeft: "auto" }}>{open ? "" : "クリックで設定"}</span>
+                      </div>
+                      {open && (
+                        <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+                          <input className="input" value={ch.thanks?.message || ""} onChange={(e) => setChoiceThanks(i, { message: e.target.value })}
+                            placeholder={`お礼メッセージ（例: 「${ch.label}」が気になる方へ）`} />
+                          <div className="row" style={{ gap: 6 }}>
+                            <input className="input" style={{ flex: 2 }} value={ch.thanks?.cta_url || ""} onChange={(e) => setChoiceThanks(i, { cta_url: e.target.value })}
+                              placeholder="誘導リンクURL（任意）https://..." />
+                            <input className="input" style={{ flex: 1 }} value={ch.thanks?.cta_text || ""} onChange={(e) => setChoiceThanks(i, { cta_text: e.target.value })}
+                              placeholder="リンク文言（例: 商品を見る）" />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {(f.choices || []).filter((ch) => (ch.label || "").trim()).length === 0 && (
+                  <div className="small" style={{ opacity: 0.5 }}>選択肢を入力すると、ここで個別のお礼を設定できます。</div>
+                )}
+              </div>
             </div>
 
             <div>

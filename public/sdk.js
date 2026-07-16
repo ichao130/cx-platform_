@@ -1712,7 +1712,85 @@
             : values;
         }
         try { localStorage.setItem("cx_q_" + ctx.site_id + "_" + q.question_id, nowIso); } catch (e) {}
-        close();
+        showThanks(values);
+      }
+
+      // 回答後のお礼を「同じカードの中で」表示する。
+      // 優先順: 選択した選択肢のthanks > 質問共通のthanks > 既定文言。設定が無くても無言で閉じない。
+      function showThanks(values) {
+        try {
+          var picked = null;
+          for (var i = 0; i < (q.choices || []).length; i++) {
+            var ch = q.choices[i];
+            var v = String(ch && ch.value != null ? ch.value : (ch && ch.label) || "");
+            if (values.indexOf(v) >= 0 && ch && ch.thanks && (ch.thanks.message || ch.thanks.cta_url)) { picked = ch.thanks; break; }
+          }
+          var qThanks = q.thanks || {};
+          var msg = (picked && picked.message) || qThanks.message || "ご回答ありがとうございました！";
+          var ctaUrl = (picked && picked.cta_url) || "";
+          var ctaText = (picked && picked.cta_text) || "詳しく見る";
+          var sec = typeof qThanks.auto_close_sec === "number" ? qThanks.auto_close_sec : 3;
+
+          // テンプレートに [data-cx-thanks] があればそこを使う。無ければカード内に差し込む。
+          var host = pointerCard;
+          var scope = (host && host.shadowRoot) ? host.shadowRoot.querySelector(".cx-scope") : null;
+          var root = scope || host;
+          if (!root) { close(); return; }
+
+          var region = root.querySelector ? root.querySelector("[data-cx-thanks]") : null;
+          if (region) {
+            // 質問部分を隠してお礼領域を出す
+            hideEl(root.querySelector("[data-cx-choices]"));
+            hideEl(root.querySelector("[data-cx-submit]"));
+            var msgEl = root.querySelector("[data-cx-thanks-message]");
+            if (msgEl) msgEl.textContent = msg;
+            var ctaEl = root.querySelector("[data-cx-thanks-cta]");
+            if (ctaEl) {
+              if (ctaUrl) {
+                ctaEl.textContent = ctaText;
+                if (ctaEl.tagName === "A") ctaEl.setAttribute("href", ctaUrl);
+                ctaEl.addEventListener("click", function () { onThanksCtaClick(ctaUrl); });
+              } else hideEl(ctaEl);
+            }
+            region.style.display = "block"; // テンプレ側で display:none にしていても確実に出す
+          } else {
+            // 既定のお礼表示（カードの中身を差し替え）
+            var box = document.createElement("div");
+            box.style.cssText = "padding:20px 18px;text-align:center;font-family:system-ui,-apple-system,sans-serif;";
+            var t = document.createElement("div");
+            t.textContent = "✓ " + msg;
+            t.style.cssText = "font-weight:700;font-size:15px;line-height:1.6;color:" + ((q.creative && q.creative.text_color) || "#1e293b") + ";";
+            box.appendChild(t);
+            if (ctaUrl) {
+              var a = document.createElement("a");
+              a.href = ctaUrl;
+              a.textContent = ctaText;
+              a.style.cssText = "display:inline-block;margin-top:12px;padding:10px 18px;border-radius:10px;background:" + accent + ";color:#fff;font-weight:700;font-size:14px;text-decoration:none;";
+              a.addEventListener("click", function () { onThanksCtaClick(ctaUrl); });
+              box.appendChild(a);
+            }
+            // カードの中身を空にしてお礼だけにする（ヘッダー画像と閉じるボタンは残す。
+            // auto_close=0 のとき閉じられなくなるのを防ぐため closeBtn を必ず戻す）
+            var keepImg = root.querySelector ? root.querySelector("img") : null;
+            try { root.innerHTML = ""; } catch (e) {}
+            if (keepImg) root.appendChild(keepImg);
+            if (typeof closeBtn !== "undefined" && closeBtn) root.appendChild(closeBtn);
+            root.appendChild(box);
+          }
+
+          if (sec > 0) setTimeout(close, sec * 1000);
+        } catch (e) { close(); }
+      }
+      function hideEl(el) { try { if (el) el.style.display = "none"; } catch (e) {} }
+      // お礼のCTAクリックを click_link として計測（既存の仕組みに乗せる）
+      function onThanksCtaClick(url) {
+        try {
+          postLog(apiBase, {
+            site_id: ctx.site_id, scenario_id: ctx.scenario_id, action_id: q.question_id,
+            variant_id: ctx.variant_id || null, event: "click_link",
+            url: url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid
+          }, ctx.site_id, ctx.site_key);
+        } catch (e) {}
       }
       function close() { try { overlay.parentNode && overlay.parentNode.removeChild(overlay); } catch (e) {} }
     } catch (e) { log("[cx] renderQuestion error", e); }
