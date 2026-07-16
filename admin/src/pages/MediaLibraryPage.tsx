@@ -279,15 +279,20 @@ export default function MediaPage() {
   // Load sites for current user (memberUids-based)
   useEffect(() => {
     if (!currentUid) { setSites([]); setSiteId(""); return; }
-    if (workspaceId) runMigration(workspaceId);
-    if (workspaceId) setSiteId(readSelectedSiteId(workspaceId));
+    // ★workspaceIdが確定する前に自動選択しない。
+    //   未確定のまま先頭サイトを選ぶと、下のPersist効果がそれを保存して
+    //   ユーザーが選んだサイト（保存値）を破壊してしまう（非同期の到着順で発生）。
+    if (!workspaceId) { setSites([]); return; }
+    runMigration(workspaceId);
+    setSiteId(readSelectedSiteId(workspaceId));
     const q = query(collection(db, "sites"), where("memberUids", "array-contains", currentUid));
     return onSnapshot(q, (snap) => {
       const list = snap.docs
         .filter((d) => d.data().status !== "deleted")
+        .filter((d) => d.data().workspaceId === workspaceId)
         .map((d) => ({ id: d.id, data: d.data() as any }));
       setSites(list);
-      setSiteId((prev) => prev || list[0]?.id || "");
+      setSiteId((prev) => (prev && list.some((s) => s.id === prev) ? prev : list[0]?.id || ""));
     });
   }, [currentUid, workspaceId, runMigration]);
 

@@ -94,14 +94,19 @@ export default function OptimizePage() {
     });
   }, [workspaceId]);
 
-  // 画面をまたいで選択を維持: 保存済みサイト → 無ければ先頭
+  // 画面をまたいで選択を維持。★自動選択で保存値を上書きしない（他画面の選択が壊れるため）。
+  //   保存が空のとき（初回）だけ初期化として書き込む。
   useEffect(() => {
     if (!workspaceId || !sites.length) return;
     if (siteId && sites.some((s) => s.id === siteId)) return;
     const saved = readSelectedSiteId(workspaceId);
-    const next = sites.find((s) => s.id === saved)?.id || sites[0].id;
-    setSiteId(next);
-    writeSelectedSiteId(workspaceId, next);
+    const hit = sites.find((s) => s.id === saved);
+    if (hit) {
+      setSiteId(hit.id);
+    } else {
+      setSiteId(sites[0].id);
+      if (!saved) writeSelectedSiteId(workspaceId, sites[0].id);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sites, workspaceId]);
 

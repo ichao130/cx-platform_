@@ -180,12 +180,18 @@ export default function QuestionsPage() {
         .filter((d) => !workspaceId || (d.data() as any).workspaceId === workspaceId)
         .map((d) => ({ id: d.id, name: String((d.data() as any).name || d.id) }));
       setSites(list);
-      // 未選択 or 選択中のサイトが一覧に無い場合は先頭を選ぶ
+      // 未選択 or 選択中のサイトが一覧に無い場合のみ自動選択。
+      // ★重要: 自動選択で保存値を上書きしない（上書きすると他画面の選択まで壊れる）。
+      //   保存が空のとき（初回）だけ初期化として書き込む。
       if (workspaceId && (!siteId || !list.some((s) => s.id === siteId)) && list.length) {
         const saved = readLS(siteKeyForWs(workspaceId));
-        const next = list.find((s) => s.id === saved)?.id || list[0].id;
-        setSiteId(next);
-        writeSelectedSiteId(workspaceId, next);
+        const hit = list.find((s) => s.id === saved);
+        if (hit) {
+          setSiteId(hit.id);                       // 保存値を復元（書き込み不要）
+        } else {
+          setSiteId(list[0].id);                   // ローカル表示だけ先頭に
+          if (!saved) writeSelectedSiteId(workspaceId, list[0].id); // 初回のみ初期化
+        }
       }
     }, (e) => console.error("[questions sites]", e));
     // eslint-disable-next-line react-hooks/exhaustive-deps

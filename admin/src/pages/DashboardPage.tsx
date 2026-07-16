@@ -210,11 +210,15 @@ export default function DashboardPage() {
   // Sites
   useEffect(() => {
     if (!currentUid) { setSites([]); return; }
+    // ★workspaceIdが確定する前に自動選択しない。
+    //   未確定のまま先頭サイトを選ぶと、下のPersist効果がそれを保存して
+    //   ユーザーが選んだサイト（保存値）を破壊してしまう（非同期の到着順で発生）。
+    if (!workspaceId) { setSites([]); return; }
     const q = query(collection(db, "sites"), orderBy("__name__"));
     return onSnapshot(q, (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, data: d.data() })).filter((row) => {
         const ws = String((row.data as any)?.workspaceId || "");
-        return ws && visibleWorkspaceIds.has(ws) && (!workspaceId || ws === String(workspaceId));
+        return ws && visibleWorkspaceIds.has(ws) && ws === String(workspaceId);
       });
       setSites(list);
       const remembered = readSelectedSiteId(workspaceId);
@@ -227,10 +231,15 @@ export default function DashboardPage() {
     }, () => {});
   }, [currentUid, siteId, visibleWorkspaceIds, workspaceId]);
 
+  // 一覧が変わったときのフォールバック。★保存値を無視して先頭に上書きしないよう、
+  //   まず保存値を優先する（上のeffectと同じ優先順位に揃える）。
   useEffect(() => {
+    if (!workspaceId) return;
     if (!sites.length) { setSiteId(""); return; }
-    if (!siteId || !sites.some((s) => s.id === siteId)) setSiteId(sites[0].id);
-  }, [siteId, sites]);
+    if (siteId && sites.some((s) => s.id === siteId)) return;
+    const remembered = readSelectedSiteId(workspaceId);
+    setSiteId(sites.find((s) => s.id === remembered)?.id || sites[0].id);
+  }, [siteId, sites, workspaceId]);
 
   useEffect(() => {
     if (!workspaceId || !siteId) return;

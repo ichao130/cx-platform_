@@ -172,11 +172,17 @@ export default function ScenarioAiPage() {
         setSites(list);
         const exists = !!siteId && list.some((s) => s.id === siteId);
         if (!exists) {
-          // 画面をまたいで選択を維持: 保存済みサイト → 無ければ先頭
+          // 画面をまたいで選択を維持。★自動選択で保存値を上書きしない（他画面の選択が壊れるため）。
+          //   保存が空のとき（初回）だけ初期化として書き込む。
           const saved = readSelectedSiteId(workspaceId);
-          const next = list.find((s) => s.id === saved)?.id || list[0]?.id || "";
-          setSiteId(next);
-          if (next) writeSelectedSiteId(workspaceId, next);
+          const hit = list.find((s) => s.id === saved);
+          if (hit) {
+            setSiteId(hit.id);
+          } else {
+            const first = list[0]?.id || "";
+            setSiteId(first);
+            if (first && !saved) writeSelectedSiteId(workspaceId, first);
+          }
         }
       },
       (e) => setErr(`sites read failed: ${e?.code || ""} ${e?.message || e}`)
