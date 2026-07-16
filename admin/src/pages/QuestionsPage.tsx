@@ -47,6 +47,13 @@ type QuestionDoc = {
 function siteKeyForWs(workspaceId: string) { return `cx_admin_site_id:${workspaceId}`; }
 function workspaceKeyForUid(uid: string) { return `cx_admin_workspace_id:${uid}`; }
 function readLS(k: string) { try { return localStorage.getItem(k) || ""; } catch { return ""; } }
+// サイト切替: 他画面と同じキー＋イベントで全体に伝播させる
+function writeSelectedSiteId(workspaceId: string, siteId: string) {
+  try {
+    localStorage.setItem(siteKeyForWs(workspaceId), siteId);
+    window.dispatchEvent(new CustomEvent("cx_admin_site_changed", { detail: { workspaceId, siteId } }));
+  } catch { /* ignore */ }
+}
 
 const DEFAULT_CREATIVE: Creative = {
   header_image_url: "",
@@ -88,6 +95,7 @@ export default function QuestionsPage() {
   const [aiErr, setAiErr] = useState("");
   const [tab, setTab] = useState<"list" | "archived" | "stats">("list");
   const [siteName, setSiteName] = useState("");
+  const [sites, setSites] = useState<Array<{ id: string; name: string }>>([]);
   // questionId -> 使用中のシナリオ名（アーカイブ前の警告用）
   const [usage, setUsage] = useState<Record<string, string[]>>({});
   const navigate = useNavigate();
@@ -161,6 +169,27 @@ export default function QuestionsPage() {
     if (!siteId) { setSiteName(""); return; }
     return onSnapshot(doc(db, "sites", siteId), (snap) => setSiteName(String((snap.data() as any)?.name || "")));
   }, [siteId]);
+
+  // サイト一覧（切替セレクタ用）。他画面と同じく memberUids ベースで現ワークスペースに絞る
+  useEffect(() => {
+    if (!uid) { setSites([]); return; }
+    const q = query(collection(db, "sites"), where("memberUids", "array-contains", uid));
+    return onSnapshot(q, (snap) => {
+      const list = snap.docs
+        .filter((d) => (d.data() as any).status !== "deleted")
+        .filter((d) => !workspaceId || (d.data() as any).workspaceId === workspaceId)
+        .map((d) => ({ id: d.id, name: String((d.data() as any).name || d.id) }));
+      setSites(list);
+      // 未選択 or 選択中のサイトが一覧に無い場合は先頭を選ぶ
+      if (workspaceId && (!siteId || !list.some((s) => s.id === siteId)) && list.length) {
+        const saved = readLS(siteKeyForWs(workspaceId));
+        const next = list.find((s) => s.id === saved)?.id || list[0].id;
+        setSiteId(next);
+        writeSelectedSiteId(workspaceId, next);
+      }
+    }, (e) => console.error("[questions sites]", e));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uid, workspaceId]);
 
   // シナリオでの使用状況（questionRefs から逆引き）
   useEffect(() => {
@@ -286,7 +315,11 @@ export default function QuestionsPage() {
 
       {!siteId ? (
         <div className="card">
-          <div className="small" style={{ opacity: 0.7 }}>上部でサイトを選択してください。</div>
+          <div className="small" style={{ opacity: 0.7 }}>
+            {sites.length === 0
+              ? "このワークスペースに表示できるサイトがありません。「サイト」画面で作成するか、アクセス権をご確認ください。"
+              : "サイトを読み込んでいます…"}
+          </div>
         </div>
       ) : (
       <div className="card">
@@ -297,6 +330,22 @@ export default function QuestionsPage() {
             </div>
           </div>
           <div className="list-toolbar__actions">
+            <div style={{ minWidth: 240 }}>
+              <div className="h2">サイト</div>
+              <select
+                className="input"
+                value={siteId}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setSiteId(next);
+                  if (workspaceId) writeSelectedSiteId(workspaceId, next);
+                }}
+              >
+                {sites.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </div>
             <button className="btn" onClick={openCreate}>作成</button>
           </div>
         </div>
