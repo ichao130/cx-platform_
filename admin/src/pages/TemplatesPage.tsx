@@ -57,6 +57,10 @@ type SampleData = {
   cta_url: string;
   cta_url_text: string;
   coupon_code: string;
+  // 質問接客(question)用のサンプル
+  q_title: string;        // 質問文
+  q_submit_label: string; // 送信ボタンのCTA文言
+  q_choices: string;      // 選択肢（改行区切り）
 };
 
 // プレビュー用のサンプル画像。以前は Unsplash の外部URLを使っていたがリンク切れ(404)したため、
@@ -93,8 +97,30 @@ function renderMiniTemplate(tpl: string, data: Record<string, any>): string {
   });
 }
 
-function buildPreviewSrcDoc(opts: { html: string; css: string; js?: string; data: Record<string, any> }): string {
+function buildPreviewSrcDoc(opts: { html: string; css: string; js?: string; data: Record<string, any>; choices?: string[] }): string {
   const body = renderMiniTemplate(opts.html, opts.data);
+  // 質問接客: 本番はSDKが [data-cx-choices] に選択肢ボタンを差し込むため、
+  // プレビューでも同じ形（data-cx-choice / 選択で data-selected）で再現する。
+  const choicesScript = (opts.choices && opts.choices.length)
+    ? `<script>
+(function(){
+  var box = document.querySelector('[data-cx-choices]');
+  if (!box) return;
+  var items = ${JSON.stringify(opts.choices)};
+  items.forEach(function(label){
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.setAttribute('data-cx-choice', label);
+    b.addEventListener('click', function(){
+      if (b.hasAttribute('data-selected')) b.removeAttribute('data-selected');
+      else b.setAttribute('data-selected','1');
+    });
+    box.appendChild(b);
+  });
+})();
+<\/script>`
+    : '';
   return `<!doctype html>
 <html>
   <head>
@@ -107,11 +133,14 @@ function buildPreviewSrcDoc(opts: { html: string; css: string; js?: string; data
       .cx-modal{margin:24px auto;}
       .cx-banner,.cx-toast{position:relative !important;left:auto !important;right:auto !important;bottom:auto !important;top:auto !important;margin:24px auto;max-width:min(520px,92vw);}
       .cx-launcher-btn{display:inline-flex !important;margin:40px auto;}
+      /* 質問接客カード: 本番は画面下部中央のフローティング。iframe内では中央に置いて見せる */
+      .cxq{margin:24px auto;}
     </style>
     <style>${opts.css || ''}</style>
   </head>
   <body>
     ${body}
+    ${choicesScript}
     ${opts.js ? `<script>\ndocument.addEventListener('DOMContentLoaded', function() {\n${opts.js}\n});\n<\/script>` : ''}
   </body>
 </html>`;
@@ -290,6 +319,10 @@ export default function TemplatesPage() {
     cta_url: '',
     cta_url_text: '詳細を見る',
     coupon_code: '',
+    // 質問接客のサンプル（プレビューで実際の見え方を確認するため）
+    q_title: '日焼け止めを選ぶ際、一番気になることは？',
+    q_submit_label: 'この内容で回答する',
+    q_choices: '白浮き\nベタつき\n成分\n紫外線防止効果\n価格',
   });
 
   // 認証ユーザー取得
@@ -386,8 +419,25 @@ export default function TemplatesPage() {
   useBeforeUnload(isModalOpen && isDirty);
 
   const previewSrcDoc = useMemo(() => {
+    // 質問接客は差し込み変数が別（title / header_image_url / submit_label）＋選択肢はSDKが差し込む。
+    // 他タイプ用のサンプル（cta_url・クーポン等）とは噛み合わないので、種別ごとにデータを組み替える。
+    if (type === 'question') {
+      const choices = String(sample.q_choices || '')
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      return buildPreviewSrcDoc({
+        html, css, js,
+        data: {
+          title: sample.q_title,
+          header_image_url: sample.image_url,
+          submit_label: sample.q_submit_label,
+        },
+        choices,
+      });
+    }
     return buildPreviewSrcDoc({ html, css, js, data: sample });
-  }, [html, css, js, sample]);
+  }, [html, css, js, sample, type]);
 
   function resetEditor() {
     setId(genId('tpl'));
@@ -811,31 +861,57 @@ export default function TemplatesPage() {
                   <div className="h2">サンプル値</div>
                   <div className="small">ここで入力した値を使って、プレビューを確認できます。</div>
                   <div style={{ height: 10 }} />
-                  <div className="h2">タイトル</div>
-                  <input className="input" value={sample.title} onChange={(e) => setSample((s) => ({ ...s, title: e.target.value }))} />
-                  <div style={{ height: 10 }} />
-                  <div className="h2">本文</div>
-                  <textarea className="input" value={sample.body} onChange={(e) => setSample((s) => ({ ...s, body: e.target.value }))} />
-                  <div style={{ height: 10 }} />
-                  <div className="h2">画像URL</div>
-                  <input className="input" value={sample.image_url} onChange={(e) => setSample((s) => ({ ...s, image_url: e.target.value }))} />
-                  <div style={{ height: 10 }} />
-                  <div className="row liquid-page" style={{ flexWrap: 'wrap' }}>
-                    <div style={{ flex: 1 }}>
-                      <div className="h2">CTAボタン文言</div>
-                      <input className="input" value={sample.cta_text} onChange={(e) => setSample((s) => ({ ...s, cta_text: e.target.value }))} />
-                    </div>
-                    <div style={{ flex: 2 }}>
-                      <div className="h2">遷移先URL</div>
-                      <input className="input" value={sample.cta_url} onChange={(e) => setSample((s) => ({ ...s, cta_url: e.target.value }))} />
-                    </div>
-                  </div>
-                  <div style={{ height: 10 }} />
-                  <div className="h2">補助リンク文言</div>
-                  <input className="input" value={sample.cta_url_text} onChange={(e) => setSample((s) => ({ ...s, cta_url_text: e.target.value }))} />
-                  <div style={{ height: 10 }} />
-                  <div className="h2">クーポンコード（任意）</div>
-                  <input className="input" placeholder="SUMMER2025" value={sample.coupon_code} onChange={(e) => setSample((s) => ({ ...s, coupon_code: e.target.value }))} />
+
+                  {type === 'question' ? (
+                    <>
+                      {/* 質問接客: 差し込み変数は title / header_image_url / submit_label。選択肢はSDKが差し込む */}
+                      <div className="h2">質問文</div>
+                      <input className="input" value={sample.q_title} onChange={(e) => setSample((s) => ({ ...s, q_title: e.target.value }))} />
+                      <div style={{ height: 10 }} />
+                      <div className="h2">選択肢（1行に1つ）</div>
+                      <textarea className="input" rows={5} value={sample.q_choices} onChange={(e) => setSample((s) => ({ ...s, q_choices: e.target.value }))} />
+                      <div className="small" style={{ opacity: 0.65, marginTop: 4 }}>
+                        本番ではSDKが <code>data-cx-choices</code> の中に選択肢ボタンを差し込みます。プレビューでも同じ形で再現しています（クリックで <code>data-selected</code> が付くのでスタイル確認できます）。
+                      </div>
+                      <div style={{ height: 10 }} />
+                      <div className="h2">送信ボタンの文言（submit_label）</div>
+                      <input className="input" value={sample.q_submit_label} onChange={(e) => setSample((s) => ({ ...s, q_submit_label: e.target.value }))} />
+                      <div className="small" style={{ opacity: 0.65, marginTop: 4 }}>
+                        複数選択のときだけ表示されます（単一選択は選んだ瞬間に送信されるため自動で非表示）。
+                      </div>
+                      <div style={{ height: 10 }} />
+                      <div className="h2">ヘッダー画像URL（header_image_url）</div>
+                      <input className="input" value={sample.image_url} onChange={(e) => setSample((s) => ({ ...s, image_url: e.target.value }))} />
+                    </>
+                  ) : (
+                    <>
+                      <div className="h2">タイトル</div>
+                      <input className="input" value={sample.title} onChange={(e) => setSample((s) => ({ ...s, title: e.target.value }))} />
+                      <div style={{ height: 10 }} />
+                      <div className="h2">本文</div>
+                      <textarea className="input" value={sample.body} onChange={(e) => setSample((s) => ({ ...s, body: e.target.value }))} />
+                      <div style={{ height: 10 }} />
+                      <div className="h2">画像URL</div>
+                      <input className="input" value={sample.image_url} onChange={(e) => setSample((s) => ({ ...s, image_url: e.target.value }))} />
+                      <div style={{ height: 10 }} />
+                      <div className="row liquid-page" style={{ flexWrap: 'wrap' }}>
+                        <div style={{ flex: 1 }}>
+                          <div className="h2">CTAボタン文言</div>
+                          <input className="input" value={sample.cta_text} onChange={(e) => setSample((s) => ({ ...s, cta_text: e.target.value }))} />
+                        </div>
+                        <div style={{ flex: 2 }}>
+                          <div className="h2">遷移先URL</div>
+                          <input className="input" value={sample.cta_url} onChange={(e) => setSample((s) => ({ ...s, cta_url: e.target.value }))} />
+                        </div>
+                      </div>
+                      <div style={{ height: 10 }} />
+                      <div className="h2">補助リンク文言</div>
+                      <input className="input" value={sample.cta_url_text} onChange={(e) => setSample((s) => ({ ...s, cta_url_text: e.target.value }))} />
+                      <div style={{ height: 10 }} />
+                      <div className="h2">クーポンコード（任意）</div>
+                      <input className="input" placeholder="SUMMER2025" value={sample.coupon_code} onChange={(e) => setSample((s) => ({ ...s, coupon_code: e.target.value }))} />
+                    </>
+                  )}
                 </div>
 
               </div>
