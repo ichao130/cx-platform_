@@ -874,7 +874,9 @@ function AppShell({ children }: { children: React.ReactNode }) {
             {canShow(canAccess, "analytics") && <SidebarLink to="/analytics">流入計測</SidebarLink>}
             {canShow(canAccess, "ai") && <SidebarLink to="/ai">AIインサイト</SidebarLink>}
             {canShow(canAccess, "ai") && <SidebarLink to="/ai/optimize">配信最適化</SidebarLink>}
-            {canShow(canAccess, "push") && <SidebarLink to="/push">Webプッシュ</SidebarLink>}
+            {/* Webプッシュ: 実用条件が厳しく（ShopifyでSW設置不可 / iOSはPWA必須 / オプトイン率低）
+                誤解を避けるためメニューから非表示。機能・ルート(/push)は残置しており、
+                自社サイト案件などで必要になったらこの行を戻すだけで復活できる。 */}
           </div>
         </div>
 
