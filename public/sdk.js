@@ -1577,7 +1577,10 @@
       var selected = {};
 
       var overlay = document.createElement("div");
-      overlay.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:2147483000;display:flex;justify-content:center;padding:16px;pointer-events:none;font-family:system-ui,-apple-system,sans-serif;";
+      // 画面のど真ん中に表示（上下左右センタリング＋薄い暗幕）
+      overlay.style.cssText = "position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(15,23,42,.35);pointer-events:auto;font-family:system-ui,-apple-system,sans-serif;";
+      // 暗幕クリックで閉じる（カード自体のクリックは閉じない）
+      overlay.addEventListener("click", function (e) { if (e.target === overlay) close(); });
 
       // 選択肢ボタンを生成して container に差し込む（クリック配線込み）
       //   data-cx-choice=値 / 選択時 data-selected="1" を付与（テンプレのCSSでスタイル可能）
@@ -1654,7 +1657,8 @@
         }
         var closeBtn = document.createElement("button");
         closeBtn.type = "button"; closeBtn.textContent = "✕";
-        closeBtn.style.cssText = "position:absolute;top:8px;right:8px;width:28px;height:28px;border:none;border-radius:99px;background:rgba(0,0,0,.35);color:#fff;cursor:pointer;font-size:13px;line-height:1;z-index:2;";
+        // ✕がズレないよう flex で中央寄せ＋padding/lineHeightをリセット
+        closeBtn.style.cssText = "position:absolute;top:8px;right:8px;width:28px;height:28px;padding:0;border:none;border-radius:99px;background:rgba(0,0,0,.35);color:#fff;cursor:pointer;font-size:14px;line-height:1;font-family:inherit;display:flex;align-items:center;justify-content:center;box-sizing:border-box;z-index:2;";
         closeBtn.onclick = function () { close(); };
         card.appendChild(closeBtn);
         var bodyWrap = document.createElement("div");

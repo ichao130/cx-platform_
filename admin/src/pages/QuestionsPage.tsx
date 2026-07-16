@@ -762,7 +762,7 @@ function QuestionEditor(props: {
                 </div>
               </div>
             </div>
-            <div className="small" style={{ opacity: 0.6, marginTop: 8 }}>実際は画面下部中央にカードで表示されます。</div>
+            <div className="small" style={{ opacity: 0.6, marginTop: 8 }}>実際は画面中央にモーダルで表示されます（背景クリックで閉じられます）。</div>
           </div>
         </div>
   );

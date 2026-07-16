@@ -133,7 +133,7 @@ function buildPreviewSrcDoc(opts: { html: string; css: string; js?: string; data
       .cx-modal{margin:24px auto;}
       .cx-banner,.cx-toast{position:relative !important;left:auto !important;right:auto !important;bottom:auto !important;top:auto !important;margin:24px auto;max-width:min(520px,92vw);}
       .cx-launcher-btn{display:inline-flex !important;margin:40px auto;}
-      /* 質問接客カード: 本番は画面下部中央のフローティング。iframe内では中央に置いて見せる */
+      /* 質問接客カード: 本番は画面中央にモーダル表示。iframe内でも中央に置いて見せる */
       .cxq{margin:24px auto;}
     </style>
     <style>${opts.css || ''}</style>
@@ -278,7 +278,7 @@ const DEFAULTS: Record<TemplateDoc['type'], { html: string; css: string }> = {
     css: `
 .cxq{position:relative;max-width:420px;width:100%;background:#ffffff;color:#1e293b;border-radius:18px;overflow:hidden;box-shadow:0 14px 44px rgba(0,0,0,.22);font-family:system-ui,-apple-system,Segoe UI,Roboto;}
 .cxq__img{width:100%;display:block;max-height:150px;object-fit:cover;}
-.cxq__close{position:absolute;top:10px;right:10px;width:28px;height:28px;border:none;border-radius:50%;background:rgba(0,0,0,.35);color:#fff;cursor:pointer;font-size:13px;}
+.cxq__close{position:absolute;top:10px;right:10px;width:28px;height:28px;padding:0;border:none;border-radius:50%;background:rgba(0,0,0,.35);color:#fff;cursor:pointer;font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center;box-sizing:border-box;}
 .cxq__body{padding:16px 18px 18px;}
 .cxq__title{font-weight:800;font-size:16px;line-height:1.5;margin-bottom:12px;}
 .cxq__choices{display:flex;flex-direction:column;gap:8px;}
