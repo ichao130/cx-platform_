@@ -59,6 +59,23 @@ type SampleData = {
   coupon_code: string;
 };
 
+// プレビュー用のサンプル画像。以前は Unsplash の外部URLを使っていたがリンク切れ(404)したため、
+// 外部依存をなくして内蔵SVG(data URI)にした。オフラインでも壊れず、404にならない。
+const SAMPLE_IMAGE_DATA_URI =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="480" viewBox="0 0 1200 480">` +
+      `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">` +
+      `<stop offset="0" stop-color="#6366f1"/><stop offset="0.55" stop-color="#3b82f6"/><stop offset="1" stop-color="#22d3ee"/>` +
+      `</linearGradient></defs>` +
+      `<rect width="1200" height="480" fill="url(#g)"/>` +
+      `<circle cx="1050" cy="90" r="130" fill="rgba(255,255,255,0.10)"/>` +
+      `<circle cx="140" cy="410" r="170" fill="rgba(255,255,255,0.08)"/>` +
+      `<text x="600" y="232" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="48" font-weight="700" fill="#ffffff" text-anchor="middle">サンプル画像</text>` +
+      `<text x="600" y="286" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="22" fill="rgba(255,255,255,0.85)" text-anchor="middle">プレビュー用のダミー画像です</text>` +
+    `</svg>`
+  );
+
 function renderMiniTemplate(tpl: string, data: Record<string, any>): string {
   // Phase-1: very small "mustache-like" renderer
   // - {{key}}
@@ -268,7 +285,7 @@ export default function TemplatesPage() {
   const [sample, setSample] = useState<SampleData>({
     title: 'テスト表示',
     body: 'これが出れば成功🔥\n（テンプレートのプレビュー）',
-    image_url: 'https://images.unsplash.com/photo-1520975693411-b7e3c5c8c3f1?auto=format&fit=crop&w=1200&q=60',
+    image_url: SAMPLE_IMAGE_DATA_URI,
     cta_text: 'OK',
     cta_url: '',
     cta_url_text: '詳細を見る',
