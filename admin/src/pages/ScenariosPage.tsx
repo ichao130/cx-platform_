@@ -160,20 +160,31 @@ function workspaceLabel(sites: SiteRow[], workspaceId: string) {
   return String(hit?.data?.workspaceName || hit?.data?.workspace_name || workspaceId || "");
 }
 
-const LS_SITE_KEY = "cx_admin_site_id";
+// ★他画面と同じ「ワークスペース別キー」に統一（以前はワークスペース非依存の
+//   "cx_admin_site_id" を使っていたため、この画面だけ選択が同期しなかった）
+const LS_SITE_KEY_LEGACY = "cx_admin_site_id";
+function siteKeyForWs(workspaceId: string) {
+  return `cx_admin_site_id:${workspaceId}`;
+}
 
-function readSelectedSiteId(): string {
+function readSelectedSiteId(workspaceId?: string): string {
+  if (!workspaceId) return "";
   try {
-    return localStorage.getItem(LS_SITE_KEY) || "";
+    return (
+      localStorage.getItem(siteKeyForWs(workspaceId)) ||
+      localStorage.getItem(LS_SITE_KEY_LEGACY) || // 旧キーからのフォールバック（移行用）
+      ""
+    );
   } catch {
     return "";
   }
 }
 
-function writeSelectedSiteId(siteId: string) {
+function writeSelectedSiteId(workspaceId: string, siteId: string) {
+  if (!workspaceId) return;
   try {
-    localStorage.setItem(LS_SITE_KEY, siteId);
-    window.dispatchEvent(new CustomEvent("cx_admin_site_changed", { detail: { siteId } }));
+    localStorage.setItem(siteKeyForWs(workspaceId), siteId);
+    window.dispatchEvent(new CustomEvent("cx_admin_site_changed", { detail: { workspaceId, siteId } }));
   } catch {
     // ignore
   }
@@ -280,7 +291,7 @@ export default function ScenariosPage() {
   // Form state
   // -------------------------
   const [id, setId] = useState(() => genId("scn"));
-  const [siteId, setSiteId] = useState(() => readSelectedSiteId());
+  const [siteId, setSiteId] = useState(""); // workspaceId確定後に復元する（下のeffect）
   const [workspaceId, setWorkspaceId] = useState("");
   const [currentUid, setCurrentUid] = useState("");
 
@@ -498,11 +509,12 @@ export default function ScenariosPage() {
 
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
-      if (e.key === LS_SITE_KEY) setSiteId(readSelectedSiteId());
+      if (!workspaceId) return;
+      if (e.key === siteKeyForWs(workspaceId)) setSiteId(readSelectedSiteId(workspaceId));
     };
     const onCustom = (e: any) => {
       const next = e?.detail?.siteId;
-      if (typeof next === "string") setSiteId(next);
+      if (typeof next === "string" && next) setSiteId(next);
     };
     window.addEventListener("storage", onStorage);
     window.addEventListener("cx_admin_site_changed" as any, onCustom);
@@ -510,12 +522,12 @@ export default function ScenariosPage() {
       window.removeEventListener("storage", onStorage);
       window.removeEventListener("cx_admin_site_changed" as any, onCustom);
     };
-  }, []);
+  }, [workspaceId]);
 
   useEffect(() => {
-    if (!siteId) return;
-    writeSelectedSiteId(siteId);
-  }, [siteId]);
+    if (!workspaceId || !siteId) return;
+    writeSelectedSiteId(workspaceId, siteId);
+  }, [workspaceId, siteId]);
 
   const visibleSites = useMemo(() => {
     if (!workspaceId) return sites;
@@ -538,17 +550,26 @@ export default function ScenariosPage() {
   useEffect(() => {
     // loadScenario 直後は siteId を上書きしない（シナリオのサイトを保持）
     if (loadingBaseRef.current) return;
+    // ★workspaceId確定前に自動選択しない（未確定のまま先頭を選ぶと保存値を壊すため）
+    if (!workspaceId) return;
     if (!visibleSites.length) {
       setSiteId("");
       return;
     }
     const exists = siteId && visibleSites.some((s) => s.id === siteId);
     if (!exists) {
-      const nextSiteId = visibleSites[0]?.id || "";
-      setSiteId(nextSiteId);
-      if (nextSiteId) writeSelectedSiteId(nextSiteId);
+      // ★保存値を優先して復元。無ければ先頭（初回のみ初期化として保存）
+      const saved = readSelectedSiteId(workspaceId);
+      const hit = visibleSites.find((s) => s.id === saved);
+      if (hit) {
+        setSiteId(hit.id);
+      } else {
+        const nextSiteId = visibleSites[0]?.id || "";
+        setSiteId(nextSiteId);
+        if (nextSiteId && !saved) writeSelectedSiteId(workspaceId, nextSiteId);
+      }
     }
-  }, [visibleSites, siteId]);  
+  }, [visibleSites, siteId, workspaceId]);
 
   useEffect(() => {
     if (!actionsForWorkspace.length) return;
@@ -1219,7 +1240,7 @@ export default function ScenariosPage() {
                 value={siteId}
                 onChange={(e) => {
                   setSiteId(e.target.value);
-                  writeSelectedSiteId(e.target.value);
+                  writeSelectedSiteId(workspaceId, e.target.value);
                 }}
               >
                 {visibleSites.map((s) => (
@@ -1407,7 +1428,7 @@ export default function ScenariosPage() {
                 <select
                   className="input"
                   value={siteId}
-                  onChange={(e) => { setSiteId(e.target.value); writeSelectedSiteId(e.target.value); }}
+                  onChange={(e) => { setSiteId(e.target.value); writeSelectedSiteId(workspaceId, e.target.value); }}
                 >
                   {visibleSites.map((s) => (
                     <option key={s.id} value={s.id}>
