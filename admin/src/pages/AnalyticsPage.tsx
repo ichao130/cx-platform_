@@ -607,6 +607,14 @@ export default function AnalyticsPage() {
     }
   }, [siteId, effectiveFrom, effectiveTo, paExcludeNoise]);
 
+  // サイト／期間を切り替えたら、前の条件の集計結果を破棄する。
+  // （ボタン起動で保持されるため、放置すると別サイトのデータが出たままになる）
+  useEffect(() => {
+    setPaReport(null);
+    setPaError("");
+    setPaSearch("");
+  }, [siteId, effectiveFrom, effectiveTo]);
+
   // 訪問者タグを購読（site単位・onSnapshotでリアルタイム）
   useEffect(() => {
     if (!siteId) { setVisitorTags(new Map()); return; }
