@@ -13,6 +13,21 @@ function workspaceKeyForUid(uid: string) {
 function readSelectedWorkspaceId(uid: string) {
   try { return localStorage.getItem(workspaceKeyForUid(uid)) || ""; } catch { return ""; }
 }
+// サイト選択の永続化（他画面と同じキー＋イベントで画面をまたいで維持する）
+function siteKeyForWs(workspaceId: string) {
+  return `cx_admin_site_id:${workspaceId}`;
+}
+function readSelectedSiteId(workspaceId: string) {
+  if (!workspaceId) return "";
+  try { return localStorage.getItem(siteKeyForWs(workspaceId)) || ""; } catch { return ""; }
+}
+function writeSelectedSiteId(workspaceId: string, siteId: string) {
+  if (!workspaceId) return;
+  try {
+    localStorage.setItem(siteKeyForWs(workspaceId), siteId);
+    window.dispatchEvent(new CustomEvent("cx_admin_site_changed", { detail: { workspaceId, siteId } }));
+  } catch { /* ignore */ }
+}
 
 type Suggestion = {
   id: string;
@@ -79,9 +94,16 @@ export default function OptimizePage() {
     });
   }, [workspaceId]);
 
+  // 画面をまたいで選択を維持: 保存済みサイト → 無ければ先頭
   useEffect(() => {
-    if (!siteId && sites.length > 0) setSiteId(sites[0].id);
-  }, [sites]);
+    if (!workspaceId || !sites.length) return;
+    if (siteId && sites.some((s) => s.id === siteId)) return;
+    const saved = readSelectedSiteId(workspaceId);
+    const next = sites.find((s) => s.id === saved)?.id || sites[0].id;
+    setSiteId(next);
+    writeSelectedSiteId(workspaceId, next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sites, workspaceId]);
 
   const generate = async () => {
     if (!siteId) return;
@@ -145,7 +167,7 @@ export default function OptimizePage() {
             <select
               className="input"
               value={siteId}
-              onChange={(e) => setSiteId(e.target.value)}
+              onChange={(e) => { const next = e.target.value; setSiteId(next); writeSelectedSiteId(workspaceId, next); }}
               style={{ width: "100%" }}
             >
               {sites.map((s) => (

@@ -28,6 +28,26 @@ function readSelectedWorkspaceId(uid?: string) {
   }
 }
 
+// サイト選択の永続化（他画面と同じキー＋イベントで画面をまたいで維持する）
+function siteKeyForWs(workspaceId: string) {
+  return `cx_admin_site_id:${workspaceId}`;
+}
+function readSelectedSiteId(workspaceId: string) {
+  if (!workspaceId) return "";
+  try {
+    return localStorage.getItem(siteKeyForWs(workspaceId)) || "";
+  } catch {
+    return "";
+  }
+}
+function writeSelectedSiteId(workspaceId: string, siteId: string) {
+  if (!workspaceId) return;
+  try {
+    localStorage.setItem(siteKeyForWs(workspaceId), siteId);
+    window.dispatchEvent(new CustomEvent("cx_admin_site_changed", { detail: { workspaceId, siteId } }));
+  } catch { /* ignore */ }
+}
+
 type ScenarioDoc = {
   siteId: string;
   name?: string;
@@ -151,7 +171,13 @@ export default function ScenarioAiPage() {
         const list = snap.docs.map((d) => ({ id: d.id, data: d.data() }));
         setSites(list);
         const exists = !!siteId && list.some((s) => s.id === siteId);
-        if (!exists) setSiteId(list[0]?.id || "");
+        if (!exists) {
+          // 画面をまたいで選択を維持: 保存済みサイト → 無ければ先頭
+          const saved = readSelectedSiteId(workspaceId);
+          const next = list.find((s) => s.id === saved)?.id || list[0]?.id || "";
+          setSiteId(next);
+          if (next) writeSelectedSiteId(workspaceId, next);
+        }
       },
       (e) => setErr(`sites read failed: ${e?.code || ""} ${e?.message || e}`)
     );
@@ -395,7 +421,7 @@ export default function ScenarioAiPage() {
 
         <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <div className="h2" style={{ margin: 0 }}>サイト</div>
-          <select className="input" value={siteId} onChange={(e) => setSiteId(e.target.value)}>
+          <select className="input" value={siteId} onChange={(e) => { const next = e.target.value; setSiteId(next); writeSelectedSiteId(workspaceId, next); }}>
             {sites.map((s) => {
               const label = siteLabel(s);
               return (
