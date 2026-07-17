@@ -2307,7 +2307,7 @@ export default function AnalyticsPage() {
           </div>
 
           {/* ===== 画面タブ（縦長解消。データは全て読み込み済みなので切替は一瞬）===== */}
-          <div style={{ display: "flex", gap: 0, marginTop: 28, marginBottom: 22, border: "1px solid rgba(15,23,42,.12)", borderRadius: 8, overflow: "hidden", width: "fit-content", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 0, marginTop: 150, marginBottom: 22, border: "1px solid rgba(15,23,42,.12)", borderRadius: 8, overflow: "hidden", width: "fit-content", flexWrap: "wrap" }}>
             {([
               ["overview", "概要"],
               ["traffic", "流入"],
