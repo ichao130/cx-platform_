@@ -552,6 +552,15 @@ export default function AnalyticsPage() {
   // 選択中訪問者の全イベント（専用クエリ。共有データの5000/1000件上限に依存しない）
   const [vidEvents, setVidEvents] = useState<any[]>([]);
 
+  // ---- 画面タブ（縦長を解消。中身は従来どおりで表示を切り替えるだけ）----
+  type AnalyticsTab = "overview" | "traffic" | "pages" | "campaign" | "visitor" | "env";
+  const [tab, setTab] = useState<AnalyticsTab>("overview");
+
+  // ---- 長いリストの「もっと見る」----
+  const LIST_PREVIEW = 10;
+  const [showAllProducts, setShowAllProducts] = useState(false);
+  const [showAllPa, setShowAllPa] = useState(false);
+
   // ---- 商品別売上アコーディオン ----
   const [expandedProducts, setExpandedProducts] = useState<Set<string>>(new Set());
 
@@ -2297,7 +2306,35 @@ export default function AnalyticsPage() {
             )}
           </div>
 
+          {/* ===== 画面タブ（縦長解消。データは全て読み込み済みなので切替は一瞬）===== */}
+          <div style={{ display: "flex", gap: 0, marginBottom: 20, border: "1px solid rgba(15,23,42,.12)", borderRadius: 8, overflow: "hidden", width: "fit-content", flexWrap: "wrap" }}>
+            {([
+              ["overview", "概要"],
+              ["traffic", "流入"],
+              ["pages", "ページ"],
+              ["campaign", "施策"],
+              ["visitor", "訪問者"],
+              ["env", "環境"],
+            ] as const).map(([t, label]) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setTab(t)}
+                style={{
+                  padding: "7px 18px", border: "none", fontSize: 13,
+                  fontWeight: tab === t ? 700 : 500,
+                  background: tab === t ? "#1f6573" : "transparent",
+                  color: tab === t ? "#fff" : "inherit",
+                  cursor: "pointer", whiteSpace: "nowrap",
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
           {/* ===== Section 1: リアルタイム ===== */}
+          {tab === "overview" && (
           <div style={{ marginBottom: 32 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
               <LiveDot />
@@ -2391,8 +2428,10 @@ export default function AnalyticsPage() {
             )}
           </div>
 
+          )}
+
           {/* ===== Section 1.5: 売上計測 ===== */}
-          {(purchaseLogs.length > 0 || purchaseLoading) && (
+          {tab === "overview" && (purchaseLogs.length > 0 || purchaseLoading) && (
             <div style={{ marginBottom: 32 }}>
               <div className="h2" style={{ marginBottom: 14 }}>
                 💰 売上計測 <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel} · Shopify Web Pixel）</span>
@@ -2431,9 +2470,12 @@ export default function AnalyticsPage() {
                   </details>
                   {revenueByProduct.length > 0 && (
                     <div className="card" style={{ padding: 18, background: "#fff", marginTop: 12 }}>
-                      <div className="small" style={{ fontWeight: 700, marginBottom: 12 }}>🛍️ 商品別売上</div>
+                      <div className="small" style={{ fontWeight: 700, marginBottom: 12 }}>
+                        🛍️ 商品別売上
+                        <span style={{ fontWeight: 400, opacity: 0.55, marginLeft: 6 }}>（{fmtInt(revenueByProduct.length)}商品）</span>
+                      </div>
                       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                        {revenueByProduct.map((r) => {
+                        {(showAllProducts ? revenueByProduct : revenueByProduct.slice(0, LIST_PREVIEW)).map((r) => {
                           const maxRev = revenueByProduct[0]?.revenue || 1;
                           const barPct = (r.revenue / maxRev) * 100;
                           const attrPct = r.qty > 0 ? Math.round((r.qtyAttributed / r.qty) * 100) : 0;
@@ -2490,6 +2532,15 @@ export default function AnalyticsPage() {
                           );
                         })}
                       </div>
+                      {revenueByProduct.length > LIST_PREVIEW && (
+                        <button
+                          className="btn"
+                          style={{ marginTop: 10, fontSize: 12, width: "100%" }}
+                          onClick={() => setShowAllProducts((v) => !v)}
+                        >
+                          {showAllProducts ? "▲ 上位10件だけ表示" : `▼ もっと見る（残り${fmtInt(revenueByProduct.length - LIST_PREVIEW)}商品）`}
+                        </button>
+                      )}
                     </div>
                   )}
                 </>
@@ -2498,7 +2549,7 @@ export default function AnalyticsPage() {
           )}
 
           {/* ===== Section 1.6: クーポン分析 ===== */}
-          {couponStats.length > 0 && (
+          {tab === "campaign" && couponStats.length > 0 && (
             <div style={{ marginBottom: 32 }}>
               <div className="h2" style={{ marginBottom: 14 }}>
                 🎟️ クーポン分析 <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel} · 購入ログに discount_codes が記録された件数）</span>
@@ -2553,6 +2604,7 @@ export default function AnalyticsPage() {
           )}
 
           {/* ===== Section 2: 流入元 ===== */}
+          {tab === "traffic" && (
           <div style={{ marginBottom: 32 }}>
             <div className="h2" style={{ marginBottom: 14 }}>
               流入元・離脱 <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel}）</span>
@@ -2690,7 +2742,10 @@ export default function AnalyticsPage() {
             </div>
           </div>
 
+          )}
+
           {/* ===== Section 2.4: 経由ページ別 売上貢献（コンテンツ帰属）===== */}
+          {tab === "pages" && (
           <div style={{ marginBottom: 32 }}>
             <div className="h2" style={{ marginBottom: 6 }}>
               🧭 経由ページ別 売上貢献 <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel} · シナリオ不要）</span>
@@ -2804,7 +2859,11 @@ export default function AnalyticsPage() {
                           if (!list.length) return (
                             <tr><td colSpan={7} style={{ padding: "12px 8px", opacity: 0.5 }}>該当ページなし</td></tr>
                           );
-                          return list.map((r) => (
+                          // 長くなるので既定は上位のみ。検索・並び替えで絞り込めるので実用上は十分。
+                          const shown = showAllPa ? list : list.slice(0, LIST_PREVIEW);
+                          const rest = list.length - shown.length;
+                          return (<>
+                          {shown.map((r) => (
                             <tr key={r.path} style={{ borderBottom: "1px solid #f1f5f9" }}>
                               <td style={{ padding: "6px 8px", maxWidth: 340 }}>
                                 <a href={toPageUrl(r.path) || undefined} target="_blank" rel="noreferrer" title={r.path} style={{ color: "#374151", textDecoration: "none", wordBreak: "break-all", lineHeight: 1.4 }}>
@@ -2818,7 +2877,26 @@ export default function AnalyticsPage() {
                               <td style={{ textAlign: "right", padding: "6px 8px", fontWeight: 700, color: "#16a34a" }}>¥{Math.round(lRev(r) || 0).toLocaleString()}</td>
                               <td style={{ textAlign: "right", padding: "6px 8px", fontWeight: 600, color: r.cv_rate >= 5 ? "#16a34a" : r.cv_rate >= 1 ? "#ca8a04" : "#94a3b8" }}>{r.cv_rate}%</td>
                             </tr>
-                          ));
+                          ))}
+                          {rest > 0 && (
+                            <tr>
+                              <td colSpan={7} style={{ padding: "8px" }}>
+                                <button className="btn" style={{ fontSize: 12, width: "100%" }} onClick={() => setShowAllPa(true)}>
+                                  ▼ もっと見る（残り{fmtInt(rest)}ページ）
+                                </button>
+                              </td>
+                            </tr>
+                          )}
+                          {showAllPa && list.length > LIST_PREVIEW && (
+                            <tr>
+                              <td colSpan={7} style={{ padding: "8px" }}>
+                                <button className="btn" style={{ fontSize: 12, width: "100%" }} onClick={() => setShowAllPa(false)}>
+                                  ▲ 上位{LIST_PREVIEW}件だけ表示
+                                </button>
+                              </td>
+                            </tr>
+                          )}
+                          </>);
                         })()}
                       </tbody>
                     </table>
@@ -2828,7 +2906,10 @@ export default function AnalyticsPage() {
             </div>
           </div>
 
+          )}
+
           {/* ===== Section 2.5: 地域分析（GeoIP）===== */}
+          {tab === "env" && (
           <div style={{ marginBottom: 32 }}>
             <div className="h2" style={{ marginBottom: 14 }}>
               地域分析 <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel} · 都道府県別）</span>
@@ -2888,7 +2969,10 @@ export default function AnalyticsPage() {
             </div>
           </div>
 
+          )}
+
           {/* ===== Section 2.6: 天気分析 ===== */}
+          {tab === "env" && (
           <div style={{ marginBottom: 32 }}>
             <div className="h2" style={{ marginBottom: 14 }}>
               天気分析 <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel} · アクセス地点の天気）</span>
@@ -2981,7 +3065,10 @@ export default function AnalyticsPage() {
             </div>
           </div>
 
+          )}
+
           {/* ===== Section 3: 施策ファネル ===== */}
+          {tab === "campaign" && (
           <div style={{ marginBottom: 32 }}>
             <div className="h2" style={{ marginBottom: 14 }}>
               施策ファネル <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel}）</span>
@@ -3083,7 +3170,10 @@ export default function AnalyticsPage() {
             )}
           </div>
 
+          )}
+
           {/* ===== Section 6: 訪問者ジャーニー ===== */}
+          {tab === "visitor" && (
           <div id="journey-section" style={{ marginBottom: 32 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
               <div>
@@ -3687,6 +3777,7 @@ export default function AnalyticsPage() {
               </div>
             )}
           </div>
+          )}
         </>
       )}
 
