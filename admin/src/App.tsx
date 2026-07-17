@@ -873,7 +873,11 @@ function AppShell({ children }: { children: React.ReactNode }) {
             {canShow(canAccess, "media") && <SidebarLink to="/media">メディア</SidebarLink>}
             {canShow(canAccess, "analytics") && <SidebarLink to="/analytics">流入計測</SidebarLink>}
             {canShow(canAccess, "ai") && <SidebarLink to="/ai">AIインサイト</SidebarLink>}
-            {canShow(canAccess, "ai") && <SidebarLink to="/ai/optimize">配信最適化</SidebarLink>}
+            {/* 配信最適化: AIがURL配信条件の変更を提案し本番シナリオに直接書き込む画面。
+                適用実績ゼロ（createdBy:"ai_optimize" のシナリオが本番に1件も無い）＋AIインサイトと
+                目的が近く使い分けが不明瞭なため、メニューから非表示。機能・API(/v1/ai/optimize)・
+                ルート(/ai/optimize)は残置しており、必要になったらこの行を戻すだけで復活できる。
+                {canShow(canAccess, "ai") && <SidebarLink to="/ai/optimize">配信最適化</SidebarLink>} */}
             {/* Webプッシュ: 実用条件が厳しく（ShopifyでSW設置不可 / iOSはPWA必須 / オプトイン率低）
                 誤解を避けるためメニューから非表示。機能・ルート(/push)は残置しており、
                 自社サイト案件などで必要になったらこの行を戻すだけで復活できる。 */}
