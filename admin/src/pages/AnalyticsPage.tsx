@@ -2585,10 +2585,13 @@ export default function AnalyticsPage() {
                             onClick={() => {
                               setCouponFilter(isActive ? "" : c.code);
                               setSelectedVid(null);
-                              // ジャーニーセクションまでスクロール
-                              setTimeout(() => {
-                                document.getElementById("journey-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
-                              }, 100);
+                              // 訪問者ジャーニーは「訪問者」タブ内にあるので、追跡開始時はそのタブへ切り替えてからスクロール
+                              if (!isActive) {
+                                setTab("visitor");
+                                setTimeout(() => {
+                                  document.getElementById("journey-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                                }, 120);
+                              }
                             }}
                             style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 20, border: "none", background: isActive ? "#16a34a" : "#e0f2fe", color: isActive ? "#fff" : "#0369a1", cursor: "pointer", whiteSpace: "nowrap" }}
                           >
