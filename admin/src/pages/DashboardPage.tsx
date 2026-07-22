@@ -565,6 +565,77 @@ export default function DashboardPage() {
         )}
       </div>
 
+      {/* シナリオ別サマリーテーブル（サイト選択のすぐ下に配置＝まず全体をサマって見せる）*/}
+      {(scenarioStats.length > 0 || rowsLoading) && (
+        <div className="card" style={{ marginBottom: 14, padding: 20 }}>
+          <button
+            type="button"
+            onClick={() => setShowScenarioTable((v) => !v)}
+            style={{
+              display: "flex", alignItems: "center", gap: 8, width: "100%",
+              background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left",
+              marginBottom: showScenarioTable ? 16 : 0,
+            }}
+          >
+            <span style={{ fontSize: 13, opacity: 0.5, transform: showScenarioTable ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
+            <span className="h2" style={{ margin: 0 }}>施策別の詳細（表）</span>
+            <span className="small" style={{ opacity: 0.55, fontWeight: 400 }}>
+              施策名・表示・CV・CVR/CTR・経由売上の明細{!showScenarioTable && scenarioStats.length > 0 ? `（${scenarioStats.length}件）` : ""}
+            </span>
+          </button>
+          {showScenarioTable && <>
+          {rowsLoading && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {[1,2,3].map((i) => <SkeletonBar key={i} width={`${90 - i * 10}%`} height={18} radius={4} />)}
+            </div>
+          )}
+          {!rowsLoading && scenarioStats.length > 0 && (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid rgba(15,23,42,.08)", background: "rgba(15,23,42,.02)" }}>
+                  <th style={{ padding: "8px 12px", textAlign: "left", fontWeight: 700, opacity: 0.7 }}>施策名</th>
+                  <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>表示</th>
+                  <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CV</th>
+                  <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CVR</th>
+                  <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CTR</th>
+                  {purchaseLogs.length > 0 && <>
+                    <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>💰 経由売上</th>
+                    <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>購入件数</th>
+                  </>}
+                </tr>
+              </thead>
+              <tbody>
+                {scenarioStats.map((s, i) => {
+                  const rev = revenueByScenarioId.get(s.id);
+                  return (
+                    <tr key={s.id} style={{ borderBottom: "1px solid rgba(15,23,42,.05)", background: i === 0 ? "rgba(22,163,74,.03)" : undefined }}>
+                      <td style={{ padding: "10px 12px", fontWeight: 600 }}>
+                        {i === 0 && <span style={{ marginRight: 6 }}>🏆</span>}{s.name}
+                      </td>
+                      <td style={{ padding: "10px 12px", textAlign: "right" }}>{fmtInt(s.imp)}</td>
+                      <td style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: s.cv > 0 ? "#16a34a" : undefined }}>{fmtInt(s.cv)}</td>
+                      <td style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: s.cvr > 0 ? "#16a34a" : undefined }}>{s.cvr > 0 ? `${s.cvr}%` : "—"}</td>
+                      <td style={{ padding: "10px 12px", textAlign: "right" }}>{s.ctr > 0 ? `${s.ctr}%` : "—"}</td>
+                      {purchaseLogs.length > 0 && <>
+                        <td style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: rev?.revenue ? "#16a34a" : undefined }}>
+                          {rev?.revenue ? `¥${rev.revenue.toLocaleString("ja-JP")}` : "—"}
+                        </td>
+                        <td style={{ padding: "10px 12px", textAlign: "right" }}>
+                          {rev?.count ? fmtInt(rev.count) : "—"}
+                        </td>
+                      </>}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          )}
+          </>}
+        </div>
+      )}
+
       {/* 日別トレンドチャート */}
       <div className="card" style={{ marginBottom: 14, padding: 20 }}>
         <div className="h2" style={{ marginBottom: 4 }}>日別トレンド：表示回数 × CVR%</div>
@@ -790,77 +861,6 @@ export default function DashboardPage() {
           </div>
         )}
       </div>
-
-      {/* シナリオ別サマリーテーブル */}
-      {(scenarioStats.length > 0 || rowsLoading) && (
-        <div className="card" style={{ marginBottom: 14, padding: 20 }}>
-          <button
-            type="button"
-            onClick={() => setShowScenarioTable((v) => !v)}
-            style={{
-              display: "flex", alignItems: "center", gap: 8, width: "100%",
-              background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left",
-              marginBottom: showScenarioTable ? 16 : 0,
-            }}
-          >
-            <span style={{ fontSize: 13, opacity: 0.5, transform: showScenarioTable ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
-            <span className="h2" style={{ margin: 0 }}>施策別の詳細（表）</span>
-            <span className="small" style={{ opacity: 0.55, fontWeight: 400 }}>
-              施策名・表示・CV・CVR/CTR・経由売上の明細{!showScenarioTable && scenarioStats.length > 0 ? `（${scenarioStats.length}件）` : ""}
-            </span>
-          </button>
-          {showScenarioTable && <>
-          {rowsLoading && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {[1,2,3].map((i) => <SkeletonBar key={i} width={`${90 - i * 10}%`} height={18} radius={4} />)}
-            </div>
-          )}
-          {!rowsLoading && scenarioStats.length > 0 && (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid rgba(15,23,42,.08)", background: "rgba(15,23,42,.02)" }}>
-                  <th style={{ padding: "8px 12px", textAlign: "left", fontWeight: 700, opacity: 0.7 }}>施策名</th>
-                  <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>表示</th>
-                  <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CV</th>
-                  <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CVR</th>
-                  <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CTR</th>
-                  {purchaseLogs.length > 0 && <>
-                    <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>💰 経由売上</th>
-                    <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>購入件数</th>
-                  </>}
-                </tr>
-              </thead>
-              <tbody>
-                {scenarioStats.map((s, i) => {
-                  const rev = revenueByScenarioId.get(s.id);
-                  return (
-                    <tr key={s.id} style={{ borderBottom: "1px solid rgba(15,23,42,.05)", background: i === 0 ? "rgba(22,163,74,.03)" : undefined }}>
-                      <td style={{ padding: "10px 12px", fontWeight: 600 }}>
-                        {i === 0 && <span style={{ marginRight: 6 }}>🏆</span>}{s.name}
-                      </td>
-                      <td style={{ padding: "10px 12px", textAlign: "right" }}>{fmtInt(s.imp)}</td>
-                      <td style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: s.cv > 0 ? "#16a34a" : undefined }}>{fmtInt(s.cv)}</td>
-                      <td style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: s.cvr > 0 ? "#16a34a" : undefined }}>{s.cvr > 0 ? `${s.cvr}%` : "—"}</td>
-                      <td style={{ padding: "10px 12px", textAlign: "right" }}>{s.ctr > 0 ? `${s.ctr}%` : "—"}</td>
-                      {purchaseLogs.length > 0 && <>
-                        <td style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: rev?.revenue ? "#16a34a" : undefined }}>
-                          {rev?.revenue ? `¥${rev.revenue.toLocaleString("ja-JP")}` : "—"}
-                        </td>
-                        <td style={{ padding: "10px 12px", textAlign: "right" }}>
-                          {rev?.count ? fmtInt(rev.count) : "—"}
-                        </td>
-                      </>}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          )}
-          </>}
-        </div>
-      )}
     </div>
   );
 }
