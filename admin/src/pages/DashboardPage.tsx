@@ -160,6 +160,7 @@ export default function DashboardPage() {
   const [purchaseLogs, setPurchaseLogs] = useState<any[]>([]);
   const [rowsLoading, setRowsLoading] = useState(true);
   const [purchaseLoading, setPurchaseLoading] = useState(true);
+  const [showScenarioTable, setShowScenarioTable] = useState(false); // 施策別パフォーマンス一覧（明細）は既定で畳む
 
   // Auth
   useEffect(() => {
@@ -680,9 +681,14 @@ export default function DashboardPage() {
           </div>
           <div style={{ height: 220, width: "100%" }}>
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={scenarioStats.slice(0, 8)} margin={{ top: 4, right: 16, left: 0, bottom: 40 }}>
+              <BarChart data={scenarioStats.slice(0, 8)} margin={{ top: 4, right: 16, left: 0, bottom: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,.06)" />
-                <XAxis dataKey="name" tick={{ fontSize: 11 }} angle={-20} textAnchor="end" interval={0} />
+                <XAxis
+                  dataKey="name"
+                  tick={{ fontSize: 11 }}
+                  interval={0}
+                  tickFormatter={(v: string) => (v && v.length > 6 ? v.slice(0, 6) + "…" : v)}
+                />
                 <YAxis unit="%" tick={{ fontSize: 11 }} />
                 <Tooltip formatter={(v: any) => `${v}%`} />
                 <Legend />
@@ -788,7 +794,22 @@ export default function DashboardPage() {
       {/* シナリオ別サマリーテーブル */}
       {(scenarioStats.length > 0 || rowsLoading) && (
         <div className="card" style={{ marginBottom: 14, padding: 20 }}>
-          <div className="h2" style={{ marginBottom: 16 }}>施策別パフォーマンス一覧</div>
+          <button
+            type="button"
+            onClick={() => setShowScenarioTable((v) => !v)}
+            style={{
+              display: "flex", alignItems: "center", gap: 8, width: "100%",
+              background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left",
+              marginBottom: showScenarioTable ? 16 : 0,
+            }}
+          >
+            <span style={{ fontSize: 13, opacity: 0.5, transform: showScenarioTable ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
+            <span className="h2" style={{ margin: 0 }}>施策別の詳細（表）</span>
+            <span className="small" style={{ opacity: 0.55, fontWeight: 400 }}>
+              施策名・表示・CV・CVR/CTR・経由売上の明細{!showScenarioTable && scenarioStats.length > 0 ? `（${scenarioStats.length}件）` : ""}
+            </span>
+          </button>
+          {showScenarioTable && <>
           {rowsLoading && (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {[1,2,3].map((i) => <SkeletonBar key={i} width={`${90 - i * 10}%`} height={18} radius={4} />)}
@@ -837,6 +858,7 @@ export default function DashboardPage() {
             </table>
           </div>
           )}
+          </>}
         </div>
       )}
     </div>
