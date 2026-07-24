@@ -215,15 +215,19 @@
 
   function normalizeCreative(creative) {
     creative = creative || {};
-    return {
-      title: creative.title || "",
-      body: creative.body || "",
-      image_url: creative.image_url || creative.imageUrl || "",
-      cta_text: creative.cta_text || creative.buttonText || creative.button_text || "OK",
-      cta_url: creative.cta_url || creative.url || creative.href || "",
-      cta_url_text: creative.cta_url_text || creative.link_text || creative.linkText || "詳細を見る",
-      coupon_code: creative.coupon_code || ""
-    };
+    // 元の creative を保持したまま既知キーを補完する。
+    // これによりテンプレート独自の {{カスタムフィールド}}（badge_text 等）が
+    // renderTemplate まで素通りする（KARTE風のテンプレ追加フィールドを実現）。
+    var out = {};
+    for (var k in creative) { if (Object.prototype.hasOwnProperty.call(creative, k)) out[k] = creative[k]; }
+    out.title = creative.title || "";
+    out.body = creative.body || "";
+    out.image_url = creative.image_url || creative.imageUrl || "";
+    out.cta_text = creative.cta_text || creative.buttonText || creative.button_text || "OK";
+    out.cta_url = creative.cta_url || creative.url || creative.href || "";
+    out.cta_url_text = creative.cta_url_text || creative.link_text || creative.linkText || "詳細を見る";
+    out.coupon_code = creative.coupon_code || "";
+    return out;
   }
 
   // ------------------ DOM MOUNT ------------------

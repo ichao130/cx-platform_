@@ -86,6 +86,9 @@ type ActionDoc = {
 
     // primary media id (optional)
     image_media_id?: string;
+
+    // テンプレ独自フィールド（KARTE風）: {{key}} を任意キーで保持
+    [key: string]: any;
   };
 
   modal_creative?: {
@@ -98,10 +101,48 @@ type ActionDoc = {
   };
 };
 
+type TemplateFieldType = 'text' | 'textarea' | 'image' | 'url' | 'color' | 'number';
+type TemplateField = { key: string; label?: string; type?: TemplateFieldType; default?: string };
 type TemplateRow = {
   id: string;
-  data: { workspaceId?: string; siteId?: string; type?: ActionType; name?: string };
+  data: { workspaceId?: string; siteId?: string; type?: ActionType; name?: string; html?: string; fields?: TemplateField[] };
 };
+
+// creativeの既知キー（これ以外の {{key}} を独自フィールドとして扱う）
+const BUILTIN_TEMPLATE_KEYS = new Set<string>([
+  'title', 'body', 'image_url', 'cta_text', 'cta_url', 'cta_url_text', 'coupon_code',
+]);
+// creative の「予約キー」。これ以外は独自フィールド値とみなす。
+const RESERVED_CREATIVE_KEYS = new Set<string>([
+  'title', 'body', 'cta_text', 'cta_url', 'cta_url_text', 'image_url',
+  'launcher_image_url', 'launcher_bottom', 'launcher_position', 'coupon_code',
+  'toast_position', 'toast_bottom', 'toast_duration_sec', 'toast_click_action',
+  'image_media_id',
+]);
+function extractCustomCreativeValues(creative?: Record<string, any>): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!creative) return out;
+  for (const k of Object.keys(creative)) {
+    if (RESERVED_CREATIVE_KEYS.has(k)) continue;
+    const v = creative[k];
+    if (v != null) out[k] = String(v);
+  }
+  return out;
+}
+
+// テンプレの fields（宣言）を優先。無ければ html から {{key}} を自動検出してテキスト扱い。
+function resolveTemplateFields(t?: TemplateRow['data']): TemplateField[] {
+  if (!t) return [];
+  if (Array.isArray(t.fields) && t.fields.length) return t.fields;
+  const set = new Set<string>();
+  const re = /\{\{\s*(?:#if\s+)?([a-zA-Z0-9_]+)\s*\}\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(String(t.html || '')))) {
+    const k = m[1];
+    if (k && k !== 'if' && !BUILTIN_TEMPLATE_KEYS.has(k)) set.add(k);
+  }
+  return Array.from(set).map((k) => ({ key: k, type: 'text' as const }));
+}
 
 /* =========================
  * Site helpers
@@ -260,6 +301,7 @@ function buildActionPayload(form: {
   creative: ActionDoc["creative"];
   modal_creative?: ActionDoc["modal_creative"];
   mediaIds: string[];
+  customFields?: Record<string, string>;
 }): ActionDoc {
   const selector = (form.selector || "").trim();
   const primary = (form.creative?.image_media_id || "").trim();
@@ -273,6 +315,8 @@ function buildActionPayload(form: {
     modalTemplateId: (form.type === "launcher" && form.modalTemplateId.trim()) ? form.modalTemplateId.trim() : undefined,
     mediaIds,
     creative: {
+      // テンプレ独自フィールド（KARTE風）は creative にそのキーで保存。既知キーが常に優先されるよう先に展開。
+      ...(form.customFields || {}),
       title: form.creative.title ?? "",
       body: form.creative.body ?? "",
       cta_text: form.creative.cta_text ?? "OK",
@@ -342,6 +386,10 @@ export default function ActionsPage() {
 
   const [templateId, setTemplateId] = useState<string>("");
   const [modalTemplateId, setModalTemplateId] = useState<string>("");
+  // テンプレ独自フィールド（KARTE風）の値。creative にそのキーで保存する。
+  const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({});
+  // どの独自フィールドを画像ピッカーで選ぶか（開いている対象キー）
+  const [customImagePickerKey, setCustomImagePickerKey] = useState<string | null>(null);
 
   const [title, setTitle] = useState("テスト表示");
   const [body, setBody] = useState("これが出れば成功🔥");
@@ -511,6 +559,7 @@ export default function ActionsPage() {
     setToastBottom(12);
     setToastDurationSec(5);
     setToastClickAction("close_and_url");
+    setCustomFieldValues({});
     setUploading(false);
     setUploadErr("");
     setSaveError("");
@@ -556,6 +605,8 @@ export default function ActionsPage() {
     setImageMediaId(f.imageMediaId);
     setCouponCode(f.couponCode);
     setMediaIds(f.mediaIds);
+    // creative から独自フィールド値を復元（予約キー以外を全て拾う。表示は選択テンプレの定義ぶんだけ）
+    setCustomFieldValues(extractCustomCreativeValues(row.data?.creative));
     setUploadErr("");
     setSaveError("");
     setSaveMessage("");
@@ -690,6 +741,23 @@ export default function ActionsPage() {
     return m;
   }, [rows]);
 
+  // 選択中テンプレートの独自フィールド定義（宣言優先→なければ html から自動検出）
+  const selectedTemplateFields = useMemo<TemplateField[]>(() => {
+    if (!templateId) return [];
+    const t = templates.find((r) => r.id === templateId);
+    return resolveTemplateFields(t?.data);
+  }, [templateId, templates]);
+
+  // 保存対象の独自フィールド値（定義にあるキーだけ、初期値で補完）
+  const effectiveCustomValues = useMemo<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    for (const f of selectedTemplateFields) {
+      const v = customFieldValues[f.key];
+      out[f.key] = (v != null && v !== "") ? v : (f.default || "");
+    }
+    return out;
+  }, [selectedTemplateFields, customFieldValues]);
+
   const payload: ActionDoc = useMemo(() => {
     return buildActionPayload({
       workspaceId,
@@ -700,6 +768,7 @@ export default function ActionsPage() {
       mode,
       templateId,
       modalTemplateId,
+      customFields: effectiveCustomValues,
       creative: {
         title,
         body,
@@ -759,6 +828,7 @@ export default function ActionsPage() {
     modalCreativeCtaUrlText,
     modalCreativeCouponCode,
     mediaIds,
+    effectiveCustomValues,
   ]);
 
   const isDirty = useMemo(() => {
@@ -1312,6 +1382,46 @@ export default function ActionsPage() {
                         ))}
                     </select>
 
+                    {/* テンプレ独自フィールド（KARTE風）: 選択テンプレの {{key}} を差し込む入力欄 */}
+                    {selectedTemplateFields.length > 0 && (
+                      <div style={{ marginTop: 12, background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 10, padding: "12px 14px" }}>
+                        <div className="h2" style={{ marginBottom: 4 }}>🧩 テンプレートの追加フィールド</div>
+                        <div className="small" style={{ opacity: 0.68, marginBottom: 10 }}>
+                          このテンプレートが持つ独自の差し込み項目です。ここで入れた値が <code>{'{{key}}'}</code> に反映されます。
+                        </div>
+                        <div style={{ display: "grid", gap: 10 }}>
+                          {selectedTemplateFields.map((f) => {
+                            const val = customFieldValues[f.key] ?? "";
+                            const label = f.label || f.key;
+                            const setVal = (v: string) => setCustomFieldValues((cur) => ({ ...cur, [f.key]: v }));
+                            return (
+                              <div key={f.key}>
+                                <div className="h2" style={{ fontSize: 13 }}>{label} <code style={{ fontSize: 11, opacity: 0.5, fontWeight: 400 }}>{'{{'}{f.key}{'}}'}</code></div>
+                                {f.type === "textarea" ? (
+                                  <textarea className="input" value={val} placeholder={f.default || ""} onChange={(e) => setVal(e.target.value)} />
+                                ) : f.type === "color" ? (
+                                  <div className="row" style={{ gap: 8, alignItems: "center" }}>
+                                    <input type="color" value={/^#/.test(val) ? val : (val || "#1f6573")} onChange={(e) => setVal(e.target.value)} style={{ width: 44, height: 34, padding: 2, border: "1px solid rgba(15,23,42,.16)", borderRadius: 6, cursor: "pointer" }} />
+                                    <input className="input" style={{ flex: 1 }} value={val} placeholder="#1f6573" onChange={(e) => setVal(e.target.value)} />
+                                  </div>
+                                ) : f.type === "number" ? (
+                                  <input className="input" type="number" value={val} placeholder={f.default || ""} onChange={(e) => setVal(e.target.value)} />
+                                ) : f.type === "image" ? (
+                                  <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                                    <input className="input" style={{ flex: 1, minWidth: 180 }} value={val} placeholder="画像URL or メディアから選択" onChange={(e) => setVal(e.target.value)} />
+                                    <button type="button" className="btn" style={{ fontSize: 12 }} onClick={() => setCustomImagePickerKey(f.key)}>🖼 メディアから選択</button>
+                                    {val?.trim() && <img src={val} alt="" style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 6, border: "1px solid rgba(15,23,42,.12)" }} />}
+                                  </div>
+                                ) : (
+                                  <input className="input" type={f.type === "url" ? "url" : "text"} value={val} placeholder={f.default || ""} onChange={(e) => setVal(e.target.value)} />
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
                     <div style={{ height: 10 }} />
                     <div className="h2">本文</div>
                     <textarea className="input" value={body} onChange={(e) => setBody(e.target.value)} />
@@ -1682,6 +1792,18 @@ export default function ActionsPage() {
           setMediaIds((prev) => uniq([...prev, row.id]));
           if (!imageMediaId) setImageMediaId(row.id);
           setImageUrl(row.data.downloadURL);
+        }}
+      />
+
+      {/* テンプレ独自フィールド（画像タイプ）用のメディアピッカー */}
+      <MediaPickerModal
+        open={!!customImagePickerKey}
+        siteId={siteId}
+        onClose={() => setCustomImagePickerKey(null)}
+        onPick={(row) => {
+          const key = customImagePickerKey;
+          setCustomImagePickerKey(null);
+          if (key) setCustomFieldValues((cur) => ({ ...cur, [key]: row.data.downloadURL }));
         }}
       />
 

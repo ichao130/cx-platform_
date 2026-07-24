@@ -52,6 +52,11 @@ function siteLabel(site: SiteRow | undefined) {
   return String(site.data?.name || site.id || '');
 }
 
+// テンプレートが宣言する「追加フィールド」（KARTE風）。HTMLの {{key}} を
+// アクション作成時に埋められるようにするためのスキーマ。type/label/default は任意。
+type TemplateFieldType = 'text' | 'textarea' | 'image' | 'url' | 'color' | 'number';
+type TemplateField = { key: string; label?: string; type?: TemplateFieldType; default?: string };
+
 type TemplateDoc = {
   workspaceId: string;
   siteId?: string;
@@ -60,7 +65,26 @@ type TemplateDoc = {
   html: string;
   css: string;
   js?: string;
+  fields?: TemplateField[];
 };
+
+// creative の既知キー（これ以外の {{key}} を「独自フィールド」として扱う）
+const BUILTIN_TEMPLATE_KEYS = new Set<string>([
+  'title', 'body', 'image_url', 'cta_text', 'cta_url', 'cta_url_text', 'coupon_code',
+  'q_title', 'q_submit_label', 'q_choices',
+]);
+
+// HTMLから {{key}} / {{#if key}} を拾い、既知キーを除いた独自キーを返す
+export function detectCustomKeys(html: string): string[] {
+  const set = new Set<string>();
+  const re = /\{\{\s*(?:#if\s+)?([a-zA-Z0-9_]+)\s*\}\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(String(html || '')))) {
+    const k = m[1];
+    if (k && k !== 'if' && !BUILTIN_TEMPLATE_KEYS.has(k)) set.add(k);
+  }
+  return Array.from(set);
+}
 
 type SampleData = {
   title: string;
@@ -323,6 +347,23 @@ export default function TemplatesPage() {
   const [html, setHtml] = useState(DEFAULTS.modal.html);
   const [css, setCss] = useState(DEFAULTS.modal.css);
   const [js, setJs] = useState('');
+  const [fields, setFields] = useState<TemplateField[]>([]);
+
+  // HTMLから独自 {{key}} を自動検出。宣言済みメタ（fields）とマージして編集行を作る。
+  const detectedKeys = useMemo(() => detectCustomKeys(html), [html]);
+  const customFields = useMemo<TemplateField[]>(
+    () => detectedKeys.map((k) => {
+      const meta = fields.find((f) => f.key === k);
+      return { key: k, label: meta?.label || '', type: meta?.type || 'text', default: meta?.default || '' };
+    }),
+    [detectedKeys, fields]
+  );
+  const setFieldMeta = (key: string, patch: Partial<TemplateField>) =>
+    setFields((cur) => {
+      const idx = cur.findIndex((f) => f.key === key);
+      if (idx >= 0) return cur.map((f, i) => (i === idx ? { ...f, ...patch } : f));
+      return [...cur, { key, ...patch }];
+    });
 
   const selectedWorkspaceName = useMemo(() => workspaceLabel(workspaces, workspaceId), [workspaces, workspaceId]);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -438,8 +479,8 @@ export default function TemplatesPage() {
   const ALL_DEFAULT_HTML = Object.values(DEFAULTS).map((d) => d.html);
 
   const payload: TemplateDoc = useMemo(
-    () => ({ workspaceId, siteId: siteId || undefined, type, name: name.trim() || 'Template', html, css, ...(js.trim() ? { js: js.trim() } : {}) }),
-    [workspaceId, siteId, type, name, html, css, js]
+    () => ({ workspaceId, siteId: siteId || undefined, type, name: name.trim() || 'Template', html, css, ...(js.trim() ? { js: js.trim() } : {}), ...(customFields.length ? { fields: customFields } : {}) }),
+    [workspaceId, siteId, type, name, html, css, js, customFields]
   );
 
   const isDirty = useMemo(() => {
@@ -449,6 +490,11 @@ export default function TemplatesPage() {
   useBeforeUnload(isModalOpen && isDirty);
 
   const previewSrcDoc = useMemo(() => {
+    // 独自フィールドの初期値をプレビューにも反映（画像は初期値なければサンプル画像で見栄えを確保）
+    const customData: Record<string, any> = {};
+    for (const f of customFields) {
+      customData[f.key] = f.default || (f.type === 'image' ? SAMPLE_IMAGE_DATA_URI : '');
+    }
     // 質問接客は差し込み変数が別（title / header_image_url / submit_label）＋選択肢はSDKが差し込む。
     // 他タイプ用のサンプル（cta_url・クーポン等）とは噛み合わないので、種別ごとにデータを組み替える。
     if (type === 'question') {
@@ -459,6 +505,7 @@ export default function TemplatesPage() {
       return buildPreviewSrcDoc({
         html, css, js,
         data: {
+          ...customData,
           title: sample.q_title,
           header_image_url: sample.image_url,
           submit_label: sample.q_submit_label,
@@ -466,8 +513,8 @@ export default function TemplatesPage() {
         choices,
       });
     }
-    return buildPreviewSrcDoc({ html, css, js, data: sample });
-  }, [html, css, js, sample, type]);
+    return buildPreviewSrcDoc({ html, css, js, data: { ...customData, ...sample } });
+  }, [html, css, js, sample, type, customFields]);
 
   function resetEditor() {
     setId(genId('tpl'));
@@ -476,6 +523,7 @@ export default function TemplatesPage() {
     setHtml(DEFAULTS.modal.html);
     setCss(DEFAULTS.modal.css);
     setJs('');
+    setFields([]);
     setSaveError('');
     setSaveMessage('');
     setSavedPayloadStr(null);
@@ -497,6 +545,7 @@ export default function TemplatesPage() {
     setHtml(row.data.html ?? DEFAULTS[row.data.type].html);
     setCss(row.data.css ?? DEFAULTS[row.data.type].css);
     setJs(row.data.js ?? '');
+    setFields(Array.isArray(row.data.fields) ? row.data.fields : []);
     setSaveError('');
     setSaveMessage('');
     setSavedPayloadStr(JSON.stringify(row.data));
@@ -868,6 +917,40 @@ export default function TemplatesPage() {
                     </>
                   )}
                 </div>
+
+                {/* ---- 追加フィールド（HTMLの独自 {{key}} を自動検出。KARTE風にアクション側で値を入れられる） ---- */}
+                <div style={{ height: 14 }} />
+                <div className="h2">🧩 追加フィールド</div>
+                <div className="small" style={{ opacity: 0.68, marginBottom: 8 }}>
+                  HTMLに書いた独自の <code>{'{{key}}'}</code>（既定タグ以外）を自動検出します。ここでラベルと入力タイプを決めておくと、
+                  <b>アクション作成時にその入力欄が出て</b>、担当者がコードを触らず値を差し込めます。
+                </div>
+                {customFields.length === 0 ? (
+                  <div className="small" style={{ opacity: 0.55, background: '#f8fafc', border: '1px dashed #cbd5e1', borderRadius: 8, padding: '10px 12px' }}>
+                    独自フィールドはまだありません。HTMLに例えば <code>{'{{badge_text}}'}</code> や <code>{'{{price}}'}</code> と書くと、ここに自動で現れます。
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    {customFields.map((f) => (
+                      <div key={f.key} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 10px' }}>
+                        <code style={{ fontSize: 12, fontWeight: 700, color: '#1f6573', minWidth: 110 }}>{'{{'}{f.key}{'}}'}</code>
+                        <input className="input" style={{ flex: 1, minWidth: 120 }} value={f.label || ''} placeholder="ラベル（例: バッジ文言）"
+                          onChange={(e) => setFieldMeta(f.key, { label: e.target.value })} />
+                        <select className="input" style={{ width: 120 }} value={f.type || 'text'}
+                          onChange={(e) => setFieldMeta(f.key, { type: e.target.value as TemplateFieldType })}>
+                          <option value="text">テキスト</option>
+                          <option value="textarea">複数行</option>
+                          <option value="image">画像</option>
+                          <option value="url">URL</option>
+                          <option value="color">色</option>
+                          <option value="number">数値</option>
+                        </select>
+                        <input className="input" style={{ flex: 1, minWidth: 120 }} value={f.default || ''} placeholder="初期値（任意）"
+                          onChange={(e) => setFieldMeta(f.key, { default: e.target.value })} />
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div style={{ flex: 1, minWidth: 280 }}>
