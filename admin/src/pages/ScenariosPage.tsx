@@ -61,6 +61,11 @@ type ScenarioTargeting = {
     };
     // 質問接客で蓄積した属性で絞る（例: concerns.uv に sticky を含む）
     attributeRules?: Array<{ key: string; op: "has" | "not"; value: string }>;
+    // 天気・気温条件（サーバー側で判定）
+    weather?: {
+      conditions?: Array<"clear" | "cloudy" | "rain" | "snow" | "thunder">;
+      tempBands?: Array<"lt10" | "t10_19" | "t20_24" | "t25_29" | "ge30">;
+    };
   };
   exclude?: {
     shownWithinDays?: number;
@@ -355,6 +360,9 @@ export default function ScenariosPage() {
   const [excludeConverted, setExcludeConverted] = useState(false);
   // 属性条件（質問接客の蓄積属性で絞る）
   const [attributeRules, setAttributeRules] = useState<Array<{ key: string; op: "has" | "not"; value: string }>>([]);
+  // 天気・気温ターゲティング（サーバー側判定）
+  const [weatherConditions, setWeatherConditions] = useState<Array<"clear" | "cloudy" | "rain" | "snow" | "thunder">>([]);
+  const [weatherTempBands, setWeatherTempBands] = useState<Array<"lt10" | "t10_19" | "t20_24" | "t25_29" | "ge30">>([]);
 
   // experiment (A/B)
   const [expEnabled, setExpEnabled] = useState(false);
@@ -668,6 +676,10 @@ export default function ScenariosPage() {
         attributeRules: attributeRules
           .map((r) => ({ key: (r.key || "").trim(), op: r.op || "has", value: (r.value || "").trim() }))
           .filter((r) => r.key && r.value),
+        weather: {
+          conditions: weatherConditions,
+          tempBands: weatherTempBands,
+        },
       },
       exclude: {
         shownWithinDays:
@@ -692,6 +704,8 @@ export default function ScenariosPage() {
     excludeMaxImpressionsPerUser,
     excludeConverted,
     attributeRules,
+    weatherConditions,
+    weatherTempBands,
   ]);
 
   const experiment: Experiment | null = useMemo(() => {
@@ -901,6 +915,8 @@ export default function ScenariosPage() {
     setExcludeMaxImpressionsPerUser("");
     setExcludeConverted(false);
     setAttributeRules([]);
+    setWeatherConditions([]);
+    setWeatherTempBands([]);
 
     setExpEnabled(false);
     setExpSticky("vid");
@@ -1107,6 +1123,8 @@ export default function ScenariosPage() {
       setAttributeRules(Array.isArray(t?.audience?.attributeRules)
         ? t.audience.attributeRules.map((r: any) => ({ key: String(r.key || ""), op: r.op === "not" ? "not" : "has", value: String(r.value || "") }))
         : []);
+      setWeatherConditions(Array.isArray(t?.audience?.weather?.conditions) ? t.audience.weather.conditions.filter((c: any) => ["clear","cloudy","rain","snow","thunder"].includes(c)) : []);
+      setWeatherTempBands(Array.isArray(t?.audience?.weather?.tempBands) ? t.audience.weather.tempBands.filter((c: any) => ["lt10","t10_19","t20_24","t25_29","ge30"].includes(c)) : []);
     } else {
       setTargetingEnabled(false);
       setTargetVisitorType("all");
@@ -1122,6 +1140,8 @@ export default function ScenariosPage() {
       setExcludeMaxImpressionsPerUser("");
       setExcludeConverted(false);
       setAttributeRules([]);
+      setWeatherConditions([]);
+      setWeatherTempBands([]);
     }
 
     // experiment
@@ -2013,6 +2033,61 @@ export default function ScenariosPage() {
                 </div>
                 <button className="btn" style={{ marginTop: 6, fontSize: 12 }} disabled={!targetingEnabled}
                   onClick={() => setAttributeRules((cur) => [...cur, { key: "", op: "has", value: "" }])}>+ 属性条件を追加</button>
+
+                <div style={{ height: 10 }} />
+                <div className="h2">🌤 天気・気温条件</div>
+                <div className="small" style={{ opacity: 0.65, marginBottom: 6 }}>
+                  アクセス地点の今の天気で出し分けます（サーバー側で判定）。位置が取れない場合は東京の天気を使用。
+                  天気・気温の両方を選ぶと <b>両方に合致</b>したときだけ配信。どちらも未選択なら天気条件なし。
+                </div>
+                <div style={{ opacity: targetingEnabled ? 1 : 0.6 }}>
+                  <div className="small" style={{ fontWeight: 700, marginBottom: 4 }}>天気（複数選択可）</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+                    {([
+                      ["clear", "☀️ 晴れ"],
+                      ["cloudy", "☁️ 曇り"],
+                      ["rain", "🌧️ 雨"],
+                      ["snow", "❄️ 雪"],
+                      ["thunder", "⛈️ 雷雨"],
+                    ] as const).map(([val, label]) => {
+                      const on = weatherConditions.includes(val);
+                      return (
+                        <button key={val} type="button" disabled={!targetingEnabled}
+                          onClick={() => setWeatherConditions((cur) => on ? cur.filter((x) => x !== val) : [...cur, val])}
+                          style={{
+                            fontSize: 13, padding: "6px 12px", borderRadius: 20, cursor: targetingEnabled ? "pointer" : "default",
+                            border: on ? "1px solid #1f6573" : "1px solid rgba(15,23,42,.16)",
+                            background: on ? "#1f6573" : "#fff", color: on ? "#fff" : "inherit", fontWeight: on ? 700 : 500,
+                          }}>
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="small" style={{ fontWeight: 700, marginBottom: 4 }}>気温（複数選択可）</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {([
+                      ["lt10", "〜9℃ 寒い"],
+                      ["t10_19", "10〜19℃"],
+                      ["t20_24", "20〜24℃ 快適"],
+                      ["t25_29", "25〜29℃ 暑い"],
+                      ["ge30", "30℃〜 猛暑"],
+                    ] as const).map(([val, label]) => {
+                      const on = weatherTempBands.includes(val);
+                      return (
+                        <button key={val} type="button" disabled={!targetingEnabled}
+                          onClick={() => setWeatherTempBands((cur) => on ? cur.filter((x) => x !== val) : [...cur, val])}
+                          style={{
+                            fontSize: 13, padding: "6px 12px", borderRadius: 20, cursor: targetingEnabled ? "pointer" : "default",
+                            border: on ? "1px solid #c2410c" : "1px solid rgba(15,23,42,.16)",
+                            background: on ? "#c2410c" : "#fff", color: on ? "#fff" : "inherit", fontWeight: on ? 700 : 500,
+                          }}>
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
 
                 <div style={{ height: 10 }} />
                 <div className="h2">除外条件</div>
