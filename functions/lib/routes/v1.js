@@ -357,6 +357,14 @@ const ScenarioTargetingSchema = zod_1.z.object({
         })
             .optional()
             .default({ source: [], medium: [], campaign: [] }),
+        // 天気・気温条件（サーバー側で /v1/serve 時に判定。取得不可は東京にフォールバック）
+        weather: zod_1.z
+            .object({
+            conditions: zod_1.z.array(zod_1.z.enum(["clear", "cloudy", "rain", "snow", "thunder"])).optional().default([]),
+            tempBands: zod_1.z.array(zod_1.z.enum(["lt10", "t10_19", "t20_24", "t25_29", "ge30"])).optional().default([]),
+        })
+            .optional()
+            .default({ conditions: [], tempBands: [] }),
     })
         .optional()
         .default({
@@ -366,6 +374,7 @@ const ScenarioTargetingSchema = zod_1.z.object({
         cartStatus: "all",
         urlRules: [],
         utmRules: { source: [], medium: [], campaign: [] },
+        weather: { conditions: [], tempBands: [] },
     }),
     exclude: zod_1.z
         .object({
@@ -522,6 +531,10 @@ function defaultScenarioTargeting() {
                 medium: [],
                 campaign: [],
             },
+            weather: {
+                conditions: [],
+                tempBands: [],
+            },
         },
         exclude: {
             shownWithinDays: undefined,
@@ -559,6 +572,16 @@ function normalizeScenarioTargeting(input) {
         medium: normalizeStringList(src?.audience?.utmRules?.medium),
         campaign: normalizeStringList(src?.audience?.utmRules?.campaign),
     };
+    {
+        const wCond = (src?.audience?.weather?.conditions);
+        const wBand = (src?.audience?.weather?.tempBands);
+        const COND_OK = ["clear", "cloudy", "rain", "snow", "thunder"];
+        const BAND_OK = ["lt10", "t10_19", "t20_24", "t25_29", "ge30"];
+        base.audience.weather = {
+            conditions: (Array.isArray(wCond) ? wCond : []).map(String).filter((v) => COND_OK.includes(v)),
+            tempBands: (Array.isArray(wBand) ? wBand : []).map(String).filter((v) => BAND_OK.includes(v)),
+        };
+    }
     if (typeof src?.exclude?.shownWithinDays === "number") {
         base.exclude.shownWithinDays = Math.max(0, Math.floor(src.exclude.shownWithinDays));
     }
@@ -578,6 +601,62 @@ function matchStringRule(value, rule) {
     if (rule.op === "startsWith")
         return target.startsWith(needle);
     return target.includes(needle);
+}
+// WMO weather code → 選択式カテゴリ（晴/曇/雨/雪/雷雨）。霧は曇り扱い。
+function weatherBucketFromCode(code) {
+    if (typeof code !== "number")
+        return null;
+    if (code <= 1)
+        return "clear"; // 0快晴 / 1晴れ
+    if (code <= 3 || code === 45 || code === 48)
+        return "cloudy"; // 2,3曇り / 45,48霧
+    if (code >= 95)
+        return "thunder"; // 95-99 雷雨
+    if ((code >= 71 && code <= 77) || (code >= 85 && code <= 86))
+        return "snow"; // 雪・にわか雪
+    if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82))
+        return "rain"; // 雨・にわか雨
+    return null;
+}
+// 気温(℃) → 帯（幅広め5段階）
+function tempBandFrom(temp) {
+    if (typeof temp !== "number")
+        return null;
+    if (temp < 10)
+        return "lt10";
+    if (temp < 20)
+        return "t10_19";
+    if (temp < 25)
+        return "t20_24";
+    if (temp < 30)
+        return "t25_29";
+    return "ge30";
+}
+// シナリオが天気/気温条件を1つでも持つか（＝serve時に気象解決が必要か）
+function scenarioNeedsWeather(targeting) {
+    if (!targeting?.enabled)
+        return false;
+    const w = targeting?.audience?.weather;
+    return !!(w && ((Array.isArray(w.conditions) && w.conditions.length > 0) ||
+        (Array.isArray(w.tempBands) && w.tempBands.length > 0)));
+}
+// 天気・気温の合致判定。weather は解決済み {code,temp}。両方指定ならAND。
+function matchWeatherTargeting(targeting, weather) {
+    const t = normalizeScenarioTargeting(targeting);
+    if (!t.enabled)
+        return true;
+    const w = t.audience.weather;
+    if (w.conditions.length > 0) {
+        const bucket = weatherBucketFromCode(weather.code);
+        if (!bucket || !w.conditions.includes(bucket))
+            return false;
+    }
+    if (w.tempBands.length > 0) {
+        const band = tempBandFrom(weather.temp);
+        if (!band || !w.tempBands.includes(band))
+            return false;
+    }
+    return true;
 }
 function matchScenarioTargeting(targeting, ctx) {
     const t = normalizeScenarioTargeting(targeting);
@@ -3198,8 +3277,41 @@ function registerV1Routes(app) {
                 "anonymous");
             const reqUrl = String(req.query.url || "");
             const reqPath = String(req.query.path || "");
+            // 1.45 天気・気温ターゲティング用の気象解決。
+            //   コスト最小化: 配信中シナリオに天気条件つきが1件でもある時だけ気象APIを叩く。
+            //   地域が取れない/気象API失敗時は東京(35.68,139.76)にフォールバック（要件どおり）。
+            //   スマホは位置情報を取れないため、この判定はサーバー側で行うのが唯一の方法。
+            let serveWeather = null;
+            if (!isTestMode) {
+                const anyNeedsWeather = scenarioSnap.docs.some((d) => scenarioNeedsWeather(d.data()?.targeting));
+                if (anyNeedsWeather) {
+                    try {
+                        const ip = (0, geo_1.clientIpFrom)(req.header("x-forwarded-for"), req.ip);
+                        const geo = await (0, geo_1.resolveGeo)(ip);
+                        let w = (geo.lat != null && geo.lng != null) ? await (0, weather_1.resolveWeather)(geo.lat, geo.lng) : { code: null, temp: null };
+                        if (w.code == null && w.temp == null) {
+                            w = await (0, weather_1.resolveWeather)(35.68, 139.76); // 東京フォールバック
+                        }
+                        serveWeather = { code: w.code, temp: w.temp };
+                    }
+                    catch (e) {
+                        try {
+                            const w = await (0, weather_1.resolveWeather)(35.68, 139.76);
+                            serveWeather = { code: w.code, temp: w.temp };
+                        }
+                        catch {
+                            serveWeather = { code: null, temp: null };
+                        }
+                    }
+                }
+            }
             for (const doc of scenarioSnap.docs) {
                 const s = doc.data();
+                // 1.42 天気・気温条件で絞り込み（条件を持つシナリオのみ・テストモードは無視）
+                if (!isTestMode && scenarioNeedsWeather(s?.targeting)) {
+                    if (!matchWeatherTargeting(s.targeting, serveWeather || { code: null, temp: null }))
+                        continue;
+                }
                 // 1.4 ターゲティング: URL条件をサーバー側で評価（合致しないページには配信しない）。
                 //     サーバーが確実に取れるのは url/path のみのため、URL条件だけをここで判定する。
                 //     device/visitorType/loginStatus/cartStatus/UTM 等はクライアント情報が必要なため対象外。

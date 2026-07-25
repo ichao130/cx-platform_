@@ -800,15 +800,19 @@ function registerMcpRoutes(app) {
     app.options("/mcp", (_req, res) => {
         res.set({
             "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Allow-Methods": "GET, POST, HEAD, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, Mcp-Session-Id, MCP-Protocol-Version, Accept",
+            "Access-Control-Expose-Headers": "Mcp-Session-Id, MCP-Protocol-Version",
         });
         res.sendStatus(204);
     });
+    // Streamable HTTP transport: サーバーが対応する MCP プロトコル版（新しい順）
+    const SUPPORTED_PROTOCOLS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
     // MCP エンドポイント (Streamable HTTP transport)
     app.post("/mcp", async (req, res) => {
         res.set({
             "Access-Control-Allow-Origin": "*",
+            "Access-Control-Expose-Headers": "Mcp-Session-Id, MCP-Protocol-Version",
             "Content-Type": "application/json",
         });
         const body = req.body;
@@ -818,11 +822,17 @@ function registerMcpRoutes(app) {
         }
         // ── initialize ──
         if (method === "initialize") {
+            // クライアントが要求したプロトコル版が対応内ならそれを返す（ネゴシエーション）。
+            // 未指定/非対応なら当方が対応する最新版で応答する。
+            const clientVer = String(params?.protocolVersion || "");
+            const protocolVersion = SUPPORTED_PROTOCOLS.includes(clientVer) ? clientVer : "2025-06-18";
+            // Streamable HTTP: セッションIDを払い出す（以降のリクエストで Mcp-Session-Id として送られる）。
+            res.setHeader("Mcp-Session-Id", `mcp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`);
             return res.json({
                 jsonrpc: "2.0",
                 id,
                 result: {
-                    protocolVersion: "2024-11-05",
+                    protocolVersion,
                     capabilities: { tools: {} },
                     serverInfo: { name: "mokkeda-mcp", version: "1.0.0" },
                 },
@@ -883,13 +893,32 @@ function registerMcpRoutes(app) {
             error: { code: -32601, message: `Method not found: ${method}` },
         });
     });
-    // ヘルスチェック（MCPエンドポイントの疎通確認用）
-    app.get("/mcp", (_req, res) => {
+    // GET /mcp
+    //  - Streamable HTTP クライアントは Accept: text/event-stream で
+    //    サーバー起点のSSEストリームを開こうとする。当サーバーはサーバー起点の
+    //    通知を出さない（リクエスト/レスポンス型）ので、仕様上許容される 405 を返す。
+    //  - それ以外（ブラウザ等の疎通確認）は従来どおり健康チェックJSONを返す。
+    app.get("/mcp", (req, res) => {
+        res.set({ "Access-Control-Allow-Origin": "*" });
+        const accept = String(req.headers["accept"] || "");
+        if (accept.includes("text/event-stream")) {
+            res.set("Allow", "POST, OPTIONS");
+            return res.status(405).json({
+                jsonrpc: "2.0", id: null,
+                error: { code: -32000, message: "SSE stream not supported; use POST (JSON response mode)." },
+            });
+        }
         res.json({
             ok: true,
             name: "mokkeda-mcp",
             version: "1.0.0",
+            protocolVersions: SUPPORTED_PROTOCOLS,
             tools: TOOLS.map((t) => t.name),
         });
+    });
+    // HEAD /mcp（プロトコル/疎通ディスカバリ用）
+    app.head("/mcp", (_req, res) => {
+        res.set({ "Access-Control-Allow-Origin": "*" });
+        res.status(200).end();
     });
 }
