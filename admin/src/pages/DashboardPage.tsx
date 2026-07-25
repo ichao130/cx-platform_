@@ -323,9 +323,12 @@ export default function DashboardPage() {
       if (r.event === "purchase" && isPurchaseGoal) cv += c;
     }
     const cvr = imp > 0 ? Math.round((cv / imp) * 10000) / 100 : 0;
-    const ctr = imp > 0 ? Math.round((clkLink / imp) * 10000) / 100 : 0;
+    // クリックは click（非リンクCTA／テンプレCTA）と click_link（リンク遷移）の合算で数える。
+    // 片方だけだとテンプレ施策やリンク施策のどちらかでクリックが0に見えてしまう。
+    const clkTotal = clk + clkLink;
+    const ctr = imp > 0 ? Math.round((clkTotal / imp) * 10000) / 100 : 0;
     const closeRate = imp > 0 ? Math.round((close / imp) * 10000) / 100 : 0;
-    return { imp, clkLink, clk, close, cv, cvr, ctr, closeRate };
+    return { imp, clkLink, clk, clkTotal, close, cv, cvr, ctr, closeRate };
   }, [filteredRows, abScenarioId, scenarios]);
 
   // ---- Computed: 売上KPI ----
@@ -391,7 +394,8 @@ export default function DashboardPage() {
       if (r.event === "impression") obj.imp += safeNum(r.count);
       if (r.event === "conversion" && !isPg) obj.cv += safeNum(r.count);
       if (r.event === "purchase" && isPg) obj.cv += safeNum(r.count);
-      if (r.event === "click_link") obj.clk += safeNum(r.count);
+      // クリックは click と click_link の両方を合算（リンク施策・テンプレ施策のどちらも拾う）
+      if (r.event === "click_link" || r.event === "click") obj.clk += safeNum(r.count);
     }
     return Array.from(map.values())
       .map((s) => ({
@@ -414,7 +418,8 @@ export default function DashboardPage() {
       const obj = map.get(v)!;
       const c = safeNum(r.count);
       if (r.event === "impression") obj.imp += c;
-      if (r.event === "click_link") obj.clk += c;
+      // クリックは click と click_link の両方を合算
+      if (r.event === "click_link" || r.event === "click") obj.clk += c;
       if (r.event === "conversion" && !isPurchaseGoal) obj.cv += c;
       if (r.event === "purchase" && isPurchaseGoal) obj.cv += c;
     }

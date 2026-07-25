@@ -1364,13 +1364,17 @@ function buildMetricsFromCounts(counts: {
   const closes = counts.closes || 0;
   const conversions = counts.conversions || 0;
 
-  const ctr = impressions > 0 ? clicks / impressions : 0;
+  // 「クリック」は click（非リンク/テンプレCTA）と click_link（リンク遷移）の合算で扱う。
+  // CTRの見出し指標も合算ベース。個別の内訳は clicks / click_links として残す。
+  const clicks_total = clicks + click_links;
+  const ctr = impressions > 0 ? clicks_total / impressions : 0;
   const link_ctr = impressions > 0 ? click_links / impressions : 0;
   const cvr = impressions > 0 ? conversions / impressions : 0;
 
   return {
     impressions,
-    clicks,
+    clicks: clicks_total,
+    clicks_only: clicks,
     click_links,
     closes,
     conversions,
@@ -4284,7 +4288,8 @@ export function registerV1Routes(app: Express) {
         const B = top2[1].v;
         const a = countsByVariant[A];
         const b = countsByVariant[B];
-        const z = twoPropZTest(a.clicks, a.impressions, b.clicks, b.impressions);
+        // クリック率のz検定も click + click_link の合算で（見出しCTRと定義を揃える）
+        const z = twoPropZTest(a.clicks + a.click_links, a.impressions, b.clicks + b.click_links, b.impressions);
 
         if (z.ok) {
           const winner = z.b.ctr > z.a.ctr ? B : A;
@@ -5410,8 +5415,9 @@ export function registerV1Routes(app: Express) {
         if (!c) continue;
 
         if (ev === "impression") metricsMap[actionId].impressions += c;
+        // クリックは click と click_link の合算（clicksに両方入れ、link内訳はclick_linksに残す）
         else if (ev === "click") metricsMap[actionId].clicks += c;
-        else if (ev === "click_link") metricsMap[actionId].click_links += c;
+        else if (ev === "click_link") { metricsMap[actionId].clicks += c; metricsMap[actionId].click_links += c; }
         else if (ev === "close") metricsMap[actionId].closes += c;
         else if (ev === "conversion") metricsMap[actionId].conversions += c;
       }
