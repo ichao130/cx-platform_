@@ -3783,6 +3783,10 @@ export function registerV1Routes(app: Express) {
 
           const a = aSnap.data() as any;
 
+          // アーカイブ済みアクションは配信しない（アーカイブ＝退役。
+          // シナリオの actionRefs に参照が残っていても訪問者には出さない）
+          if (a.archived) continue;
+
           // siteId が異なるアクションは配信しない（他サイトのアクションの誤配信を防ぐ）
           if (a.siteId && a.siteId !== site_id) continue;
 

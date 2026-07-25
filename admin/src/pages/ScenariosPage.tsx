@@ -549,6 +549,14 @@ export default function ScenariosPage() {
     );
   }, [actions, siteId, workspaceId]);
 
+  // 「アクション追加」の選択肢はアーカイブ済みを除外する。
+  // ※ 名前解決(actionMap/nameById)は actionsForWorkspace を使うので、
+  //   既にシナリオに紐付いているアーカイブ済みアクションの表示名は維持される。
+  const selectableActions = useMemo(
+    () => actionsForWorkspace.filter((a) => !(a.data as any)?.archived),
+    [actionsForWorkspace]
+  );
+
   const selectedSite = useMemo(() => visibleSites.find((s) => s.id === siteId), [visibleSites, siteId]);
   const selectedSiteName = useMemo(() => siteLabel(selectedSite), [selectedSite]);
   const selectedWorkspaceName = useMemo(() => {
@@ -580,12 +588,12 @@ export default function ScenariosPage() {
   }, [visibleSites, siteId, workspaceId]);
 
   useEffect(() => {
-    if (!actionsForWorkspace.length) return;
-    const stillValid = actionsForWorkspace.some((a) => a.id === actionIdToAdd);
+    if (!selectableActions.length) return;
+    const stillValid = selectableActions.some((a) => a.id === actionIdToAdd);
     if (!stillValid) {
-      setActionIdToAdd(actionsForWorkspace[actionsForWorkspace.length - 1].id);
+      setActionIdToAdd(selectableActions[selectableActions.length - 1].id);
     }
-  }, [actionsForWorkspace, actionIdToAdd]);
+  }, [selectableActions, actionIdToAdd]);
 
   useEffect(() => {
     // variant選択の安全化
@@ -1491,7 +1499,7 @@ export default function ScenariosPage() {
                     value={actionIdToAdd}
                     onChange={(e) => setActionIdToAdd(e.target.value)}
                   >
-                    {actionsForWorkspace.map((a) => (
+                    {selectableActions.map((a) => (
                       <option key={a.id} value={a.id}>
                         [{a.data?.type || "modal"}] {a.data?.creative?.title || a.id} / {a.id}
                       </option>
