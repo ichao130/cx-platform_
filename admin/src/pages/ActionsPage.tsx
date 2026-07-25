@@ -1285,7 +1285,7 @@ export default function ActionsPage() {
                       <select className="input" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
                         <option value="">（標準 / built-in）</option>
                         {templates
-                          .filter((t) => t.data?.workspaceId === workspaceId && t.data?.type === "launcher" && (!t.data?.siteId || t.data?.siteId === siteId))
+                          .filter((t) => t.data?.workspaceId === workspaceId && t.data?.type === "launcher" && (!t.data?.siteId || t.data?.siteId === siteId) && (!(t.data as any)?.archived || t.id === templateId))
                           .map((t) => (
                             <option key={t.id} value={t.id}>{t.id} — {t.data?.name || ""}</option>
                           ))}
@@ -1332,7 +1332,7 @@ export default function ActionsPage() {
                       <select className="input" value={modalTemplateId} onChange={(e) => setModalTemplateId(e.target.value)}>
                         <option value="">（標準 / built-in）</option>
                         {templates
-                          .filter((t) => t.data?.workspaceId === workspaceId && t.data?.type === "modal" && (!t.data?.siteId || t.data?.siteId === siteId))
+                          .filter((t) => t.data?.workspaceId === workspaceId && t.data?.type === "modal" && (!t.data?.siteId || t.data?.siteId === siteId) && (!(t.data as any)?.archived || t.id === modalTemplateId))
                           .map((t) => (
                             <option key={t.id} value={t.id}>{t.id} — {t.data?.name || ""}</option>
                           ))}
@@ -1376,7 +1376,7 @@ export default function ActionsPage() {
                     <select className="input" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
                       <option value="">（標準 / built-in）</option>
                       {templates
-                        .filter((t) => t.data?.workspaceId === workspaceId && t.data?.type === type && (!t.data?.siteId || t.data?.siteId === siteId))
+                        .filter((t) => t.data?.workspaceId === workspaceId && t.data?.type === type && (!t.data?.siteId || t.data?.siteId === siteId) && (!(t.data as any)?.archived || t.id === templateId))
                         .map((t) => (
                           <option key={t.id} value={t.id}>{t.id} — {t.data?.name || ""}</option>
                         ))}
