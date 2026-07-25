@@ -862,11 +862,27 @@ export default function TemplatesPage() {
                           ✕ 閉じる
                         </button>
                       </div>
-                      {/* エディタ本体 */}
-                      <div style={{ flex: 1, overflow: "auto", padding: 16 }}>
-                        {codeTab === "html" && <CodeEditor value={html} onChange={setHtml} minHeight={600} placeholder="<!-- HTMLをここに書いてください -->" />}
-                        {codeTab === "css"  && <CodeEditor value={css}  onChange={setCss}  minHeight={600} placeholder="/* CSSをここに書いてください */" />}
-                        {codeTab === "js"   && <CodeEditor value={js}   onChange={setJs}   minHeight={600} placeholder="// JavaScriptをここに書いてください" />}
+                      {/* 本体: 左=エディタ / 右=リアルタイムプレビュー */}
+                      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+                        {/* 左: エディタ */}
+                        <div style={{ flex: 1, minWidth: 0, overflow: "auto", padding: 16, borderRight: "1px solid rgba(15,23,42,.1)" }}>
+                          {codeTab === "html" && <CodeEditor value={html} onChange={setHtml} minHeight={600} placeholder="<!-- HTMLをここに書いてください -->" />}
+                          {codeTab === "css"  && <CodeEditor value={css}  onChange={setCss}  minHeight={600} placeholder="/* CSSをここに書いてください */" />}
+                          {codeTab === "js"   && <CodeEditor value={js}   onChange={setJs}   minHeight={600} placeholder="// JavaScriptをここに書いてください" />}
+                        </div>
+                        {/* 右: プレビュー（編集に追従。既存の previewSrcDoc をそのまま利用） */}
+                        <div style={{ width: "44%", minWidth: 0, display: "flex", flexDirection: "column", background: "linear-gradient(180deg,#ffffff,#f8fbff)" }}>
+                          <div style={{ padding: "10px 16px 6px", flexShrink: 0 }}>
+                            <div className="h2" style={{ margin: 0 }}>プレビュー</div>
+                            <div className="small" style={{ opacity: 0.68 }}>コードの編集にリアルタイムで追従します。</div>
+                          </div>
+                          <iframe
+                            title="template-preview-fullscreen"
+                            sandbox="allow-scripts allow-modals"
+                            style={{ flex: 1, width: "100%", border: "none", borderTop: "1px solid rgba(15,23,42,.08)", background: "#0b0b0b" }}
+                            srcDoc={previewSrcDoc}
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>
