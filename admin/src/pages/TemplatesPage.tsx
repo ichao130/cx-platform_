@@ -840,7 +840,7 @@ export default function TemplatesPage() {
                   <div style={{ position: "fixed", inset: 0, zIndex: 9998, background: "rgba(15,23,42,.55)", display: "flex", alignItems: "center", justifyContent: "center" }}
                     onClick={(e) => { if (e.target === e.currentTarget) setCodeFullscreen(false); }}
                   >
-                    <div style={{ width: "min(1200px, 96vw)", height: "min(800px, 92vh)", background: "#fff", borderRadius: 14, display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 24px 64px rgba(15,23,42,.25)" }}>
+                    <div style={{ width: "98vw", height: "96vh", background: "#fff", borderRadius: 14, display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 24px 64px rgba(15,23,42,.25)" }}>
                       {/* ヘッダー */}
                       <div style={{ display: "flex", alignItems: "center", gap: 2, padding: "0 16px", borderBottom: "2px solid rgba(15,23,42,.08)", flexShrink: 0 }}>
                         {(["html", "css", "js"] as const).map((tab) => {
