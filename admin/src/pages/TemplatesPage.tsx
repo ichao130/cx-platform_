@@ -158,6 +158,27 @@ function buildPreviewSrcDoc(opts: { html: string; css: string; js?: string; data
 })();
 <\/script>`
     : '';
+  // 本番SDK(wireCopyButtons)と同じ挙動をプレビューでも再現：
+  // data-cx-copy ボタン押下でクリップボードにコピーし、一時的に「コピーしました！」表示＋data-cx-copied付与。
+  const copyScript = `<script>
+(function(){
+  var btns = document.querySelectorAll('[data-cx-copy]');
+  for (var i=0;i<btns.length;i++){
+    (function(btn){
+      btn.addEventListener('click', function(e){
+        e.stopPropagation();
+        var text = btn.getAttribute('data-cx-copy') || '';
+        if (!text) return;
+        try { navigator.clipboard && navigator.clipboard.writeText(text); } catch(e2){}
+        var orig = btn.textContent;
+        btn.textContent = 'コピーしました！';
+        btn.setAttribute('data-cx-copied','1');
+        setTimeout(function(){ btn.textContent = orig; btn.removeAttribute('data-cx-copied'); }, 2000);
+      });
+    })(btns[i]);
+  }
+})();
+<\/script>`;
   return `<!doctype html>
 <html>
   <head>
@@ -178,6 +199,7 @@ function buildPreviewSrcDoc(opts: { html: string; css: string; js?: string; data
   <body>
     ${body}
     ${choicesScript}
+    ${copyScript}
     ${opts.js ? `<script>\ndocument.addEventListener('DOMContentLoaded', function() {\n${opts.js}\n});\n<\/script>` : ''}
   </body>
 </html>`;
