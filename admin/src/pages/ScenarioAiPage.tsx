@@ -255,7 +255,8 @@ export default function ScenarioAiPage() {
     const counts = summaryData?.counts || insight?.counts || review?.counts || {};
     return {
       impressions: safeNum(counts?.impressions),
-      clicks: safeNum(counts?.clicks),
+      // クリックは click と click_link の合算（リンク施策のクリックが0に見える不具合対策）
+      clicks: safeNum(counts?.clicks) + safeNum(counts?.click_links),
       closes: safeNum(counts?.closes),
       conversions: safeNum(counts?.conversions),
     };
@@ -389,7 +390,8 @@ export default function ScenarioAiPage() {
           force_refresh: forceRefresh,
           metrics: {
             impressions: sum?.counts?.impressions ?? 0,
-            clicks: sum?.counts?.clicks ?? 0,
+            // クリックは click と click_link の合算
+            clicks: (sum?.counts?.clicks ?? 0) + (sum?.counts?.click_links ?? 0),
             closes: sum?.counts?.closes ?? 0,
             conversions: sum?.counts?.conversions ?? 0,
           },
