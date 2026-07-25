@@ -754,7 +754,9 @@ async function executeTool(name, args, uid) {
         const rows = Array.from(map.entries()).sort((a, b) => (b[1]["impression"] || 0) - (a[1]["impression"] || 0));
         for (const [sid, m] of rows) {
             const imp = m["impression"] || 0;
-            const click = m["click"] || 0;
+            // クリックは click（非リンク/テンプレCTA）と click_link（リンク遷移）の合算。
+            // 片方だけだとリンク施策のクリックが0に見えてしまう（CVは出るのにクリック0の主因）。
+            const click = (m["click"] || 0) + (m["click_link"] || 0);
             const cv = m["conversion"] || 0;
             const ctr = imp > 0 ? ((click / imp) * 100).toFixed(1) : "—";
             const cvr = imp > 0 ? ((cv / imp) * 100).toFixed(1) : "—";
