@@ -3,18 +3,53 @@
 
 ---
 
-## 🔔 大型案件・大口クライアント投入前の必須チェック（忘れやすい）
+## 🔔 stats集計の cutover は「まだやるな」（2026-07-29 検証済み）
 
-**大型案件／大口クライアント／アクセス急増が見込まれる時は、投入前に必ず stats 集計の cutover を行うこと。**
+**⛔ 今 `STATS_LEGACY_DUAL_WRITE=false` にしてはいけない。UVが約17%消える。**
 
-現状 `stats_daily` のUV/セッション集計は **dual-write（安全側）** で動作中（`STATS_LEGACY_DUAL_WRITE=true`）。この状態のままだと**レガシーの arrayUnion 方式が残り、大型トラフィックで Firestore の 1MiBドキュメント上限に当たってログ欠損する**。
+以前ここには「大型案件前に必ず cutover せよ」と書いてあったが、**2026-07-29 に実データで検証した結果、その手順は危険だと判明した**ので方針を反転した。
 
-**cutover手順:**
-1. 新しい分散カウンタ（uv/session/new/repeat）がレガシーと概ね一致するか数日で確認
-2. `functions/.env.cx-platform-v1` に `STATS_LEGACY_DUAL_WRITE=false` を追加 → `firebase deploy --only functions:api --project cx-platform-v1`
-3. これで arrayUnion 停止＝1MiBリスク消滅。読み取りは自動で分散カウンタにフォールバック（無停止）
+### 検証でわかったこと
 
-詳細は本ファイル末尾「stats集計のスケール設計」節、または実装は `functions/src/routes/v1.ts` の `STATS_LEGACY_DUAL_WRITE` / `pickStatShard()`。
+`logs` から真値（distinct vid）を実測し、レガシー／分散カウンタと三者比較した結果（プルミエール 2026-07-17）:
+
+| 指標 | 真値(logs) | レガシー(arrayUnion) | 分散カウンタ |
+|---|---|---|---|
+| UV | 588 | **588 ✅ 完全一致** | 486（**-17%**） |
+| セッション | 700 | **700 ✅ 完全一致** | 593（-15%） |
+
+- **レガシーは真値と1件の狂いもなく正確**。今の「レガシー優先」の読み取りは正しい。
+- **分散カウンタは systematically 過少**（全サイト・全日でマイナス方向）。原因未特定。
+  `uv_first`（SDKのlocalStorageマーカー）依存の数え方に穴があるとみられる。
+- レガシーの **新規/リピート内訳だけは水増し**。同一vidが初回PVで `is_new=true`、
+  後のPVで `is_new=false` となり両方の配列に入るため（重複を除くとUVと一致）。
+  → 内訳の絶対数は信用しすぎない。合計（＝UV）は正しい。
+
+### 1MiB上限までの余裕（急ぐ必要はない）
+
+| 項目 | 実測 |
+|---|---|
+| 過去最大のUVドキュメント | 1,077 vids ＝ 33KB（1vid≈31 bytes） |
+| 1MiB上限までの収容量 | **約30,000 vids/日** |
+| 現在の使用率 | **3.5%（余裕28倍）** |
+| 危険水域に入る規模 | **月100万セッション/サイト** |
+
+**着手ライン: 1サイトで日次UVが1万を超えたら**（＝上限の1/3、月30万セッション規模）。
+現状の約10倍なので、大口案件の話が出た時点で対応すれば間に合う。
+
+### 将来やるときの正しい順序
+
+1. **読み取り側を先に**「シャード合算＋新旧フォーマット両対応」に修正してデプロイ
+   （`admin/src/pages/AnalyticsPage.tsx` の `uvLegacy` は現在 `= r.vids.length` の**代入**。
+   シャード分割すると最後の1シャードだけ反映され**UVが約1/10に激減する**）
+2. **書き込みのシャードは `hash(vid) % N` の決定的方式にする**
+   （`pickStatShard()` は**ランダム**。arrayUnion をランダム分散すると同一vidが複数シャードに入り、
+   長さの単純合計が**重複カウント**になる）
+3. 分散カウンタの -17% の原因を特定・修正し、数日並走で一致を確認
+4. 一致してから初めて `STATS_LEGACY_DUAL_WRITE=false`
+
+実装は `functions/src/routes/v1.ts` の `STATS_LEGACY_DUAL_WRITE` / `pickStatShard()`、
+読み取りは `admin/src/pages/AnalyticsPage.tsx`（レガシー優先→分散カウンタ→logsの3段フォールバック）。
 
 ---
 
