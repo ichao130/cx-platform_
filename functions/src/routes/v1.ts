@@ -16,6 +16,7 @@ import {
 import { generateCopy3 } from "../services/openaiCopy";
 import { pickVariant } from "../services/experiment";
 import { callOpenAIJson, callOpenAIVisionJson } from "../services/openaiJson";
+import { PLATFORM_TEMPLATE_PRESETS } from "../data/platformTemplatePresets";
 import { defineString, defineSecret } from "firebase-functions/params";
 import Stripe from "stripe";
 import { getMisocaAccessToken, getMisocaStatus, sendMisocaInvoicesJob } from "../services/misoca";
@@ -6421,6 +6422,286 @@ export function registerV1Routes(app: Express) {
     }
   });
   app.options("/v1/ops/platform-templates/upsert", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /* ============================================================
+     標準テンプレートライブラリ（platform_templates コレクション）
+     ------------------------------------------------------------
+     従来は system_config/platform_templates に「タイプごと1個」だけ
+     持てたが、複数の名前付きテンプレートを持てるライブラリに拡張した。
+
+     ★後方互換の要: /v1/serve は今も system_config/platform_templates を
+       読んでフォールバックしている（configTpls）。配信ロジックを触ると
+       リスクが高いので、「既定」に指定されたテンプレのhtml/cssを
+       レガシードキュメントへ**ミラー**することで serve は無改修のまま動く。
+     ============================================================ */
+
+  /** 既定テンプレをレガシー system_config/platform_templates にミラーする */
+  async function mirrorDefaultToLegacy(type: string) {
+    const db = adminDb();
+    const snap = await db
+      .collection("platform_templates")
+      .where("type", "==", type)
+      .where("isDefault", "==", true)
+      .limit(1)
+      .get();
+    if (snap.empty) return;
+    const d = snap.docs[0].data() as any;
+    await db.collection("system_config").doc("platform_templates").set(
+      { [type]: { html: d.html || "", css: d.css || "" }, updatedAt: FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+  }
+
+  /** POST /v1/ops/platform-templates/library/list — ライブラリ全件 */
+  app.post("/v1/ops/platform-templates/library/list", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      if (req.method === "OPTIONS") return res.status(204).send("");
+      await requireAuthUid(req);
+      const db = adminDb();
+      const snap = await db.collection("platform_templates").get();
+      const items = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as any) }))
+        .sort((a: any, b: any) =>
+          String(a.type).localeCompare(String(b.type)) || String(a.name).localeCompare(String(b.name))
+        );
+      return res.json({ ok: true, items });
+    } catch (e: any) {
+      console.error("[/v1/ops/platform-templates/library/list] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/platform-templates/library/list", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /** POST /v1/ops/platform-templates/library/save — 新規作成/更新 */
+  app.post("/v1/ops/platform-templates/library/save", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      if (req.method === "OPTIONS") return res.status(204).send("");
+      await requireAuthUid(req);
+      const body = req.body as any;
+      const type = String(body.type || "");
+      if (!["modal", "banner", "toast", "launcher"].includes(type)) {
+        return res.status(400).json({ error: "invalid_type" });
+      }
+      const name = String(body.name || "").trim() || "無題テンプレート";
+      const db = adminDb();
+      const id = String(body.id || "").trim() || `std_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
+      const ref = db.collection("platform_templates").doc(id);
+      const exists = (await ref.get()).exists;
+
+      const payload: Record<string, any> = {
+        name,
+        type,
+        html: String(body.html || ""),
+        css: String(body.css || ""),
+        updatedAt: FieldValue.serverTimestamp(),
+      };
+      if (body.js !== undefined) payload.js = String(body.js || "");
+      if (Array.isArray(body.fields)) payload.fields = body.fields;
+      if (!exists) {
+        payload.createdAt = FieldValue.serverTimestamp();
+        payload.isDefault = false;
+      }
+      await ref.set(payload, { merge: true });
+
+      // 既定テンプレを編集した場合はレガシー側のミラーも更新する
+      const after = (await ref.get()).data() as any;
+      if (after?.isDefault) await mirrorDefaultToLegacy(type);
+
+      return res.json({ ok: true, id });
+    } catch (e: any) {
+      console.error("[/v1/ops/platform-templates/library/save] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/platform-templates/library/save", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /** POST /v1/ops/platform-templates/library/set-default — タイプの既定に指定 */
+  app.post("/v1/ops/platform-templates/library/set-default", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      if (req.method === "OPTIONS") return res.status(204).send("");
+      await requireAuthUid(req);
+      const id = String((req.body as any)?.id || "").trim();
+      if (!id) return res.status(400).json({ error: "id_required" });
+      const db = adminDb();
+      const ref = db.collection("platform_templates").doc(id);
+      const snap = await ref.get();
+      if (!snap.exists) return res.status(404).json({ error: "not_found" });
+      const type = String((snap.data() as any)?.type || "");
+
+      // 同タイプの既定を一旦すべて外し、対象のみtrueにする
+      const sameType = await db.collection("platform_templates").where("type", "==", type).get();
+      const batch = db.batch();
+      sameType.docs.forEach((d) => batch.set(d.ref, { isDefault: d.id === id }, { merge: true }));
+      await batch.commit();
+
+      await mirrorDefaultToLegacy(type);
+      return res.json({ ok: true });
+    } catch (e: any) {
+      console.error("[/v1/ops/platform-templates/library/set-default] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/platform-templates/library/set-default", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /** POST /v1/ops/platform-templates/library/delete — 削除（既定は削除不可） */
+  app.post("/v1/ops/platform-templates/library/delete", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      if (req.method === "OPTIONS") return res.status(204).send("");
+      await requireAuthUid(req);
+      const id = String((req.body as any)?.id || "").trim();
+      if (!id) return res.status(400).json({ error: "id_required" });
+      const db = adminDb();
+      const ref = db.collection("platform_templates").doc(id);
+      const snap = await ref.get();
+      if (!snap.exists) return res.json({ ok: true });
+      if ((snap.data() as any)?.isDefault) {
+        // 既定を消すと serve のフォールバックが失われるため拒否する
+        return res.status(400).json({ error: "cannot_delete_default" });
+      }
+      await ref.delete();
+      return res.json({ ok: true });
+    } catch (e: any) {
+      console.error("[/v1/ops/platform-templates/library/delete] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/platform-templates/library/delete", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /** POST /v1/ops/platform-templates/library/seed — プリセットを冪等投入 */
+  app.post("/v1/ops/platform-templates/library/seed", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      if (req.method === "OPTIONS") return res.status(204).send("");
+      await requireAuthUid(req);
+      const overwrite = (req.body as any)?.overwrite === true;
+      const db = adminDb();
+      let created = 0, skipped = 0, updated = 0, migrated = 0;
+
+      // ★移行の安全策: 旧UI(system_config/platform_templates)でカスタムされた内容が
+      //   あれば、それを「現行の標準（移行）」としてライブラリに取り込み既定にする。
+      //   これをやらないと後段の mirrorDefaultToLegacy がプリセットで上書きしてしまい、
+      //   カスタム内容が失われる＋配信の見た目が勝手に変わる。
+      const legacySnap = await db.collection("system_config").doc("platform_templates").get();
+      const legacyData = legacySnap.exists ? ((legacySnap.data() || {}) as any) : {};
+      for (const type of ["modal", "banner", "toast", "launcher"] as const) {
+        const lv = legacyData[type];
+        const lHtml = String(lv?.html || "").trim();
+        const lCss = String(lv?.css || "").trim();
+        if (!lHtml && !lCss) continue;
+
+        const preset = PLATFORM_TEMPLATE_PRESETS.find((p) => p.type === type && p.isDefault);
+        const sameAsPreset = !!preset && preset.html.trim() === lHtml && preset.css.trim() === lCss;
+        if (sameAsPreset) continue; // プリセットと同一なら移行不要
+
+        const migRef = db.collection("platform_templates").doc(`std_legacy_${type}`);
+        if ((await migRef.get()).exists) continue; // 既に移行済み
+        await migRef.set(
+          {
+            name: `現行の標準（移行）— ${type}`,
+            type,
+            html: lv?.html || "",
+            css: lv?.css || "",
+            isDefault: true, // 現在配信中の内容をそのまま既定として維持
+            createdAt: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+        migrated++;
+      }
+
+      // 既に既定を持つタイプを把握しておく（移行分・既存分）。
+      // これをしないとプリセットの isDefault と二重になり、
+      // mirrorDefaultToLegacy の limit(1) がどちらを拾うか不定になる。
+      const typesWithDefault = new Set<string>();
+      const defSnap = await db.collection("platform_templates").where("isDefault", "==", true).get();
+      defSnap.docs.forEach((d) => typesWithDefault.add(String((d.data() as any)?.type || "")));
+
+      for (const p of PLATFORM_TEMPLATE_PRESETS) {
+        const ref = db.collection("platform_templates").doc(p.id);
+        const snap = await ref.get();
+        if (snap.exists && !overwrite) { skipped++; continue; }
+        const payload: Record<string, any> = {
+          name: p.name,
+          type: p.type,
+          html: p.html,
+          css: p.css,
+          updatedAt: FieldValue.serverTimestamp(),
+          ...(p.js ? { js: p.js } : {}),
+          ...(p.fields ? { fields: p.fields } : {}),
+        };
+        if (!snap.exists) {
+          payload.createdAt = FieldValue.serverTimestamp();
+          // そのタイプに既定が未設定のときだけ既定にする（既存の既定を奪わない）
+          const takeDefault = !!p.isDefault && !typesWithDefault.has(p.type);
+          payload.isDefault = takeDefault;
+          if (takeDefault) typesWithDefault.add(p.type);
+          created++;
+        } else {
+          updated++;
+        }
+        await ref.set(payload, { merge: true });
+      }
+
+      // 各タイプに既定が1つも無ければプリセットの既定を採用し、レガシーへミラー
+      for (const type of ["modal", "banner", "toast", "launcher"]) {
+        const hasDefault = await db
+          .collection("platform_templates")
+          .where("type", "==", type)
+          .where("isDefault", "==", true)
+          .limit(1)
+          .get();
+        if (hasDefault.empty) {
+          const preset = PLATFORM_TEMPLATE_PRESETS.find((x) => x.type === type && x.isDefault);
+          if (preset) {
+            await db.collection("platform_templates").doc(preset.id).set({ isDefault: true }, { merge: true });
+          }
+        }
+        await mirrorDefaultToLegacy(type);
+      }
+
+      return res.json({ ok: true, created, updated, skipped, migrated });
+    } catch (e: any) {
+      console.error("[/v1/ops/platform-templates/library/seed] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/platform-templates/library/seed", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /** POST /v1/platform-templates/list — ワークスペース管理画面用（標準テンプレから複製するため） */
+  app.post("/v1/platform-templates/list", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      if (req.method === "OPTIONS") return res.status(204).send("");
+      await requireAuthUid(req); // 認証済みユーザーなら誰でも閲覧可（内容は共通の雛形）
+      const db = adminDb();
+      const snap = await db.collection("platform_templates").get();
+      const items = snap.docs
+        .map((d) => {
+          const x = d.data() as any;
+          return {
+            id: d.id,
+            name: x.name || d.id,
+            type: x.type || "modal",
+            html: x.html || "",
+            css: x.css || "",
+            ...(x.js ? { js: x.js } : {}),
+            ...(Array.isArray(x.fields) ? { fields: x.fields } : {}),
+            isDefault: !!x.isDefault,
+          };
+        })
+        .sort((a, b) => String(a.type).localeCompare(String(b.type)) || String(a.name).localeCompare(String(b.name)));
+      return res.json({ ok: true, items });
+    } catch (e: any) {
+      console.error("[/v1/platform-templates/list] error:", e);
+      return res.status(400).json({ error: e?.message || "failed" });
+    }
+  });
+  app.options("/v1/platform-templates/list", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
 
   /* ============================================================
      ウェルカムメール送信（認証済みユーザーが初回登録完了時に呼ぶ）

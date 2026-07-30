@@ -1,7 +1,7 @@
 import React, { Fragment, useEffect, useMemo, useState } from 'react';
 import { collection, doc, onSnapshot, query, setDoc, deleteDoc, where } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
-import { db, auth, assertPlanLimit } from '../firebase';
+import { db, auth, assertPlanLimit, apiPostJson } from '../firebase';
 import { usePlanLimit } from '../hooks/usePlanLimit';
 import { genId } from '../components/id';
 import { useBeforeUnload } from '../hooks/useBeforeUnload';
@@ -66,6 +66,18 @@ type TemplateDoc = {
   css: string;
   js?: string;
   fields?: TemplateField[];
+};
+
+// 標準テンプレート（ops側 platform_templates コレクション）の1件
+type PlatformTpl = {
+  id: string;
+  name: string;
+  type: 'modal' | 'banner' | 'toast' | 'launcher';
+  html: string;
+  css: string;
+  js?: string;
+  fields?: TemplateField[];
+  isDefault?: boolean;
 };
 
 // creative の既知キー（これ以外の {{key}} を「独自フィールド」として扱う）
@@ -395,6 +407,12 @@ export default function TemplatesPage() {
   const [savedPayloadStr, setSavedPayloadStr] = useState<string | null>(null);
   const [templateListTab, setTemplateListTab] = useState<'active' | 'archived'>('active');
 
+  // 標準テンプレート（ops管理のプラットフォーム共通雛形）から複製するためのピッカー
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [platformTpls, setPlatformTpls] = useState<PlatformTpl[]>([]);
+  const [platformLoading, setPlatformLoading] = useState(false);
+  const [platformError, setPlatformError] = useState('');
+
   const [sample, setSample] = useState<SampleData>({
     title: 'テスト表示',
     body: 'これが出れば成功🔥\n（テンプレートのプレビュー）',
@@ -557,6 +575,38 @@ export default function TemplatesPage() {
     setIsModalOpen(true);
   }
 
+  // ---- 標準テンプレート（プラットフォーム共通の雛形）から複製して新規作成 ----
+  async function openPlatformPicker() {
+    setPickerOpen(true);
+    if (platformTpls.length || platformLoading) return;
+    setPlatformLoading(true);
+    setPlatformError('');
+    try {
+      const res = await apiPostJson<{ ok: boolean; items: PlatformTpl[] }>('/v1/platform-templates/list', {});
+      setPlatformTpls(res.items || []);
+    } catch (e: any) {
+      setPlatformError(e?.message || '標準テンプレートの取得に失敗しました');
+    } finally {
+      setPlatformLoading(false);
+    }
+  }
+
+  function createFromPlatform(t: PlatformTpl) {
+    // 新しいIDで“複製”する（元の標準テンプレートは変更されない）
+    setId(genId('tpl'));
+    setName(t.name || 'Template');
+    setType(t.type);
+    setHtml(t.html || '');
+    setCss(t.css || '');
+    setJs(t.js || '');
+    setFields(Array.isArray(t.fields) ? t.fields : []);
+    setSaveError('');
+    setSaveMessage('');
+    setSavedPayloadStr(null); // 未保存＝ダーティ扱いにして保存を促す
+    setPickerOpen(false);
+    setIsModalOpen(true);
+  }
+
   function openEditModal(row: { id: string; data: TemplateDoc }) {
     setId(row.id);
     setWorkspaceId(row.data.workspaceId);
@@ -662,10 +712,63 @@ export default function TemplatesPage() {
               名前を中心に一覧化しています。HTML・CSS・プレビュー・確認用JSONは編集時または詳細表示で確認します。
             </div>
           </div>
-          <div className="list-toolbar__actions">
+          <div className="list-toolbar__actions" style={{ display: 'flex', gap: 8 }}>
+            <button className="btn" onClick={openPlatformPicker}>📚 標準テンプレートから作成</button>
             <button className="btn" onClick={openCreateModal}>作成</button>
           </div>
         </div>
+
+        {/* ---- 標準テンプレート ピッカー ---- */}
+        {pickerOpen && (
+          <div
+            style={{ position: 'fixed', inset: 0, zIndex: 9997, background: 'rgba(15,23,42,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+            onClick={(e) => { if (e.target === e.currentTarget) setPickerOpen(false); }}
+          >
+            <div style={{ background: '#fff', borderRadius: 14, width: 'min(760px, 96vw)', maxHeight: '88vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 24px 64px rgba(15,23,42,.25)' }}>
+              <div style={{ padding: '16px 20px', borderBottom: '1px solid rgba(15,23,42,.08)', display: 'flex', alignItems: 'center' }}>
+                <div>
+                  <div className="h2" style={{ margin: 0 }}>標準テンプレートから作成</div>
+                  <div className="small" style={{ opacity: 0.68 }}>選ぶとこのサイト用のテンプレートとして複製されます（元の標準テンプレートは変更されません）。</div>
+                </div>
+                <button className="btn" style={{ marginLeft: 'auto' }} onClick={() => setPickerOpen(false)}>✕ 閉じる</button>
+              </div>
+              <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
+                {platformLoading && <div className="small">読み込み中…</div>}
+                {platformError && <div className="small" style={{ color: '#b91c1c' }}>{platformError}</div>}
+                {!platformLoading && !platformError && platformTpls.length === 0 && (
+                  <div className="small" style={{ opacity: 0.6 }}>
+                    標準テンプレートがまだ登録されていません。運営側の「標準テンプレート管理」で投入してください。
+                  </div>
+                )}
+                <div style={{ display: 'grid', gap: 10 }}>
+                  {(['modal', 'banner', 'toast', 'launcher'] as const).map((ty) => {
+                    const list = platformTpls.filter((t) => t.type === ty);
+                    if (!list.length) return null;
+                    const labels: Record<string, string> = { modal: 'モーダル', banner: 'バナー', toast: 'トースト', launcher: 'ランチャー' };
+                    return (
+                      <Fragment key={ty}>
+                        <div className="small" style={{ fontWeight: 700, opacity: 0.6, marginTop: 4 }}>{labels[ty]}</div>
+                        {list.map((t) => (
+                          <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px', background: '#f8fafc' }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontWeight: 700, fontSize: 14 }}>{t.name}</div>
+                              <div className="small" style={{ opacity: 0.6 }}>
+                                <code>{t.id}</code>
+                                {t.fields?.length ? <> / 追加フィールド {t.fields.length}件</> : null}
+                                {t.js ? <> / JSあり</> : null}
+                              </div>
+                            </div>
+                            <button className="btn btn--primary" onClick={() => createFromPlatform(t)}>これで作成</button>
+                          </div>
+                        ))}
+                      </Fragment>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* アクティブ / アーカイブ タブ */}
         <div style={{ display: "flex", gap: 0, marginBottom: 12, border: "1px solid rgba(15,23,42,.12)", borderRadius: 8, overflow: "hidden", width: "fit-content" }}>
