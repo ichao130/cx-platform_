@@ -1548,9 +1548,32 @@
       }
       // 繰り返し（毎週の曜日 / 毎月の日にち）
       if (!matchesRepeat(schedule.repeat, now)) return false;
+      // 時間帯（タイムセール）
+      if (!matchesTimeRange(schedule.timeRange, now)) return false;
     }
 
     return true;
+  }
+
+  // "HH:mm" を「0時からの分数」に変換。不正な値は null。
+  function parseHm(v) {
+    var m = /^(\d{1,2}):(\d{2})$/.exec(String(v || ""));
+    if (!m) return null;
+    var h = parseInt(m[1], 10), mi = parseInt(m[2], 10);
+    if (isNaN(h) || isNaN(mi) || h > 23 || mi > 59) return null;
+    return h * 60 + mi;
+  }
+
+  // 時間帯の判定。start > end は日をまたぐ範囲として扱う（例 22:00〜翌02:00）。
+  // 終了時刻は含まない（14:00指定なら13:59まで）。
+  // 不正値・start===end は「制限なし」として true（誤って全停止させないため）。
+  function matchesTimeRange(tr, now) {
+    if (!tr) return true;
+    var s = parseHm(tr.start), e = parseHm(tr.end);
+    if (s === null || e === null || s === e) return true;
+    var cur = now.getHours() * 60 + now.getMinutes();
+    if (s < e) return cur >= s && cur < e;   // 通常（同日内）
+    return cur >= s || cur < e;              // 日をまたぐ
   }
 
   // 繰り返し条件の判定。

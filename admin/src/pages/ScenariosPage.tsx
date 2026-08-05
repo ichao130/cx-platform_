@@ -94,6 +94,10 @@ type Scenario = {
       days?: number[];
       lastDay?: boolean;
     };
+    // 時間帯（タイムセール用）。"HH:mm" 形式。
+    // start > end の場合は日をまたぐ範囲として扱う（例 22:00〜翌02:00）。
+    // 終了時刻は含まない（14:00指定なら13:59まで表示）。
+    timeRange?: { start: string; end: string };
   };
 
   // conversion goal（Phase1）
@@ -398,6 +402,10 @@ export default function ScenariosPage() {
   const [repeatWeekdays, setRepeatWeekdays] = useState<number[]>([]);
   const [repeatDays, setRepeatDays] = useState<number[]>([]);
   const [repeatLastDay, setRepeatLastDay] = useState(false);
+  // 時間帯（タイムセール）
+  const [timeRangeEnabled, setTimeRangeEnabled] = useState(false);
+  const [timeStart, setTimeStart] = useState("20:00");
+  const [timeEnd, setTimeEnd] = useState("23:00");
 
   // toast / delete confirm
   const [toast, setToast] = useState<{ msg: string; type: "success" | "error" } | null>(null);
@@ -762,9 +770,12 @@ export default function ScenariosPage() {
         ...(repeatLastDay ? { lastDay: true } : {}),
       };
     }
+    if (timeRangeEnabled && timeStart && timeEnd && timeStart !== timeEnd) {
+      s.timeRange = { start: timeStart, end: timeEnd };
+    }
     // mode=daily、または曜日/日を1つも選んでいない場合は repeat を付けない（＝毎日）
     return Object.keys(s).length ? s : undefined;
-  }, [scheduleEnabled, scheduleStart, scheduleEnd, repeatMode, repeatWeekdays, repeatDays, repeatLastDay]);
+  }, [scheduleEnabled, scheduleStart, scheduleEnd, repeatMode, repeatWeekdays, repeatDays, repeatLastDay, timeRangeEnabled, timeStart, timeEnd]);
 
   const payload: Scenario = useMemo(
     () => ({
@@ -978,6 +989,9 @@ export default function ScenariosPage() {
     setRepeatWeekdays([]);
     setRepeatDays([]);
     setRepeatLastDay(false);
+    setTimeRangeEnabled(false);
+    setTimeStart("20:00");
+    setTimeEnd("23:00");
     setSavedPayloadStr(null);
     setSaveError("");
     setSaveMessage("");
@@ -1144,6 +1158,18 @@ export default function ScenariosPage() {
       setRepeatWeekdays([]);
       setRepeatDays([]);
       setRepeatLastDay(false);
+    }
+
+    // 時間帯
+    const tr = s.schedule?.timeRange;
+    if (tr?.start && tr?.end) {
+      setTimeRangeEnabled(true);
+      setTimeStart(tr.start);
+      setTimeEnd(tr.end);
+    } else {
+      setTimeRangeEnabled(false);
+      setTimeStart("20:00");
+      setTimeEnd("23:00");
     }
 
     // goal
@@ -2097,6 +2123,54 @@ export default function ScenariosPage() {
                     )}
                   </div>
                 )}
+
+                {/* ---- 時間帯（タイムセール） ---- */}
+                <div style={{ height: 16 }} />
+                <div className="h2">時間帯</div>
+                <div className="row" style={{ alignItems: "center", gap: 10 }}>
+                  <label className="badge" style={{ cursor: "pointer" }}>
+                    <input type="checkbox" checked={timeRangeEnabled} onChange={(e) => setTimeRangeEnabled(e.target.checked)} />
+                    時間帯を限定する（タイムセール等）
+                  </label>
+                </div>
+                {timeRangeEnabled && (() => {
+                  const overnight = !!(timeStart && timeEnd && timeStart > timeEnd);
+                  const sameTime = !!(timeStart && timeEnd && timeStart === timeEnd);
+                  const dayLimited =
+                    (repeatMode === "weekly" && repeatWeekdays.length > 0) ||
+                    (repeatMode === "monthly" && (repeatDays.length > 0 || repeatLastDay));
+                  return (
+                    <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+                      <div className="row" style={{ alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <input className="input" type="time" value={timeStart} onChange={(e) => setTimeStart(e.target.value)} style={{ width: 130 }} />
+                        <span className="small">〜</span>
+                        <input className="input" type="time" value={timeEnd} onChange={(e) => setTimeEnd(e.target.value)} style={{ width: 130 }} />
+                        {overnight && <span className="badge" style={{ background: "#eff6ff", color: "#1d4ed8" }}>翌日にまたぐ</span>}
+                      </div>
+                      {sameTime ? (
+                        <div className="small" style={{ color: "#b45309" }}>
+                          開始と終了が同じ時刻です。このままだと時間帯の指定は保存されません（終日表示になります）。
+                        </div>
+                      ) : (
+                        <div className="small" style={{ opacity: 0.72 }}>
+                          {overnight
+                            ? `${timeStart} 〜 翌 ${timeEnd} に表示します（終了時刻ちょうどに終了）。`
+                            : `${timeStart} 〜 ${timeEnd} に表示します（終了時刻ちょうどに終了。${timeEnd}は含みません）。`}
+                        </div>
+                      )}
+                      {overnight && dayLimited && (
+                        <div className="small" style={{ color: "#b45309" }}>
+                          ⚠️ 曜日・日にちの指定と併用しています。日をまたぐ時間帯では、
+                          <b>日付が変わった後の時間（0:00〜{timeEnd}）は「翌日」として判定</b>されます。
+                          例: 金曜だけ＋22:00〜翌2:00 の場合、土曜0:00〜2:00は表示されません。
+                        </div>
+                      )}
+                      <div className="small" style={{ opacity: 0.72 }}>
+                        ※ 訪問者のブラウザ時間を基準に判定します。
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
