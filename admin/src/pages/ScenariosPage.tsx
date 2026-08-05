@@ -86,6 +86,14 @@ type Scenario = {
   schedule?: {
     startAt?: string; // "YYYY-MM-DDTHH:mm"
     endAt?: string;   // "YYYY-MM-DDTHH:mm"
+    // 繰り返し配信。mode未指定/daily は「毎日（制限なし）」。
+    // weekly は weekdays(0=日〜6=土)、monthly は days(1〜31)＋lastDay(月末) で判定する。
+    repeat?: {
+      mode: "daily" | "weekly" | "monthly";
+      weekdays?: number[];
+      days?: number[];
+      lastDay?: boolean;
+    };
   };
 
   // conversion goal（Phase1）
@@ -385,6 +393,11 @@ export default function ScenariosPage() {
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [scheduleStart, setScheduleStart] = useState("");
   const [scheduleEnd, setScheduleEnd] = useState("");
+  // 繰り返し配信（既定は「毎日」＝制限なし）
+  const [repeatMode, setRepeatMode] = useState<"daily" | "weekly" | "monthly">("daily");
+  const [repeatWeekdays, setRepeatWeekdays] = useState<number[]>([]);
+  const [repeatDays, setRepeatDays] = useState<number[]>([]);
+  const [repeatLastDay, setRepeatLastDay] = useState(false);
 
   // toast / delete confirm
   const [toast, setToast] = useState<{ msg: string; type: "success" | "error" } | null>(null);
@@ -733,12 +746,25 @@ export default function ScenariosPage() {
   }, [expEnabled, expSticky, variants]);
 
   const schedule = useMemo(() => {
-    if (!scheduleEnabled) return undefined;
-    const s: { startAt?: string; endAt?: string } = {};
-    if (scheduleStart) s.startAt = scheduleStart;
-    if (scheduleEnd) s.endAt = scheduleEnd;
+    // 期間指定（startAt/endAt）と繰り返し（repeat）は独立して使える。
+    // 「毎週月曜だけ」のように期間なしの繰り返しだけでも成立させる。
+    const s: NonNullable<Scenario["schedule"]> = {};
+    if (scheduleEnabled) {
+      if (scheduleStart) s.startAt = scheduleStart;
+      if (scheduleEnd) s.endAt = scheduleEnd;
+    }
+    if (repeatMode === "weekly" && repeatWeekdays.length) {
+      s.repeat = { mode: "weekly", weekdays: [...repeatWeekdays].sort((a, b) => a - b) };
+    } else if (repeatMode === "monthly" && (repeatDays.length || repeatLastDay)) {
+      s.repeat = {
+        mode: "monthly",
+        days: [...repeatDays].sort((a, b) => a - b),
+        ...(repeatLastDay ? { lastDay: true } : {}),
+      };
+    }
+    // mode=daily、または曜日/日を1つも選んでいない場合は repeat を付けない（＝毎日）
     return Object.keys(s).length ? s : undefined;
-  }, [scheduleEnabled, scheduleStart, scheduleEnd]);
+  }, [scheduleEnabled, scheduleStart, scheduleEnd, repeatMode, repeatWeekdays, repeatDays, repeatLastDay]);
 
   const payload: Scenario = useMemo(
     () => ({
@@ -948,6 +974,10 @@ export default function ScenariosPage() {
     setScheduleEnabled(false);
     setScheduleStart("");
     setScheduleEnd("");
+    setRepeatMode("daily");
+    setRepeatWeekdays([]);
+    setRepeatDays([]);
+    setRepeatLastDay(false);
     setSavedPayloadStr(null);
     setSaveError("");
     setSaveMessage("");
@@ -1009,7 +1039,8 @@ export default function ScenariosPage() {
       // merge:true + undefined はフィールドを残してしまうため、
       // 無効化されたフィールドは deleteField() で明示的に削除する
       const toDelete: Record<string, any> = {};
-      if (!scheduleEnabled) toDelete.schedule = deleteField();
+      // 期間・繰り返しの両方が無効なときだけ schedule ごと削除する
+      if (!schedule) toDelete.schedule = deleteField();
       if (!expEnabled) toDelete.experiment = deleteField();
       if (!couponCode.trim()) toDelete.couponCode = deleteField();
       if (Object.keys(toDelete).length) {
@@ -1094,6 +1125,25 @@ export default function ScenariosPage() {
       setScheduleEnabled(false);
       setScheduleStart("");
       setScheduleEnd("");
+    }
+
+    // 繰り返し（未設定なら「毎日」に戻す）
+    const rep = s.schedule?.repeat;
+    if (rep?.mode === "weekly") {
+      setRepeatMode("weekly");
+      setRepeatWeekdays(Array.isArray(rep.weekdays) ? rep.weekdays : []);
+      setRepeatDays([]);
+      setRepeatLastDay(false);
+    } else if (rep?.mode === "monthly") {
+      setRepeatMode("monthly");
+      setRepeatDays(Array.isArray(rep.days) ? rep.days : []);
+      setRepeatLastDay(!!rep.lastDay);
+      setRepeatWeekdays([]);
+    } else {
+      setRepeatMode("daily");
+      setRepeatWeekdays([]);
+      setRepeatDays([]);
+      setRepeatLastDay(false);
     }
 
     // goal
@@ -1944,6 +1994,107 @@ export default function ScenariosPage() {
                     <div className="small" style={{ opacity: 0.72 }}>
                       ※ 訪問者のブラウザ時間を基準に判定します。開始・終了はどちらか一方だけでも設定できます。
                     </div>
+                  </div>
+                )}
+
+                {/* ---- 繰り返し配信 ---- */}
+                <div style={{ height: 16 }} />
+                <div className="h2">繰り返し</div>
+                <div className="small" style={{ opacity: 0.72, marginBottom: 8 }}>
+                  配信する曜日や日にちを限定できます。既定は「毎日」（制限なし）です。期間指定と併用できます。
+                </div>
+                <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  {([
+                    ["daily", "毎日"],
+                    ["weekly", "毎週（曜日指定）"],
+                    ["monthly", "毎月（日にち指定）"],
+                  ] as const).map(([m, label]) => (
+                    <label key={m} className="badge" style={{ cursor: "pointer", fontWeight: repeatMode === m ? 700 : 400 }}>
+                      <input
+                        type="radio"
+                        name="repeat-mode"
+                        checked={repeatMode === m}
+                        onChange={() => setRepeatMode(m)}
+                      />{" "}
+                      {label}
+                    </label>
+                  ))}
+                </div>
+
+                {repeatMode === "weekly" && (
+                  <div style={{ marginTop: 10 }}>
+                    <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+                      {["日", "月", "火", "水", "木", "金", "土"].map((label, idx) => {
+                        const on = repeatWeekdays.includes(idx);
+                        return (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() =>
+                              setRepeatWeekdays((cur) =>
+                                cur.includes(idx) ? cur.filter((x) => x !== idx) : [...cur, idx]
+                              )
+                            }
+                            style={{
+                              width: 42, height: 38, borderRadius: 8, cursor: "pointer", fontSize: 14,
+                              fontWeight: on ? 700 : 500,
+                              border: on ? "1px solid #1f6573" : "1px solid rgba(15,23,42,.15)",
+                              background: on ? "#1f6573" : "#fff",
+                              color: on ? "#fff" : idx === 0 ? "#dc2626" : idx === 6 ? "#2563eb" : "inherit",
+                            }}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {repeatWeekdays.length === 0 && (
+                      <div className="small" style={{ marginTop: 6, color: "#b45309" }}>
+                        曜日が未選択のため、いまは「毎日」として保存されます。
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {repeatMode === "monthly" && (
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(40px, 1fr))", gap: 6, maxWidth: 460 }}>
+                      {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => {
+                        const on = repeatDays.includes(d);
+                        return (
+                          <button
+                            key={d}
+                            type="button"
+                            onClick={() =>
+                              setRepeatDays((cur) => (cur.includes(d) ? cur.filter((x) => x !== d) : [...cur, d]))
+                            }
+                            style={{
+                              height: 36, borderRadius: 8, cursor: "pointer", fontSize: 13,
+                              fontWeight: on ? 700 : 500,
+                              border: on ? "1px solid #1f6573" : "1px solid rgba(15,23,42,.15)",
+                              background: on ? "#1f6573" : "#fff",
+                              color: on ? "#fff" : "inherit",
+                            }}
+                          >
+                            {d}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <label className="badge" style={{ cursor: "pointer", marginTop: 8, display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      <input type="checkbox" checked={repeatLastDay} onChange={(e) => setRepeatLastDay(e.target.checked)} />
+                      月末（28〜31日は月によって変わるためこちらを推奨）
+                    </label>
+                    {repeatDays.some((d) => d >= 29) && (
+                      <div className="small" style={{ marginTop: 6, color: "#b45309" }}>
+                        29〜31日は無い月があります（2月など）。毎月確実に出したい場合は「月末」も選んでください。
+                      </div>
+                    )}
+                    {repeatDays.length === 0 && !repeatLastDay && (
+                      <div className="small" style={{ marginTop: 6, color: "#b45309" }}>
+                        日にちが未選択のため、いまは「毎日」として保存されます。
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

@@ -1546,6 +1546,40 @@
         var end = new Date(schedule.endAt);
         if (now > end) return false;
       }
+      // 繰り返し（毎週の曜日 / 毎月の日にち）
+      if (!matchesRepeat(schedule.repeat, now)) return false;
+    }
+
+    return true;
+  }
+
+  // 繰り返し条件の判定。
+  // - repeat 無し / mode:"daily" → 常にtrue（毎日）
+  // - weekly: weekdays(0=日〜6=土) のいずれかに一致
+  // - monthly: days(1〜31) のいずれか、または lastDay 指定時はその月の末日
+  // ★選択が空の場合は「制限なし」として true を返す（誤って全停止させないため）
+  function matchesRepeat(rep, now) {
+    if (!rep) return true;
+    var mode = rep.mode || "daily";
+    if (mode === "daily") return true;
+
+    if (mode === "weekly") {
+      var wd = rep.weekdays;
+      if (!wd || !wd.length) return true;
+      return wd.indexOf(now.getDay()) >= 0;
+    }
+
+    if (mode === "monthly") {
+      var days = rep.days || [];
+      var wantLast = !!rep.lastDay;
+      if (!days.length && !wantLast) return true;
+      if (days.indexOf(now.getDate()) >= 0) return true;
+      if (wantLast) {
+        // 翌月0日 = 今月の末日
+        var lastDate = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+        if (now.getDate() === lastDate) return true;
+      }
+      return false;
     }
 
     return true;
