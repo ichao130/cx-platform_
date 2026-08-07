@@ -1245,12 +1245,17 @@ export default function AnalyticsPage() {
       const imp = rows.filter((r) => r.event === "impression").reduce((s, r) => s + safeNum(r.count), 0);
       const clk = rows.filter((r) => r.event === "click" || r.event === "click_link").reduce((s, r) => s + safeNum(r.count), 0);
       const isPurchaseGoal = (sc.data?.goal as any)?.type === "purchase";
-      // 購入完了ゴールは CV = 帰属した購入数（Web Pixel経由。それ以外は conversion イベント）
+      // CV は stats_daily（購入時にサーバーが確定した帰属）を唯一の基準にする。
+      // ダッシュボード(/v1/stats/summary)と完全に同じ数え方なので両画面がズレない。
+      // ※ 以前はここだけ購入ログから再計算しており（ラストタッチ込み）、
+      //   ダッシュボード1件 / 流入計測3件のような食い違いが起きていた。
       const cv = isPurchaseGoal
-        ? (purchaseCountById.get(sc.id) || 0)
+        ? rows.filter((r) => r.event === "purchase").reduce((s, r) => s + safeNum(r.count), 0)
         : rows.filter((r) => r.event === "conversion").reduce((s, r) => s + safeNum(r.count), 0);
+      // 参考値: 接触ベース（クーポン一致＋ラストタッチ）。CVとは別物として表示する。
+      const touchCv = purchaseCountById.get(sc.id) || 0;
       const cvr = imp > 0 ? Math.round((cv / imp) * 1000) / 10 : 0;
-      return { id: sc.id, name: String(sc.data?.name || sc.id), imp, clk, cv, cvr, isPurchaseGoal };
+      return { id: sc.id, name: String(sc.data?.name || sc.id), imp, clk, cv, cvr, touchCv, isPurchaseGoal };
     }).sort((a, b) => b.cvr - a.cvr);
   }, [scenarios, statRows, revenueByScenario]);
 
@@ -3096,15 +3101,27 @@ export default function AnalyticsPage() {
                               <span style={{ color: "#15803d", fontWeight: 700 }}>¥{Math.round(scRev.revenue).toLocaleString()}</span>
                               <span style={{ color: "#86efac", fontSize: 11, marginLeft: 4 }}>売上</span>
                             </div>
-                            <div style={{ background: "#eff6ff", borderRadius: 6, padding: "4px 10px", fontSize: 12 }}>
+                            <div
+                              style={{ background: "#eff6ff", borderRadius: 6, padding: "4px 10px", fontSize: 12 }}
+                              title="接触ベース（クーポン一致＋ラストタッチ）で数えた購入です。下の「購入（CV）」は購入時にサーバーが確定した帰属のみを数えるため、数字が異なることがあります。"
+                            >
                               <span style={{ color: "#1d4ed8", fontWeight: 700 }}>{scRev.count}件</span>
-                              <span style={{ color: "#93c5fd", fontSize: 11, marginLeft: 4 }}>購入</span>
+                              <span style={{ color: "#93c5fd", fontSize: 11, marginLeft: 4 }}>接触購入</span>
                             </div>
                           </div>
                         )}
                         <FunnelStep label="表示（インプレッション）" count={sc.imp} total={sc.imp} color="#2563eb" />
                         <FunnelStep label="クリック" count={sc.clk} total={sc.imp} color="#f59e0b" />
-                        <FunnelStep label={sc.isPurchaseGoal ? "購入（CV）" : "コンバージョン"} count={sc.cv} total={sc.imp} color="#16a34a" />
+                        <FunnelStep label={sc.isPurchaseGoal ? "購入（CV・確定帰属）" : "コンバージョン"} count={sc.cv} total={sc.imp} color="#16a34a" />
+                        {sc.isPurchaseGoal && sc.touchCv > sc.cv && (
+                          <div
+                            className="small"
+                            style={{ marginTop: 4, opacity: 0.6 }}
+                            title="接触ベースには「表示を見ただけで後日購入した人」が含まれます。CVは購入時に施策との紐付けが確定したもの（カート属性・クーポン利用）のみです。"
+                          >
+                            ※ 接触ベースでは {sc.touchCv} 件
+                          </div>
+                        )}
                         <div style={{ marginTop: 10, display: "flex", gap: 6 }}>
                           <span className="badge" style={{ background: "rgba(22,163,74,.1)", color: "#16a34a", fontWeight: 700 }}>
                             CVR {sc.cvr}%

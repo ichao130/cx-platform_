@@ -3977,6 +3977,45 @@ export function registerV1Routes(app: Express) {
           console.warn("[/v1/log] attribution guard failed", e);
         }
       }
+
+      // ── クーポン帰属（最優先） ─────────────────────────────────────────
+      // 購入で使われた割引コードがシナリオの couponCode と一致したら、そのシナリオに帰属する。
+      // 「その施策のコードを実際に使った」という明示的な証拠なので、
+      //   ・body.scenario_id（カート属性由来）より優先する
+      //   ・稼働期間ガードも掛けない（後日利用も本人の意思なので有効とみなす）
+      // ※ 管理画面(AnalyticsPage)のクーポン帰属と同じ判定（大文字化して比較）に揃えている。
+      // ※ 失敗しても購入ログ自体は必ず残すため、全体を try/catch で保護する。
+      if (event === "purchase") {
+        try {
+          const codes: string[] = Array.isArray(body.discount_codes) ? body.discount_codes : [];
+          const normCodes = codes.map((c) => String(c || "").trim().toUpperCase()).filter(Boolean);
+          if (normCodes.length) {
+            // 対象サイトのシナリオは十分少ないのでまとめて取得し、メモリ上で大小文字を無視して突合する
+            // （Firestoreのクエリは大小文字を区別するため、in句では取りこぼす）
+            const scSnap = await db.collection("scenarios").where("siteId", "==", siteId).get();
+            const couponToScenario = new Map<string, string>();
+            for (const d of scSnap.docs) {
+              const code = String((d.data() as any)?.couponCode || "").trim().toUpperCase();
+              if (code && !couponToScenario.has(code)) couponToScenario.set(code, d.id);
+            }
+            // 割引コードの順に走査して最初の一致を採用（AnalyticsPageのクーポン帰属と同じ順序）
+            for (const c of normCodes) {
+              const hit = couponToScenario.get(c);
+              if (hit) {
+                if (attributedScenarioId !== hit) {
+                  console.log("[/v1/log] coupon attribution", { from: attributedScenarioId, to: hit, code: c });
+                }
+                attributedScenarioId = hit;
+                attrDropped = false; // ガードで外れていてもクーポン一致なら復活させる
+                break;
+              }
+            }
+          }
+        } catch (e) {
+          console.warn("[/v1/log] coupon attribution failed", e);
+        }
+      }
+
       const scenarioId = String(attributedScenarioId ?? "all");
 
       // ── 地域(GeoIP) ────────────────────────────────────────────────────
