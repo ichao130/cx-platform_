@@ -196,8 +196,31 @@ export default function PushPage() {
       <div className="page-header">
         <div className="page-header__meta">
           <div className="small" style={{ marginBottom: 6, opacity: 0.7 }}>MOKKEDA / Push</div>
-          <h1 className="h1">Webプッシュ通知</h1>
+          <h1 className="h1" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            Webプッシュ通知
+            <span
+              style={{
+                fontSize: 10, fontWeight: 700, letterSpacing: ".06em",
+                padding: "3px 8px", borderRadius: 6,
+                background: "#fef3c7", color: "#b45309", lineHeight: 1.4,
+              }}
+            >
+              BETA
+            </span>
+          </h1>
           <div className="small">購読者へプッシュ通知を送信・予約できます。</div>
+          <div
+            className="small"
+            style={{
+              marginTop: 8, padding: "8px 12px", borderRadius: 8,
+              background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", lineHeight: 1.7,
+            }}
+          >
+            <b>ベータ機能です。</b>受信できる端末に制限があります。
+            <br />・<b>iPhone / iPad</b>：ホーム画面に追加したWebアプリ（PWA）でのみ受信可能です。Safariで開いているだけでは届きません。
+            <br />・<b>Android / PC</b>：通常のブラウザで受信できます。まずはこちらが主な対象です。
+            <br />・<b>Shopifyストア</b>：通知の表示名がMOKKEDAのドメインになります。
+          </div>
         </div>
         <div className="page-header__actions">
           <button className="btn btn--primary" onClick={openDrawer} disabled={!siteId}>

@@ -884,7 +884,27 @@ function AppShell({ children }: { children: React.ReactNode }) {
                   - Shopifyはルートに sw.js を置けず、App Proxyも Service-Worker-Allowed ヘッダーを剥がすため
                     ルートスコープ登録は不可。現状は自社ドメインで登録する sw-bridge.html 方式で回避している
                     （通知の主体がMOKKEDAドメインになる。お店ドメインで出すにはApp Proxy方式の実装が必要） */}
-            {canShow(canAccess, "push") && <SidebarLink to="/push">Webプッシュ</SidebarLink>}
+            {canShow(canAccess, "push") && (
+              <SidebarLink to="/push">
+                Webプッシュ
+                <span
+                  title="ベータ機能: iOSはホーム画面追加したPWAのみ受信可。Shopifyでは通知の主体がMOKKEDAドメインになります。"
+                  style={{
+                    marginLeft: "auto",
+                    fontSize: 9,
+                    fontWeight: 700,
+                    letterSpacing: ".06em",
+                    padding: "2px 6px",
+                    borderRadius: 5,
+                    background: "rgba(245,158,11,.18)",
+                    color: "#fbbf24",
+                    lineHeight: 1.4,
+                  }}
+                >
+                  BETA
+                </span>
+              </SidebarLink>
+            )}
           </div>
         </div>
 
