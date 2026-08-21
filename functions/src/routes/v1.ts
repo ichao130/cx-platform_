@@ -908,15 +908,46 @@ function getRequestUserEmail(req: any): string {
   return String(req?.auth?.email || req?.user?.email || req?.token?.email || "").trim().toLowerCase();
 }
 
-async function requirePlatformAdmin(req: any): Promise<string> {
-  // Bearer トークンを検証してメールを取得
+/**
+ * スーパー管理者（プラットフォームの最終権限）。
+ * ops_admins コレクションが空・壊れていてもロックアウトされないよう、常に許可する。
+ */
+const PLATFORM_SUPER_ADMIN_EMAIL = "iwatanabe@branberyheag.com";
+
+/** Bearerトークンを検証してメールを取り出す（小文字化） */
+async function verifiedEmailFromReq(req: any): Promise<string> {
   const { extractBearerToken, verifyIdToken } = await import("../services/admin");
   const token = extractBearerToken(req);
   const decoded = await verifyIdToken(token);
-  const email = String(decoded?.email || "").trim().toLowerCase();
-  if (email !== "iwatanabe@branberyheag.com") {
-    throw new Error("platform_admin_only");
+  return String(decoded?.email || "").trim().toLowerCase();
+}
+
+/**
+ * 一般のバックヤード操作を許可する。
+ *   スーパー管理者 or ops_admins に登録されたメール。
+ * ★ops_admins は firestore.rules でスーパー管理者しか書き込めないため、権限の根拠として信頼できる。
+ *   （以前はメール直書きで1人しか通らず、ops_admins に追加しても全APIが403になっていた）
+ */
+async function requirePlatformAdmin(req: any): Promise<string> {
+  const email = await verifiedEmailFromReq(req);
+  if (!email) throw new Error("platform_admin_only");
+  if (email === PLATFORM_SUPER_ADMIN_EMAIL) return email;
+  try {
+    const snap = await adminDb().collection("ops_admins").doc(email).get();
+    if (snap.exists) return email;
+  } catch (e) {
+    console.warn("[requirePlatformAdmin] ops_admins lookup failed", e);
   }
+  throw new Error("platform_admin_only");
+}
+
+/**
+ * スーパー管理者のみ許可する。
+ * 料金・請求・バックアップなど、影響が大きい操作に使う（バックヤードのUI側の出し分けと揃える）。
+ */
+async function requireSuperAdmin(req: any): Promise<string> {
+  const email = await verifiedEmailFromReq(req);
+  if (email !== PLATFORM_SUPER_ADMIN_EMAIL) throw new Error("platform_admin_only");
   return email;
 }
 
@@ -6068,7 +6099,7 @@ export function registerV1Routes(app: Express) {
   app.post("/v1/ops/workspaces/delete", async (req, res) => {
     try {
       corsByAdminOrigins(req, res);
-      await requirePlatformAdmin(req);
+      await requireSuperAdmin(req);
       const { workspace_id } = req.body as { workspace_id: string };
       if (!workspace_id) throw new Error("workspace_id required");
 
@@ -6173,7 +6204,7 @@ export function registerV1Routes(app: Express) {
   app.post("/v1/ops/plans/upsert", async (req, res) => {
     try {
       corsByAdminOrigins(req, res);
-      await requirePlatformAdmin(req);
+      await requireSuperAdmin(req);
       const body = OpsPlanUpsertSchema.parse(req.body);
       const db = adminDb();
       const ref = db.collection("plans").doc(body.plan_id);
@@ -6268,7 +6299,7 @@ export function registerV1Routes(app: Express) {
   app.post("/v1/ops/users/delete", async (req, res) => {
     try {
       corsByAdminOrigins(req, res);
-      await requirePlatformAdmin(req);
+      await requireSuperAdmin(req);
       const { uid } = req.body as { uid: string };
       if (!uid) return res.status(400).json({ error: "uid required" });
 
@@ -6296,7 +6327,7 @@ export function registerV1Routes(app: Express) {
   app.post("/v1/ops/backups/settings/get", async (req, res) => {
     try {
       corsByAdminOrigins(req, res);
-      await requirePlatformAdmin(req);
+      await requireSuperAdmin(req);
       const settings = await getBackupSettings();
       return res.json({
         ok: true,
@@ -6323,7 +6354,7 @@ export function registerV1Routes(app: Express) {
   app.post("/v1/ops/backups/settings/upsert", async (req, res) => {
     try {
       corsByAdminOrigins(req, res);
-      const updatedBy = await requirePlatformAdmin(req);
+      const updatedBy = await requireSuperAdmin(req);
       const body = BackupSettingsUpsertReqSchema.parse(req.body || {});
       const settings = await upsertBackupSettings(
         {
@@ -6354,7 +6385,7 @@ export function registerV1Routes(app: Express) {
   app.post("/v1/ops/backups/list", async (req, res) => {
     try {
       corsByAdminOrigins(req, res);
-      await requirePlatformAdmin(req);
+      await requireSuperAdmin(req);
       const body = BackupListReqSchema.parse(req.body || {});
       const runs = await listBackupRuns(body.limit);
       return res.json({ ok: true, runs });
@@ -6369,7 +6400,7 @@ export function registerV1Routes(app: Express) {
   app.post("/v1/ops/backups/run", async (req, res) => {
     try {
       corsByAdminOrigins(req, res);
-      const createdBy = await requirePlatformAdmin(req);
+      const createdBy = await requireSuperAdmin(req);
       const body = BackupRunReqSchema.parse(req.body || {});
       if (body.scope === "workspace") {
         if (!body.workspace_id) {
@@ -6399,7 +6430,7 @@ export function registerV1Routes(app: Express) {
   app.post("/v1/ops/backups/download-url", async (req, res) => {
     try {
       corsByAdminOrigins(req, res);
-      await requirePlatformAdmin(req);
+      await requireSuperAdmin(req);
       const body = BackupDownloadReqSchema.parse(req.body || {});
       const result = await createBackupDownloadUrl(body.run_id);
       return res.json({ ok: true, ...result });
@@ -6423,7 +6454,7 @@ export function registerV1Routes(app: Express) {
     try {
       corsByAdminOrigins(req, res);
       if (req.method === "OPTIONS") return res.status(204).send("");
-      await requireAuthUid(req);
+      await requireSuperAdmin(req); // 全ワークスペース共通の雛形を書き換えるため最上位権限に限定
       const db = adminDb();
       const snap = await db.collection("system_config").doc("platform_templates").get();
       const data = snap.exists ? snap.data() || {} : {};
@@ -6440,7 +6471,7 @@ export function registerV1Routes(app: Express) {
     try {
       corsByAdminOrigins(req, res);
       if (req.method === "OPTIONS") return res.status(204).send("");
-      await requireAuthUid(req);
+      await requireSuperAdmin(req); // 全ワークスペース共通の雛形を書き換えるため最上位権限に限定
       const body = req.body as any;
       // body: { type: "modal"|"banner"|"toast"|"launcher", html: string, css: string }
       const type = String(body.type || "");
@@ -6496,7 +6527,7 @@ export function registerV1Routes(app: Express) {
     try {
       corsByAdminOrigins(req, res);
       if (req.method === "OPTIONS") return res.status(204).send("");
-      await requireAuthUid(req);
+      await requireSuperAdmin(req); // 全ワークスペース共通の雛形を書き換えるため最上位権限に限定
       const db = adminDb();
       const snap = await db.collection("platform_templates").get();
       const items = snap.docs
@@ -6517,7 +6548,7 @@ export function registerV1Routes(app: Express) {
     try {
       corsByAdminOrigins(req, res);
       if (req.method === "OPTIONS") return res.status(204).send("");
-      await requireAuthUid(req);
+      await requireSuperAdmin(req); // 全ワークスペース共通の雛形を書き換えるため最上位権限に限定
       const body = req.body as any;
       const type = String(body.type || "");
       if (!["modal", "banner", "toast", "launcher"].includes(type)) {
@@ -6561,7 +6592,7 @@ export function registerV1Routes(app: Express) {
     try {
       corsByAdminOrigins(req, res);
       if (req.method === "OPTIONS") return res.status(204).send("");
-      await requireAuthUid(req);
+      await requireSuperAdmin(req); // 全ワークスペース共通の雛形を書き換えるため最上位権限に限定
       const id = String((req.body as any)?.id || "").trim();
       if (!id) return res.status(400).json({ error: "id_required" });
       const db = adminDb();
@@ -6590,7 +6621,7 @@ export function registerV1Routes(app: Express) {
     try {
       corsByAdminOrigins(req, res);
       if (req.method === "OPTIONS") return res.status(204).send("");
-      await requireAuthUid(req);
+      await requireSuperAdmin(req); // 全ワークスペース共通の雛形を書き換えるため最上位権限に限定
       const id = String((req.body as any)?.id || "").trim();
       if (!id) return res.status(400).json({ error: "id_required" });
       const db = adminDb();
@@ -6615,7 +6646,7 @@ export function registerV1Routes(app: Express) {
     try {
       corsByAdminOrigins(req, res);
       if (req.method === "OPTIONS") return res.status(204).send("");
-      await requireAuthUid(req);
+      await requireSuperAdmin(req); // 全ワークスペース共通の雛形を書き換えるため最上位権限に限定
       const overwrite = (req.body as any)?.overwrite === true;
       const db = adminDb();
       let created = 0, skipped = 0, updated = 0, migrated = 0;
@@ -6898,7 +6929,7 @@ export function registerV1Routes(app: Express) {
     try {
       corsByAdminOrigins(req, res);
       if (req.method === "OPTIONS") return res.status(204).send("");
-      await requirePlatformAdmin(req);
+      await requireSuperAdmin(req);
       const db = adminDb();
       const [agSnap, wsSnap] = await Promise.all([
         db.collection("agencies").get(),
@@ -6958,7 +6989,7 @@ export function registerV1Routes(app: Express) {
     try {
       corsByAdminOrigins(req, res);
       if (req.method === "OPTIONS") return res.status(204).send("");
-      await requirePlatformAdmin(req);
+      await requireSuperAdmin(req);
       const body = req.body || {};
       const name = String(body.name || "").trim();
       if (!name) return res.status(400).json({ error: "name required" });
@@ -6990,7 +7021,7 @@ export function registerV1Routes(app: Express) {
     try {
       corsByAdminOrigins(req, res);
       if (req.method === "OPTIONS") return res.status(204).send("");
-      await requirePlatformAdmin(req);
+      await requireSuperAdmin(req);
       const body = req.body || {};
       const agencyId = String(body.agency_id || "").trim();
       const email = String(body.email || "").trim().toLowerCase();
@@ -7026,7 +7057,7 @@ export function registerV1Routes(app: Express) {
     try {
       corsByAdminOrigins(req, res);
       if (req.method === "OPTIONS") return res.status(204).send("");
-      await requirePlatformAdmin(req);
+      await requireSuperAdmin(req);
       const body = req.body || {};
       const agencyId = String(body.agency_id || "").trim();
       const uid = String(body.uid || "").trim();
@@ -7051,7 +7082,7 @@ export function registerV1Routes(app: Express) {
     try {
       corsByAdminOrigins(req, res);
       if (req.method === "OPTIONS") return res.status(204).send("");
-      await requirePlatformAdmin(req);
+      await requireSuperAdmin(req);
       const body = req.body || {};
       const workspaceId = String(body.workspace_id || "").trim();
       const agencyId = String(body.agency_id || "").trim(); // 空なら解除
@@ -7524,7 +7555,7 @@ export function registerV1Routes(app: Express) {
   app.post("/v1/ops/misoca/authorize", async (req, res) => {
     try {
       corsByAdminOrigins(req, res);
-      await requirePlatformAdmin(req);
+      await requireSuperAdmin(req);
 
       const clientId = MISOCA_CLIENT_ID.value().trim();
       if (!clientId) return res.status(500).json({ error: "MISOCA_CLIENT_ID が未設定です" });
@@ -7625,7 +7656,7 @@ export function registerV1Routes(app: Express) {
   app.post("/v1/ops/misoca/status", async (req, res) => {
     try {
       corsByAdminOrigins(req, res);
-      await requirePlatformAdmin(req);
+      await requireSuperAdmin(req);
       const status = await getMisocaStatus();
 
       // 最新の発行ログ5件も返す
@@ -7644,7 +7675,7 @@ export function registerV1Routes(app: Express) {
   app.post("/v1/ops/misoca/disconnect", async (req, res) => {
     try {
       corsByAdminOrigins(req, res);
-      await requirePlatformAdmin(req);
+      await requireSuperAdmin(req);
       await adminDb().collection("system_config").doc("misoca").delete();
       return res.json({ ok: true });
     } catch (e: any) {
@@ -7657,7 +7688,7 @@ export function registerV1Routes(app: Express) {
   app.post("/v1/ops/misoca/trigger", async (req, res) => {
     try {
       corsByAdminOrigins(req, res);
-      await requirePlatformAdmin(req);
+      await requireSuperAdmin(req);
 
       const clientId = MISOCA_CLIENT_ID.value().trim();
       const clientSecret = MISOCA_CLIENT_SECRET.value().trim();
@@ -7682,7 +7713,7 @@ export function registerV1Routes(app: Express) {
   app.post("/v1/ops/backfill-purchase-attribution", async (req, res) => {
     try {
       corsByAdminOrigins(req, res);
-      await requirePlatformAdmin(req);
+      await requireSuperAdmin(req);
 
       const db = adminDb();
       const targetSiteId = String(req.body.siteId || "").trim();
