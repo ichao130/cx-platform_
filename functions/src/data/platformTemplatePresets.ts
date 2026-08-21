@@ -447,6 +447,77 @@ const LAUNCHER_ICON_PULSE: PlatformTemplatePreset = {
   fields: [{ key: "badge_text", label: "バッジ（数字や短文）", type: "text", default: "1" }],
 };
 
+/* ========================= push ========================= */
+
+const MODAL_PUSH_OPTIN: PlatformTemplatePreset = {
+  id: "std_modal_push_optin",
+  name: "プッシュ通知の登録（Shopify対応）",
+  type: "modal",
+  html: `<div class="cx-overlay" data-cx-close>
+  <div class="cx-push" role="dialog" aria-modal="true">
+    <button type="button" class="cx-push__close" data-cx-close aria-label="閉じる">✕</button>
+    <div class="cx-push__icon">🔔</div>
+    {{#if title}}<h3 class="cx-push__ttl">{{title}}</h3>{{/if}}
+    {{#if body}}<p class="cx-push__lead">{{body}}</p>{{/if}}
+    <button type="button" class="cx-push__btn">{{cta_url_text}}</button>
+    <p class="cx-push__msg" data-cx-push-msg></p>
+    <button type="button" class="cx-push__later" data-cx-close>{{cta_text}}</button>
+  </div>
+</div>`,
+  css: `.cx-overlay{position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:2147483646;display:flex;align-items:center;justify-content:center;padding:16px;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;}
+.cx-push{position:relative;background:#fff;width:min(360px,92vw);border-radius:20px;padding:28px 24px 20px;box-sizing:border-box;box-shadow:0 30px 70px rgba(15,23,42,.35);color:#0f172a;text-align:center;}
+.cx-push__close{position:absolute;top:12px;right:12px;width:28px;height:28px;border-radius:50%;background:rgba(15,23,42,.05);border:none;cursor:pointer;font-size:13px;color:#64748b;}
+.cx-push__close:hover{background:rgba(15,23,42,.1);}
+.cx-push__icon{font-size:40px;line-height:1;margin-bottom:10px;}
+.cx-push__ttl{margin:0 0 8px;font-size:18px;font-weight:700;line-height:1.4;}
+.cx-push__lead{margin:0 0 18px;font-size:13.5px;line-height:1.75;color:#64748b;white-space:pre-wrap;}
+.cx-push__btn{display:block;width:100%;border:none;border-radius:12px;padding:14px;background:#1f6573;color:#fff;font-size:15px;font-weight:700;cursor:pointer;transition:opacity .15s;}
+.cx-push__btn:hover{opacity:.88;}
+.cx-push__btn:disabled{opacity:.5;cursor:default;}
+.cx-push__msg{margin:10px 0 0;font-size:12.5px;line-height:1.6;min-height:1em;color:#1f6573;}
+.cx-push__msg[data-state="error"]{color:#b91c1c;}
+.cx-push__later{display:block;width:100%;margin-top:8px;background:transparent;border:none;color:#94a3b8;font-size:12.5px;cursor:pointer;padding:6px;}
+.cx-push__later:hover{color:#64748b;}`,
+  js: `// プッシュ通知の購読。Shopifyのようにサイトルートへ /push-sw.js を置けない環境では
+// SDKが自動でブリッジ方式（MOKKEDAドメインのポップアップ）にフォールバックする。
+// ★ボタン表示時に prepare() を呼んでおくのが重要。
+//   クリック後に判定するとユーザー操作が切れてポップアップがブロックされるため。
+(function () {
+  var api = window.mokkeda && window.mokkeda.push;
+  var btn = root.querySelector('.cx-push__btn');
+  var msg = root.querySelector('[data-cx-push-msg]');
+  if (!btn) return;
+
+  function say(text, isError) {
+    if (!msg) return;
+    msg.textContent = text || '';
+    if (isError) msg.setAttribute('data-state', 'error');
+    else msg.removeAttribute('data-state');
+  }
+
+  if (!api) { btn.disabled = true; say('この環境では通知を利用できません', true); return; }
+
+  // 事前判定（ここでポップアップの要否を確定させておく）
+  try { api.prepare && api.prepare(); } catch (e) {}
+
+  btn.addEventListener('click', function () {
+    btn.disabled = true;
+    say('登録中…');
+    api.requestPermission(function (r) {
+      btn.disabled = false;
+      var s = r && r.status;
+      if (s === 'subscribed')        { say('✓ 通知を登録しました'); btn.style.display = 'none'; }
+      else if (s === 'already')      { say('すでに登録済みです'); btn.style.display = 'none'; }
+      else if (s === 'denied')       say('ブラウザの設定で通知がブロックされています', true);
+      else if (s === 'dismissed')    say('登録はキャンセルされました');
+      else if (s === 'unsupported')  say('ご利用の端末は通知に対応していません（iPhoneはホーム画面に追加した場合のみ対応）', true);
+      else if (s === 'popup_blocked') say('ポップアップがブロックされました。もう一度タップしてください', true);
+      else                           say('登録できませんでした。時間をおいてお試しください', true);
+    });
+  });
+})();`,
+};
+
 export const PLATFORM_TEMPLATE_PRESETS: PlatformTemplatePreset[] = [
   MODAL_BASIC,
   MODAL_COUPON_MULTI,
@@ -460,4 +531,5 @@ export const PLATFORM_TEMPLATE_PRESETS: PlatformTemplatePreset[] = [
   TOAST_SOCIAL_PROOF,
   LAUNCHER_BASIC,
   LAUNCHER_ICON_PULSE,
+  MODAL_PUSH_OPTIN,
 ];

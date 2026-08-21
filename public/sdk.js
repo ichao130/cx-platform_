@@ -2554,6 +2554,114 @@
   var PUSH_VAPID_PUBLIC_KEY = "BHHAw9e5rSVttkuLfz1TRvebwIRP4UT_SNWneI22hxdvbn_q4eOFrqojYby2mRsgtYR_5yp2mljlCc2-u9pCcSU";
   var PUSH_API_BASE = "https://asia-northeast1-cx-platform-v1.cloudfunctions.net/api";
   var PUSH_SW_PATH = "/push-sw.js";
+  var PUSH_BRIDGE_PATH = "/sw-bridge.html";
+  // Shopify等「サイトのルートに /push-sw.js を置けない」環境向けのフォールバック。
+  //   自ドメイン(MOKKEDA)のブリッジページをポップアップで開き、そちらで購読する。
+  //   ※通知の表示主体はMOKKEDAドメインになる。
+  var _pushSwAvail = null; // null=未判定 / true=自サイトSWが使える / false=ブリッジが必要
+
+  function _pushSwCacheKey() { return "cx_pushsw_" + _getPushSiteId(); }
+
+  function _readPushSwCache() {
+    try {
+      var v = sessionStorage.getItem(_pushSwCacheKey());
+      if (v === "1") return true;
+      if (v === "0") return false;
+    } catch (e) {}
+    return null;
+  }
+
+  function _writePushSwCache(ok) {
+    try { sessionStorage.setItem(_pushSwCacheKey(), ok ? "1" : "0"); } catch (e) {}
+  }
+
+  // ブリッジを開くオリジン。
+  //   ★スクリプト配信元(cx-platform-v1.web.app)をそのまま使うと、許可ダイアログと通知に
+  //     生のFirebaseドメインが表示されて不信感を与えるため、専用ドメインを既定にする。
+  //   ★data-push-origin 属性で上書き可能（将来お店のサブドメインをCNAMEで向ける場合に使う。
+  //     例: https://push.example.com → 通知の表示名がお店のブランドになる）
+  var PUSH_BRIDGE_ORIGIN_DEFAULT = "https://push.mokkeda.com";
+
+  function _pushBridgeUrl() {
+    var origin = "";
+    try {
+      var sc = getCurrentScript();
+      origin = String((sc && sc.getAttribute && sc.getAttribute("data-push-origin")) || "").trim();
+    } catch (e) { origin = ""; }
+    if (!origin) origin = PUSH_BRIDGE_ORIGIN_DEFAULT;
+    // 末尾スラッシュを落として結合する
+    origin = origin.replace(/\/+$/, "");
+    return origin + PUSH_BRIDGE_PATH;
+  }
+
+  /**
+   * サイトルートに /push-sw.js があるか事前判定してキャッシュする。
+   * ボタン表示時に呼んでおくと、クリック時に同期的に分岐できる
+   * （クリック後に非同期判定するとユーザージェスチャーが切れ、ポップアップがブロックされるため）。
+   */
+  function cxPreparePush(onReady) {
+    var cb = onReady || function () {};
+    if (_pushSwAvail !== null) return cb(_pushSwAvail);
+    var cached = _readPushSwCache();
+    if (cached !== null) { _pushSwAvail = cached; return cb(cached); }
+    try {
+      fetch(PUSH_SW_PATH, { method: "GET", cache: "no-store" }).then(function (r) {
+        // Shopifyは存在しないパスでも content-type: text/javascript を返すので ok だけで判定する
+        var ok = !!r && r.ok === true;
+        _pushSwAvail = ok; _writePushSwCache(ok); cb(ok);
+      }).catch(function () {
+        _pushSwAvail = false; _writePushSwCache(false); cb(false);
+      });
+    } catch (e) {
+      _pushSwAvail = false; _writePushSwCache(false); cb(false);
+    }
+  }
+
+  // ブリッジをポップアップで開いて購読する（呼び出しはユーザージェスチャー内であること）
+  function _subscribeViaBridge(cb) {
+    var url = _pushBridgeUrl();
+    if (!url) return cb({ status: "error", error: "bridge_url_unresolved" });
+
+    var full = url
+      + "?siteId=" + encodeURIComponent(_getPushSiteId())
+      + "&siteKey=" + encodeURIComponent(_getPushSiteKey());
+
+    var w = null;
+    try {
+      w = window.open(full, "cx_push_bridge", "width=420,height=560,menubar=no,toolbar=no");
+    } catch (e) { w = null; }
+    if (!w) return cb({ status: "popup_blocked" });
+
+    var done = false;
+    function finish(result) {
+      if (done) return;
+      done = true;
+      try { window.removeEventListener("message", onMsg); } catch (e) {}
+      clearInterval(iv);
+      cb(result);
+    }
+    function onMsg(ev) {
+      var d = ev && ev.data;
+      if (!d || typeof d.type !== "string") return;
+      // ブリッジは自ドメインなので、オリジンを検証してから受け付ける
+      // （ev.origin が空のケースを通すと任意オリジンから偽装できるため厳密に比較する）
+      var bridgeOrigin = "";
+      try { bridgeOrigin = new URL(url, window.location.href).origin; } catch (e) { return; }
+      if (!ev.origin || !bridgeOrigin || ev.origin !== bridgeOrigin) return;
+      if (d.type === "cx_push_subscribed")   return finish({ status: "subscribed" });
+      if (d.type === "cx_push_denied")       return finish({ status: "denied" });
+      if (d.type === "cx_push_dismissed")    return finish({ status: "dismissed" });
+      if (d.type === "cx_push_unsupported")  return finish({ status: "unsupported" });
+      if (d.type === "cx_push_error")        return finish({ status: "error", error: d.error || "" });
+    }
+    window.addEventListener("message", onMsg);
+
+    // ユーザーがポップアップを閉じた場合を検知する
+    var iv = setInterval(function () {
+      try { if (w.closed) finish({ status: "dismissed" }); } catch (e) {}
+    }, 700);
+  }
+
 
   function _urlBase64ToUint8Array(base64String) {
     var padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -2596,6 +2704,13 @@
       var currentPerm = Notification.permission;
       if (currentPerm === "denied") {
         return cb({ status: "denied" });
+      }
+
+      // 自サイトに /push-sw.js が無いと判っている場合はブリッジ方式へ
+      // （判定は cxPreparePush 済みならキャッシュから同期的に読める）
+      if (_pushSwAvail === null) _pushSwAvail = _readPushSwCache();
+      if (_pushSwAvail === false) {
+        return _subscribeViaBridge(cb);
       }
 
       function doSubscribe(reg) {
@@ -2653,7 +2768,14 @@
           }
         });
       }).catch(function (e) {
-        cb({ status: "error", error: String(e) });
+        // /push-sw.js が無い（Shopify等）→ ブリッジ方式へフォールバック。
+        // ただしここに来る時点で非同期処理を挟んでおりユーザージェスチャーが切れている可能性が高く、
+        // ポップアップがブロックされることがある。その場合は popup_blocked を返して
+        // 「もう一度タップしてください」と案内できるようにする。
+        // （ボタン表示時に cxPreparePush() を呼んでおけばこの経路には入らない）
+        _pushSwAvail = false;
+        _writePushSwCache(false);
+        _subscribeViaBridge(cb);
       });
 
     } catch (e) {
@@ -2664,7 +2786,11 @@
   // グローバル公開（シナリオアクションや手動呼び出し用）
   try {
     window.mokkeda = window.mokkeda || {};
-    window.mokkeda.push = { requestPermission: cxRequestPush };
+    window.mokkeda.push = {
+      requestPermission: cxRequestPush,
+      // ボタンを描画したタイミングで呼ぶと、クリック時の分岐が同期的になりポップアップがブロックされない
+      prepare: cxPreparePush,
+    };
   } catch (e) {}
   // ──────────────────────────────────────────────────────────────────────
 })();
