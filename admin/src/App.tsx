@@ -4,7 +4,7 @@ import AppRoutes from "./routes";
 import AnnouncementToast from "./components/AnnouncementToast";
 import AdminContextHeader from "./components/AdminContextHeader";
 
-import { auth, googleProvider, db } from "./firebase";
+import { auth, googleProvider, db, apiPostJson } from "./firebase";
 import {
   collection,
   doc,
@@ -489,6 +489,23 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const [workspaceRows, setWorkspaceRows] = useState<Array<{ id: string; data: any }>>([]);
   const [siteRows, setSiteRows] = useState<Array<{ id: string; data: any }>>([]);
   const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
+  // 代理店メンバーのときだけ「代理店ポータル」をメニューに出す。
+  // 判定はサーバー(/v1/agency/me)に任せる（クライアント側の推測で権限を出し分けない）。
+  const [isAgencyMember, setIsAgencyMember] = useState(false);
+
+  useEffect(() => {
+    if (!currentUid) { setIsAgencyMember(false); return; }
+    let alive = true;
+    (async () => {
+      try {
+        const r = await apiPostJson<{ agencies: Array<{ id: string }> }>("/v1/agency/me", {});
+        if (alive) setIsAgencyMember(!!(r.agencies && r.agencies.length));
+      } catch (e) {
+        if (alive) setIsAgencyMember(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [currentUid]);
 
   useEffect(() => {
     if (!currentUid) {
@@ -884,6 +901,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
                   - Shopifyはルートに sw.js を置けず、App Proxyも Service-Worker-Allowed ヘッダーを剥がすため
                     ルートスコープ登録は不可。現状は自社ドメインで登録する sw-bridge.html 方式で回避している
                     （通知の主体がMOKKEDAドメインになる。お店ドメインで出すにはApp Proxy方式の実装が必要） */}
+            {isAgencyMember && <SidebarLink to="/partner">代理店ポータル</SidebarLink>}
             {canShow(canAccess, "push") && (
               <SidebarLink to="/push">
                 Webプッシュ

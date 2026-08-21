@@ -20,6 +20,7 @@ const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage"));
 const OptimizePage = lazy(() => import("./pages/OptimizePage"));
 const RmsPage = lazy(() => import("./pages/RmsPage"));
 const PushPage = lazy(() => import("./pages/PushPage"));
+const PartnerPage = lazy(() => import("./pages/PartnerPage"));
 
 type AccessKey =
   | "dashboard"
@@ -91,6 +92,7 @@ export default function AppRoutes({ canAccess, workspaceRole, isPlatformAdmin, w
         <Route path="/ai/optimize" element={<Guard allow={canShow(canAccess, "ai")} title="配信最適化"><OptimizePage /></Guard>} />
         <Route path="/rms" element={<Guard allow={canShow(canAccess, "rms")} title="楽天RMS"><RmsPage siteId={siteId || ""} /></Guard>} />
         <Route path="/push" element={<Guard allow={canShow(canAccess, "push")} title="Webプッシュ"><PushPage /></Guard>} />
+        <Route path="/partner" element={<PartnerPage />} />
 
         {/* ワークスペース関連 */}
         <Route path="/workspace/members" element={<Guard allow={canShow(canAccess, "members")} title="メンバー"><WorkspaceMembersPage /></Guard>} />

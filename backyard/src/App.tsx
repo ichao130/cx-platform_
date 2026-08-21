@@ -11,6 +11,7 @@ import UsersPage from "./pages/UsersPage";
 import MisocaPage from "./pages/MisocaPage";
 import BackupsPage from "./pages/BackupsPage";
 import PlatformTemplatesPage from "./pages/PlatformTemplatesPage";
+import AgenciesPage from "./pages/AgenciesPage";
 
 const s: Record<string, React.CSSProperties> = {
   layout: { minHeight: "100vh", display: "flex", flexDirection: "column" },
@@ -21,7 +22,7 @@ const s: Record<string, React.CSSProperties> = {
   card: { background: "#1e293b", border: "1px solid rgba(255,255,255,.1)", borderRadius: 16, padding: 40, textAlign: "center", maxWidth: 380, width: "90vw" },
 };
 
-type Page = "workspaces" | "trials" | "announcements" | "plans" | "admins" | "users" | "misoca" | "backups" | "platform_templates";
+type Page = "workspaces" | "trials" | "announcements" | "plans" | "admins" | "users" | "misoca" | "backups" | "platform_templates" | "agencies";
 
 async function loadOpsAdmins(): Promise<string[]> {
   try {
@@ -113,6 +114,7 @@ export default function App() {
         <NavBtn id="plans" label="プラン管理" />
         {isSuperAdmin && <NavBtn id="backups" label="バックアップ" />}
         {isSuperAdmin && <NavBtn id="platform_templates" label="標準テンプレート" />}
+        {isSuperAdmin && <NavBtn id="agencies" label="代理店" />}
         {isSuperAdmin && <NavBtn id="misoca" label="MISOCA請求書" />}
         <NavBtn id="announcements" label="お知らせ管理" />
         <NavBtn id="users" label="ユーザー管理" />
@@ -129,6 +131,7 @@ export default function App() {
         {page === "plans" && <PlansPage />}
         {page === "backups" && isSuperAdmin && <BackupsPage />}
         {page === "platform_templates" && isSuperAdmin && <PlatformTemplatesPage />}
+        {page === "agencies" && isSuperAdmin && <AgenciesPage />}
         {page === "announcements" && <AnnouncementsPage />}
         {page === "users" && <UsersPage />}
         {page === "misoca" && isSuperAdmin && <MisocaPage />}

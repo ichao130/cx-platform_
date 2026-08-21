@@ -6743,6 +6743,339 @@ export function registerV1Routes(app: Express) {
   app.options("/v1/platform-templates/list", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
 
   /* ============================================================
+     代理店（Agency）
+     ------------------------------------------------------------
+     代理店は複数のクライアント(workspace)を担当する。
+     ・agencies/{id}: { name, members:{uid:role}, memberUids:[uid], memberEmails:{uid:email} }
+     ・workspaces/{id}.agencyId で紐付ける
+     ★実データへのアクセス権は既存の workspaces.members（admin/viewer）で制御する。
+       ここでは「どのクライアントを担当しているか」の集約ビューだけを提供し、
+       個別の編集権限は従来どおりワークスペースのロールに委ねる（二重管理を避ける）。
+     ============================================================ */
+
+  type AgencyRole = "owner" | "member";
+
+  /** リクエスト元がその代理店のメンバーであることを検証する */
+  async function requireAgencyMember(
+    req: any,
+    agencyId: string,
+    allowed: AgencyRole[] = ["owner", "member"]
+  ): Promise<{ uid: string; role: AgencyRole; data: any }> {
+    const uid = await requireAuthUid(req);
+    const db = adminDb();
+    const snap = await db.collection("agencies").doc(agencyId).get();
+    if (!snap.exists) throw new Error("agency_not_found");
+    const data = snap.data() as any;
+    const role = (data?.members || {})[uid] as AgencyRole | undefined;
+    if (!role || allowed.indexOf(role) < 0) throw new Error("agency_forbidden");
+    return { uid, role, data };
+  }
+
+  const agencyErrStatus = (e: any) =>
+    e?.message === "agency_forbidden" ? 403
+    : e?.message === "agency_not_found" ? 404
+    : e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401
+    : 500;
+
+  /** POST /v1/agency/me — ログイン中ユーザーが所属する代理店 */
+  app.post("/v1/agency/me", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      if (req.method === "OPTIONS") return res.status(204).send("");
+      const uid = await requireAuthUid(req);
+      const db = adminDb();
+      const snap = await db.collection("agencies").where("memberUids", "array-contains", uid).get();
+      const agencies = snap.docs.map((d) => {
+        const x = d.data() as any;
+        return { id: d.id, name: x.name || d.id, role: (x.members || {})[uid] || "member" };
+      });
+      return res.json({ ok: true, agencies });
+    } catch (e: any) {
+      console.error("[/v1/agency/me] error:", e);
+      return res.status(agencyErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/agency/me", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /** POST /v1/agency/clients — 担当クライアントの一覧＋期間集計 */
+  app.post("/v1/agency/clients", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      if (req.method === "OPTIONS") return res.status(204).send("");
+      const body = req.body || {};
+      const agencyId = String(body.agency_id || "").trim();
+      if (!agencyId) return res.status(400).json({ error: "agency_id required" });
+      // ★agencyIdはクライアントから来るので必ずメンバーシップを検証する
+      const { uid } = await requireAgencyMember(req, agencyId);
+
+      const dayFrom = String(body.day_from || "").trim();
+      const dayTo = String(body.day_to || "").trim();
+      const db = adminDb();
+
+      const wsSnap = await db.collection("workspaces").where("agencyId", "==", agencyId).get();
+      const workspaces = wsSnap.docs.map((d) => ({ id: d.id, data: d.data() as any }));
+      if (!workspaces.length) return res.json({ ok: true, clients: [] });
+
+      // 各ワークスペースのサイトを取得
+      const wsIds = workspaces.map((w) => w.id);
+      const siteChunks: string[][] = [];
+      for (let i = 0; i < wsIds.length; i += 10) siteChunks.push(wsIds.slice(i, i + 10));
+      const sitesByWs = new Map<string, Array<{ id: string; name: string }>>();
+      for (const chunk of siteChunks) {
+        const sSnap = await db.collection("sites").where("workspaceId", "in", chunk).get();
+        sSnap.docs.forEach((d) => {
+          const x = d.data() as any;
+          if (x.status === "deleted") return;
+          const arr = sitesByWs.get(x.workspaceId) || [];
+          arr.push({ id: d.id, name: x.name || d.id });
+          sitesByWs.set(x.workspaceId, arr);
+        });
+      }
+
+      // 期間指定があれば stats_daily を集計
+      const statsBySite = new Map<string, any>();
+      if (dayFrom && dayTo) {
+        const allSiteIds: string[] = [];
+        sitesByWs.forEach((arr) => arr.forEach((s) => allSiteIds.push(s.id)));
+        for (const sid of allSiteIds) {
+          const st = await db.collection("stats_daily")
+            .where("siteId", "==", sid)
+            .where("day", ">=", dayFrom).where("day", "<=", dayTo)
+            .get();
+          const acc = { pv: 0, impressions: 0, clicks: 0, conversions: 0, purchases: 0, revenue: 0 };
+          st.docs.forEach((d) => {
+            const x = d.data() as any;
+            const c = Number(x.count || 0);
+            if (x.event === "pageview") acc.pv += c;
+            else if (x.event === "impression") acc.impressions += c;
+            else if (x.event === "click" || x.event === "click_link") acc.clicks += c;
+            else if (x.event === "conversion") acc.conversions += c;
+            else if (x.event === "purchase") {
+              acc.purchases += c;
+              acc.revenue += Number(x.revenue_total || 0);
+            }
+          });
+          statsBySite.set(sid, acc);
+        }
+      }
+
+      const clients = workspaces.map((w) => {
+        const sites = sitesByWs.get(w.id) || [];
+        const total = { pv: 0, impressions: 0, clicks: 0, conversions: 0, purchases: 0, revenue: 0 };
+        sites.forEach((s) => {
+          const a = statsBySite.get(s.id);
+          if (!a) return;
+          total.pv += a.pv; total.impressions += a.impressions; total.clicks += a.clicks;
+          total.conversions += a.conversions; total.purchases += a.purchases; total.revenue += a.revenue;
+        });
+        const billing = w.data.billing || {};
+        // ★このユーザーがそのワークスペースで持つロール。代理店ポータルから
+        //   「管理画面を開く」を出すかどうかの判定に使う（権限は既存機構のまま）
+        const myRole = (w.data.members || {})[uid]?.role || (w.data.members || {})[uid] || null;
+        return {
+          workspaceId: w.id,
+          name: w.data.name || w.id,
+          plan: billing.plan || "free",
+          status: billing.status || "inactive",
+          sites,
+          myRole,
+          stats: total,
+        };
+      }).sort((a, b) => b.stats.revenue - a.stats.revenue || a.name.localeCompare(b.name));
+
+      return res.json({ ok: true, clients });
+    } catch (e: any) {
+      console.error("[/v1/agency/clients] error:", e);
+      return res.status(agencyErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/agency/clients", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /* ===== ops: 代理店の管理（プラットフォーム管理者のみ） ===== */
+
+  /** POST /v1/ops/agencies/list */
+  app.post("/v1/ops/agencies/list", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      if (req.method === "OPTIONS") return res.status(204).send("");
+      await requirePlatformAdmin(req);
+      const db = adminDb();
+      const [agSnap, wsSnap] = await Promise.all([
+        db.collection("agencies").get(),
+        db.collection("workspaces").get(),
+      ]);
+      // 代理店への請求は「課金対象アカウント数 × 単価」で算出する。
+      // 課金対象 = 契約中(active/trialing)のワークスペース。停止中や無料は数えない。
+      const billableStatuses = ["active", "trialing", "past_due"];
+      const clientCount = new Map<string, number>();
+      const billableCount = new Map<string, number>();
+      const clientNames = new Map<string, Array<{ id: string; name: string; plan: string; status: string; billable: boolean }>>();
+      wsSnap.docs.forEach((d) => {
+        const x = d.data() as any;
+        if (!x.agencyId) return;
+        const billing = x.billing || {};
+        const status = String(billing.status || "inactive");
+        const plan = String(billing.plan || "free");
+        const billable = billableStatuses.indexOf(status) >= 0;
+        clientCount.set(x.agencyId, (clientCount.get(x.agencyId) || 0) + 1);
+        if (billable) billableCount.set(x.agencyId, (billableCount.get(x.agencyId) || 0) + 1);
+        const arr = clientNames.get(x.agencyId) || [];
+        arr.push({ id: d.id, name: x.name || d.id, plan, status, billable });
+        clientNames.set(x.agencyId, arr);
+      });
+      const agencies = agSnap.docs.map((d) => {
+        const x = d.data() as any;
+        const unitPrice = Number(x.unitPrice || 0);
+        const billable = billableCount.get(d.id) || 0;
+        return {
+          id: d.id,
+          name: x.name || d.id,
+          note: x.note || "",
+          members: x.members || {},
+          memberEmails: x.memberEmails || {},
+          clientCount: clientCount.get(d.id) || 0,
+          billableCount: billable,
+          unitPrice,
+          billingAmount: billable * unitPrice, // 当月の請求見込み
+          clients: (clientNames.get(d.id) || []).sort((a, b) => a.name.localeCompare(b.name)),
+        };
+      }).sort((a, b) => a.name.localeCompare(b.name));
+      // 未紐付けのワークスペース（紐付けUI用）
+      const unassigned = wsSnap.docs
+        .filter((d) => !(d.data() as any).agencyId)
+        .map((d) => ({ id: d.id, name: (d.data() as any).name || d.id }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      return res.json({ ok: true, agencies, unassigned });
+    } catch (e: any) {
+      console.error("[/v1/ops/agencies/list] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/agencies/list", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /** POST /v1/ops/agencies/save — 代理店の作成／名称変更 */
+  app.post("/v1/ops/agencies/save", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      if (req.method === "OPTIONS") return res.status(204).send("");
+      await requirePlatformAdmin(req);
+      const body = req.body || {};
+      const name = String(body.name || "").trim();
+      if (!name) return res.status(400).json({ error: "name required" });
+      const db = adminDb();
+      const id = String(body.id || "").trim() || `agc_${Math.random().toString(36).slice(2, 10)}`;
+      const ref = db.collection("agencies").doc(id);
+      const exists = (await ref.get()).exists;
+      const payload: Record<string, any> = { name, updatedAt: FieldValue.serverTimestamp() };
+      // 代理店への請求単価（1アカウントあたり月額）。請求額 = 課金対象アカウント数 × 単価
+      if (body.unit_price !== undefined) payload.unitPrice = Math.max(0, Number(body.unit_price) || 0);
+      if (body.note !== undefined) payload.note = String(body.note || "");
+      if (!exists) {
+        payload.createdAt = FieldValue.serverTimestamp();
+        payload.members = {};
+        payload.memberUids = [];
+        payload.memberEmails = {};
+      }
+      await ref.set(payload, { merge: true });
+      return res.json({ ok: true, id });
+    } catch (e: any) {
+      console.error("[/v1/ops/agencies/save] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/agencies/save", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /** POST /v1/ops/agencies/members/add — メール指定で代理店メンバーを追加 */
+  app.post("/v1/ops/agencies/members/add", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      if (req.method === "OPTIONS") return res.status(204).send("");
+      await requirePlatformAdmin(req);
+      const body = req.body || {};
+      const agencyId = String(body.agency_id || "").trim();
+      const email = String(body.email || "").trim().toLowerCase();
+      const role = String(body.role || "member") === "owner" ? "owner" : "member";
+      if (!agencyId || !email) return res.status(400).json({ error: "agency_id and email required" });
+
+      let user: any = null;
+      try {
+        const { getAuth: getAdminAuthFn } = await import("firebase-admin/auth");
+        user = await getAdminAuthFn().getUserByEmail(email);
+      } catch (e) {
+        // Firebase Auth に未登録＝まだサインアップしていない
+        return res.status(404).json({ error: "user_not_found", message: "このメールのユーザーが見つかりません。先に本人にサインアップしてもらってください。" });
+      }
+
+      const db = adminDb();
+      await db.collection("agencies").doc(agencyId).set({
+        [`members.${user.uid}`]: role,
+        [`memberEmails.${user.uid}`]: email,
+        memberUids: FieldValue.arrayUnion(user.uid),
+        updatedAt: FieldValue.serverTimestamp(),
+      } as any, { merge: true });
+      return res.json({ ok: true, uid: user.uid });
+    } catch (e: any) {
+      console.error("[/v1/ops/agencies/members/add] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/agencies/members/add", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /** POST /v1/ops/agencies/members/remove */
+  app.post("/v1/ops/agencies/members/remove", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      if (req.method === "OPTIONS") return res.status(204).send("");
+      await requirePlatformAdmin(req);
+      const body = req.body || {};
+      const agencyId = String(body.agency_id || "").trim();
+      const uid = String(body.uid || "").trim();
+      if (!agencyId || !uid) return res.status(400).json({ error: "agency_id and uid required" });
+      const db = adminDb();
+      await db.collection("agencies").doc(agencyId).update({
+        [`members.${uid}`]: FieldValue.delete(),
+        [`memberEmails.${uid}`]: FieldValue.delete(),
+        memberUids: FieldValue.arrayRemove(uid),
+        updatedAt: FieldValue.serverTimestamp(),
+      } as any);
+      return res.json({ ok: true });
+    } catch (e: any) {
+      console.error("[/v1/ops/agencies/members/remove] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/agencies/members/remove", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /** POST /v1/ops/agencies/link — ワークスペースを代理店に紐付け／解除 */
+  app.post("/v1/ops/agencies/link", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      if (req.method === "OPTIONS") return res.status(204).send("");
+      await requirePlatformAdmin(req);
+      const body = req.body || {};
+      const workspaceId = String(body.workspace_id || "").trim();
+      const agencyId = String(body.agency_id || "").trim(); // 空なら解除
+      if (!workspaceId) return res.status(400).json({ error: "workspace_id required" });
+      const db = adminDb();
+      if (agencyId) {
+        await db.collection("workspaces").doc(workspaceId).set(
+          { agencyId, updatedAt: FieldValue.serverTimestamp() }, { merge: true }
+        );
+      } else {
+        await db.collection("workspaces").doc(workspaceId).update({
+          agencyId: FieldValue.delete(),
+          updatedAt: FieldValue.serverTimestamp(),
+        } as any);
+      }
+      return res.json({ ok: true });
+    } catch (e: any) {
+      console.error("[/v1/ops/agencies/link] error:", e);
+      return res.status(opsErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/ops/agencies/link", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /* ============================================================
      ウェルカムメール送信（認証済みユーザーが初回登録完了時に呼ぶ）
      ============================================================ */
   app.post("/v1/welcome-email", async (req, res) => {
