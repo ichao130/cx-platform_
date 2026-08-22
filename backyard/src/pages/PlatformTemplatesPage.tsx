@@ -152,13 +152,16 @@ export default function PlatformTemplatesPage() {
     return m;
   }, [items]);
 
-  const handleSeed = async () => {
-    if (!window.confirm("プリセットの標準テンプレートを投入します。\n既存の同IDテンプレートは変更しません。よろしいですか？")) return;
+  const handleSeed = async (overwrite = false) => {
+    const text = overwrite
+      ? "プリセットの内容で既存の標準テンプレートを【上書き】します。\n運営側で手編集した内容は失われます。よろしいですか？"
+      : "プリセットの標準テンプレートを投入します。\n既存の同IDテンプレートは変更しません。よろしいですか？";
+    if (!window.confirm(text)) return;
     setSaving(true); setMsg(null);
     try {
-      const r = await opsPost<{ created: number; updated: number; skipped: number; migrated: number }>("/v1/ops/platform-templates/library/seed");
+      const r = await opsPost<{ created: number; updated: number; skipped: number; migrated: number }>("/v1/ops/platform-templates/library/seed", { overwrite });
       setMsg({
-        text: `投入完了: 新規${r.created}件 / スキップ${r.skipped}件`
+        text: `投入完了: 新規${r.created}件 / 上書き${r.updated}件 / スキップ${r.skipped}件`
           + (r.migrated ? ` / 現行の標準を${r.migrated}件移行（既定として維持）` : ""),
         ok: true,
       });
@@ -241,7 +244,13 @@ export default function PlatformTemplatesPage() {
 
       <div style={s.toolbar}>
         <button style={{ ...s.btn, ...s.btnPrimary }} onClick={handleNew} disabled={saving}>＋ 新規作成</button>
-        <button style={{ ...s.btn, ...s.btnGhost }} onClick={handleSeed} disabled={saving}>標準セットを投入</button>
+        <button style={{ ...s.btn, ...s.btnGhost }} onClick={() => handleSeed(false)} disabled={saving}>標準セットを投入</button>
+        <button
+          style={{ ...s.btn, ...s.btnGhost }}
+          onClick={() => handleSeed(true)}
+          disabled={saving}
+          title="プリセットの最新内容で既存テンプレートを上書きします。中身が空になってしまった場合の復旧にも使えます。"
+        >プリセットで上書き</button>
         {msg && <span style={{ ...s.msg, ...(msg.ok ? s.msgOk : s.msgErr) }}>{msg.text}</span>}
       </div>
 
