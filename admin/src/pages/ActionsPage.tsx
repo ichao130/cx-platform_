@@ -27,7 +27,7 @@ import StickySaveBar from "../components/StickySaveBar";
 /* =========================
  * Types
  * ========================= */
-type ActionType = "modal" | "banner" | "toast" | "launcher";
+type ActionType = "modal" | "banner" | "toast" | "launcher" | "push";
 type MountPlacement = "append" | "prepend" | "before" | "after" | "replace";
 type MountMode = "shadow" | "theme" | "inherit";
 
@@ -329,7 +329,8 @@ function buildActionPayload(form: {
     ...(form.type === "launcher" && form.modal_creative ? { modal_creative: form.modal_creative } : {}),
   };
 
-  const canMount = form.type !== "modal";
+  // push は画面を出さないためマウント先を持たせない（modalと同じ扱い）
+  const canMount = form.type !== "modal" && form.type !== "push";
   if (canMount && selector) {
     base.mount = {
       selector,
@@ -1210,13 +1211,14 @@ export default function ActionsPage() {
                         const t = e.target.value as ActionType;
                         setType(t);
                         setTemplateId("");
-                        if (t === "modal") setSelector("body");
+                        if (t === "modal" || t === "push") setSelector("body");
                       }}
                     >
                       <option value="modal">モーダル（画面中央ポップアップ）</option>
                       <option value="banner">バナー（画面下フローティングバー）</option>
                       <option value="toast">トースト（画面端の小通知）</option>
                       <option value="launcher">ランチャー（固定ボタン→クリックでモーダル）</option>
+                      <option value="push">プッシュ通知の登録（画面表示なし・確認ダイアログ）</option>
                     </select>
                   </div>
 

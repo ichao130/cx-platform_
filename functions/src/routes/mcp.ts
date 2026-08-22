@@ -142,7 +142,7 @@ const TOOLS = [
       properties: {
         site_id: { type: "string", description: "サイトID" },
         name: { type: "string", description: "アクション名（管理用）" },
-        type: { type: "string", description: "表示形式: modal / banner / toast / launcher", enum: ["modal", "banner", "toast", "launcher"] },
+        type: { type: "string", description: "表示形式: modal / banner / toast / launcher / push", enum: ["modal", "banner", "toast", "launcher", "push"] },
         title: { type: "string", description: "タイトルテキスト" },
         body: { type: "string", description: "本文テキスト" },
         cta_url: { type: "string", description: "ボタンのリンク先URL" },

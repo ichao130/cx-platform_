@@ -499,7 +499,10 @@
       var hostHandle = null;
       var rootForInsert = document.body;
 
-      if (mount && mount.selector && (action.type || "modal") !== "modal") {
+      // modal と push はマウント先を使わず body 直下に置く
+      //   （push は画面を出さずJSだけ動かすテンプレート区分）
+      var _atype = action.type || "modal";
+      if (mount && mount.selector && _atype !== "modal" && _atype !== "push") {
         var target = null;
         try { target = document.querySelector(mount.selector); } catch (e) { target = null; }
         if (!target) {

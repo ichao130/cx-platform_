@@ -1,13 +1,14 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { opsPost } from "../firebase";
 
-type TemplateType = "modal" | "banner" | "toast" | "launcher";
+type TemplateType = "modal" | "banner" | "toast" | "launcher" | "push";
 
 const TEMPLATE_TYPES: { id: TemplateType; label: string }[] = [
   { id: "modal", label: "モーダル" },
   { id: "banner", label: "バナー" },
   { id: "toast", label: "トースト" },
   { id: "launcher", label: "ランチャー" },
+  { id: "push", label: "プッシュ通知" },
 ];
 
 type LibField = { key: string; label?: string; type?: string; default?: string };
@@ -146,7 +147,7 @@ export default function PlatformTemplatesPage() {
   };
 
   const grouped = useMemo(() => {
-    const m: Record<TemplateType, LibItem[]> = { modal: [], banner: [], toast: [], launcher: [] };
+    const m: Record<TemplateType, LibItem[]> = { modal: [], banner: [], toast: [], launcher: [], push: [] };
     for (const it of items) if (m[it.type]) m[it.type].push(it);
     return m;
   }, [items]);

@@ -60,7 +60,7 @@ type TemplateField = { key: string; label?: string; type?: TemplateFieldType; de
 type TemplateDoc = {
   workspaceId: string;
   siteId?: string;
-  type: 'modal' | 'banner' | 'toast' | 'launcher' | 'question';
+  type: 'modal' | 'banner' | 'toast' | 'launcher' | 'question' | 'push';
   name: string;
   html: string;
   css: string;
@@ -72,7 +72,7 @@ type TemplateDoc = {
 type PlatformTpl = {
   id: string;
   name: string;
-  type: 'modal' | 'banner' | 'toast' | 'launcher';
+  type: 'modal' | 'banner' | 'toast' | 'launcher' | 'push';
   html: string;
   css: string;
   js?: string;
@@ -328,6 +328,11 @@ const DEFAULTS: Record<TemplateDoc['type'], { html: string; css: string }> = {
 .cx-btn{display:block;width:100%;border:none;border-radius:10px;padding:9px;font-weight:700;font-size:13px;cursor:pointer;text-decoration:none;text-align:center;background:rgba(255,255,255,.14);color:#fff;box-sizing:border-box;transition:background .15s;}
 .cx-btn:hover{background:rgba(255,255,255,.22);}
 `.trim(),
+  },
+  // プッシュ通知は見た目ではなく動作が本体。画面は出さず、JSで確認ダイアログを出す
+  push: {
+    html: `<div class="cx-push-optin" aria-hidden="true"></div>`,
+    css: `.cx-push-optin{display:none!important;}`,
   },
   question: {
     html: `
@@ -741,10 +746,10 @@ export default function TemplatesPage() {
                   </div>
                 )}
                 <div style={{ display: 'grid', gap: 10 }}>
-                  {(['modal', 'banner', 'toast', 'launcher'] as const).map((ty) => {
+                  {(['modal', 'banner', 'toast', 'launcher', 'push'] as const).map((ty) => {
                     const list = platformTpls.filter((t) => t.type === ty);
                     if (!list.length) return null;
-                    const labels: Record<string, string> = { modal: 'モーダル', banner: 'バナー', toast: 'トースト', launcher: 'ランチャー' };
+                    const labels: Record<string, string> = { modal: 'モーダル', banner: 'バナー', toast: 'トースト', launcher: 'ランチャー', push: 'プッシュ通知' };
                     return (
                       <Fragment key={ty}>
                         <div className="small" style={{ fontWeight: 700, opacity: 0.6, marginTop: 4 }}>{labels[ty]}</div>

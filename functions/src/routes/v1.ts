@@ -6473,9 +6473,9 @@ export function registerV1Routes(app: Express) {
       if (req.method === "OPTIONS") return res.status(204).send("");
       await requireSuperAdmin(req); // 全ワークスペース共通の雛形を書き換えるため最上位権限に限定
       const body = req.body as any;
-      // body: { type: "modal"|"banner"|"toast"|"launcher", html: string, css: string }
+      // body: { type: "modal"|"banner"|"toast"|"launcher"|"push", html: string, css: string }
       const type = String(body.type || "");
-      if (!["modal", "banner", "toast", "launcher"].includes(type)) {
+      if (!["modal", "banner", "toast", "launcher", "push"].includes(type)) {
         return res.status(400).json({ error: "invalid_type" });
       }
       const html = String(body.html || "");
@@ -6551,7 +6551,7 @@ export function registerV1Routes(app: Express) {
       await requireSuperAdmin(req); // 全ワークスペース共通の雛形を書き換えるため最上位権限に限定
       const body = req.body as any;
       const type = String(body.type || "");
-      if (!["modal", "banner", "toast", "launcher"].includes(type)) {
+      if (!["modal", "banner", "toast", "launcher", "push"].includes(type)) {
         return res.status(400).json({ error: "invalid_type" });
       }
       const name = String(body.name || "").trim() || "無題テンプレート";
@@ -6657,7 +6657,7 @@ export function registerV1Routes(app: Express) {
       //   カスタム内容が失われる＋配信の見た目が勝手に変わる。
       const legacySnap = await db.collection("system_config").doc("platform_templates").get();
       const legacyData = legacySnap.exists ? ((legacySnap.data() || {}) as any) : {};
-      for (const type of ["modal", "banner", "toast", "launcher"] as const) {
+      for (const type of ["modal", "banner", "toast", "launcher", "push"] as const) {
         const lv = legacyData[type];
         const lHtml = String(lv?.html || "").trim();
         const lCss = String(lv?.css || "").trim();
@@ -6718,7 +6718,7 @@ export function registerV1Routes(app: Express) {
       }
 
       // 各タイプに既定が1つも無ければプリセットの既定を採用し、レガシーへミラー
-      for (const type of ["modal", "banner", "toast", "launcher"]) {
+      for (const type of ["modal", "banner", "toast", "launcher", "push"]) {
         const hasDefault = await db
           .collection("platform_templates")
           .where("type", "==", type)
