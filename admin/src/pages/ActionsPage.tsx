@@ -271,6 +271,7 @@ function actionTypeLabel(type: ActionType) {
   if (type === "modal") return "モーダル";
   if (type === "banner") return "バナー";
   if (type === "toast") return "トースト";
+  if (type === "push") return "プッシュ通知";
   return "ランチャー";
 }
 

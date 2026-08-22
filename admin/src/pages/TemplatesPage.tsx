@@ -817,7 +817,7 @@ export default function TemplatesPage() {
                       <span className="small" style={{ opacity: 0.5 }}>未設定</span>
                     )}
                   </td>
-                  <td>{r.data.type === 'modal' ? 'モーダル' : r.data.type === 'banner' ? 'バナー' : r.data.type === 'launcher' ? 'ランチャー' : 'トースト'}</td>
+                  <td>{({ modal: 'モーダル', banner: 'バナー', launcher: 'ランチャー', toast: 'トースト', question: '質問接客', push: 'プッシュ通知' } as Record<string, string>)[r.data.type] || r.data.type}</td>
                   <td>{r.data.name}</td>
                   <td>
                     <button className="btn" onClick={() => openEditModal(r)}>編集</button>
@@ -909,6 +909,7 @@ export default function TemplatesPage() {
                       <option value="toast">トースト — 画面右下の小さい通知。邪魔せず伝えたいときに。</option>
                       <option value="launcher">ランチャー — 画面隅に常駐するボタン。クリックでモーダルを開く。</option>
                       <option value="question">質問接客 — 質問カード。選択肢を差し込む位置は data-cx-choices。</option>
+                      <option value="push">プッシュ通知 — 画面表示なし。JSで通知の購読を促します。</option>
                     </select>
                     <div className="small" style={{ marginTop: 6, opacity: 0.72 }}>
                       {type === 'modal' && '💡 画面全体を覆うオーバーレイ型。インパクト大。クーポン・初回訴求・アンケートなどに向いています。'}
@@ -916,6 +917,7 @@ export default function TemplatesPage() {
                       {type === 'toast' && '💡 画面右下にそっと出る小型通知。「クーポンあります」「残り3点」など邪魔にならず伝えたい情報に。'}
                       {type === 'launcher' && '💡 画面隅に常駐するフローティングボタン。差し込み変数: launcher_image_url（ボタン画像）/ cta_text（ボタン文言）。data-cx-launcher-open 属性の要素をクリックするとモーダルが開きます。'}
                       {type === 'question' && '💡 質問接客カード。差し込み変数: title（質問文）/ header_image_url / submit_label。選択肢を出す位置に data-cx-choices、閉じるに data-cx-close、複数選択の送信に data-cx-submit を付けてください。選択肢は [data-cx-choice] でスタイル指定でき、選択時は [data-selected] が付きます。'}
+                      {type === 'push' && '💡 見た目を持たない特殊タイプ。画面には何も表示せず、JSタブに書いた処理だけが動きます。window.mokkeda.push.prepare() で事前判定し、requestPermission() で購読します。Shopifyのようにサイトルートへ /push-sw.js を置けない環境では、SDKが自動で別ウィンドウ方式に切り替えます。※HTMLは空にせず、非表示の要素を1つ残してください（要素が無いとJSが実行されません）。'}
                     </div>
                   </div>
                 </div>
