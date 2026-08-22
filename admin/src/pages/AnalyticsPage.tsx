@@ -568,6 +568,8 @@ export default function AnalyticsPage() {
   const [visitorFilter, setVisitorFilter] = useState<"all" | "purchase" | "scenario_purchase" | "cv" | "new" | "repeat">("all");
   // journeyFilterFrom/To は削除 → 上部の期間指定（effectiveFrom/To）に統一
   const [utmFilter, setUtmFilter] = useState<string>(""); // UTMフィルター（utm_source）
+  const [utmMediumFilter, setUtmMediumFilter] = useState<string>("");     // utm_medium
+  const [utmCampaignFilter, setUtmCampaignFilter] = useState<string>(""); // utm_campaign
   const [couponFilter, setCouponFilter] = useState<string>(""); // クーポンコードフィルター
   const [visitorDisplayLimit, setVisitorDisplayLimit] = useState<number>(100); // 表示件数
 
@@ -735,6 +737,8 @@ export default function AnalyticsPage() {
   useEffect(() => {
     setVisitorFilter("all");
     setUtmFilter("");
+    setUtmMediumFilter("");
+    setUtmCampaignFilter("");
     setCouponFilter("");
     setSelectedVid(null);
   }, [siteId]);
@@ -1677,6 +1681,20 @@ export default function AnalyticsPage() {
     return sources;
   }, [visitorList]);
 
+  // medium / campaign の選択肢。
+  // 上位の絞り込み（source→medium）に連動させ、存在しない組み合わせを選べないようにする。
+  const utmMediumOptions = useMemo(() => {
+    const base = utmFilter ? visitorList.filter((v: any) => v.utmSource === utmFilter) : visitorList;
+    return [...new Set(base.map((v: any) => v.utmMedium).filter(Boolean))].sort() as string[];
+  }, [visitorList, utmFilter]);
+
+  const utmCampaignOptions = useMemo(() => {
+    let base: any[] = visitorList;
+    if (utmFilter) base = base.filter((v: any) => v.utmSource === utmFilter);
+    if (utmMediumFilter) base = base.filter((v: any) => v.utmMedium === utmMediumFilter);
+    return [...new Set(base.map((v: any) => v.utmCampaign).filter(Boolean))].sort() as string[];
+  }, [visitorList, utmFilter, utmMediumFilter]);
+
   // シナリオ帰属購入のvid集合（購入ありかつシナリオに帰属している訪問者）
   const scenarioPurchaseVids = useMemo(() => {
     const vids = new Set<string>();
@@ -1723,12 +1741,14 @@ export default function AnalyticsPage() {
     if (visitorFilter === "repeat") list = list.filter((v) => v.isNew === false);
     if (tagFilter) list = list.filter((v: any) => (visitorTags.get(v.vid)?.tags || []).includes(tagFilter));
     if (utmFilter) list = list.filter((v: any) => v.utmSource === utmFilter);
+    if (utmMediumFilter) list = list.filter((v: any) => v.utmMedium === utmMediumFilter);
+    if (utmCampaignFilter) list = list.filter((v: any) => v.utmCampaign === utmCampaignFilter);
     if (couponFilter) {
       const couponVids = new Set(couponStats.find((c) => c.code === couponFilter)?.vids || []);
       list = list.filter((v) => couponVids.has(v.vid));
     }
     return list.slice(0, visitorDisplayLimit);
-  }, [visitorList, visitorFilter, scenarioPurchaseVids, tagFilter, visitorTags, utmFilter, couponFilter, couponStats, visitorDisplayLimit]);
+  }, [visitorList, visitorFilter, scenarioPurchaseVids, tagFilter, visitorTags, utmFilter, utmMediumFilter, utmCampaignFilter, couponFilter, couponStats, visitorDisplayLimit]);
 
   // ---- 選択中訪問者の全イベントを専用クエリで取得（共有データの上限に依存しない）----
   // 上限付きの journeyLogs(5000)/purchaseLogs(1000) をフィルタすると、その人の購入が
@@ -3228,7 +3248,43 @@ export default function AnalyticsPage() {
                     {utmOptions.map((src) => <option key={src} value={src}>{src}</option>)}
                   </select>
                   {utmFilter && (
-                    <button type="button" onClick={() => setUtmFilter("")} style={{ fontSize: 11, padding: "4px 7px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 6, background: "transparent", cursor: "pointer", opacity: 0.6 }}>✕</button>
+                    <button type="button" onClick={() => { setUtmFilter(""); setUtmMediumFilter(""); setUtmCampaignFilter(""); }} style={{ fontSize: 11, padding: "4px 7px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 6, background: "transparent", cursor: "pointer", opacity: 0.6 }}>✕</button>
+                  )}
+                </div>
+              )}
+
+              {/* UTM medium フィルター */}
+              {utmMediumOptions.length > 0 && (
+                <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+                  <span className="small" style={{ opacity: 0.6, whiteSpace: "nowrap" }}>媒体</span>
+                  <select
+                    value={utmMediumFilter}
+                    onChange={(e) => { setUtmMediumFilter(e.target.value); setUtmCampaignFilter(""); }}
+                    style={{ fontSize: 12, padding: "5px 7px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 7, background: "#fff", cursor: "pointer", maxWidth: 140 }}
+                  >
+                    <option value="">すべて</option>
+                    {utmMediumOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                  {utmMediumFilter && (
+                    <button type="button" onClick={() => { setUtmMediumFilter(""); setUtmCampaignFilter(""); }} style={{ fontSize: 11, padding: "4px 7px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 6, background: "transparent", cursor: "pointer", opacity: 0.6 }}>✕</button>
+                  )}
+                </div>
+              )}
+
+              {/* UTM campaign フィルター */}
+              {utmCampaignOptions.length > 0 && (
+                <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+                  <span className="small" style={{ opacity: 0.6, whiteSpace: "nowrap" }}>キャンペーン</span>
+                  <select
+                    value={utmCampaignFilter}
+                    onChange={(e) => setUtmCampaignFilter(e.target.value)}
+                    style={{ fontSize: 12, padding: "5px 7px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 7, background: "#fff", cursor: "pointer", maxWidth: 160 }}
+                  >
+                    <option value="">すべて</option>
+                    {utmCampaignOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  {utmCampaignFilter && (
+                    <button type="button" onClick={() => setUtmCampaignFilter("")} style={{ fontSize: 11, padding: "4px 7px", border: "1px solid rgba(15,23,42,.14)", borderRadius: 6, background: "transparent", cursor: "pointer", opacity: 0.6 }}>✕</button>
                   )}
                 </div>
               )}
@@ -3262,7 +3318,7 @@ export default function AnalyticsPage() {
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: "auto", flexShrink: 0 }}>
                 <div className="small" style={{ opacity: 0.55, whiteSpace: "nowrap" }}>
                   {filteredVisitorList.length}人表示
-                  {visitorFilter !== "all" || utmFilter ? ` / ${visitorList.length}人中` : ""}
+                  {visitorFilter !== "all" || utmFilter || utmMediumFilter || utmCampaignFilter ? ` / ${visitorList.length}人中` : ""}
                 </div>
                 <select
                   value={visitorDisplayLimit}
@@ -3295,13 +3351,13 @@ export default function AnalyticsPage() {
                           新しい動きから順に表示
                         </div>
                       </div>
-                      {(visitorFilter !== "all" || utmFilter || couponFilter) && (
+                      {(visitorFilter !== "all" || utmFilter || utmMediumFilter || utmCampaignFilter || couponFilter) && (
                         <button
                           type="button"
-                          onClick={() => { setVisitorFilter("all"); setUtmFilter(""); setCouponFilter(""); setSelectedVid(null); }}
+                          onClick={() => { setVisitorFilter("all"); setUtmFilter(""); setUtmMediumFilter(""); setUtmCampaignFilter(""); setCouponFilter(""); setSelectedVid(null); }}
                           style={{ fontSize: 11, padding: "3px 8px", border: "none", borderRadius: 20, background: couponFilter ? "#dcfce7" : "#fde68a", color: couponFilter ? "#15803d" : "#92400e", cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}
                         >
-                          {couponFilter ? `🎟️ ${couponFilter} ×` : utmFilter ? `📡 ${utmFilter} ×` : visitorFilter === "purchase" ? "💰 購入フィルター中 ×" : visitorFilter === "scenario_purchase" ? "🎯 施策経由購入フィルター中 ×" : visitorFilter === "cv" ? "✅ CVフィルター中 ×" : visitorFilter === "new" ? "🆕 新規フィルター中 ×" : "🔁 リピートフィルター中 ×"}
+                          {couponFilter ? `🎟️ ${couponFilter} ×` : (utmFilter || utmMediumFilter || utmCampaignFilter) ? `📡 ${[utmFilter, utmMediumFilter, utmCampaignFilter].filter(Boolean).join(" / ")} ×` : visitorFilter === "purchase" ? "💰 購入フィルター中 ×" : visitorFilter === "scenario_purchase" ? "🎯 施策経由購入フィルター中 ×" : visitorFilter === "cv" ? "✅ CVフィルター中 ×" : visitorFilter === "new" ? "🆕 新規フィルター中 ×" : "🔁 リピートフィルター中 ×"}
                         </button>
                       )}
                     </div>
