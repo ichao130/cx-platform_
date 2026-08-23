@@ -438,7 +438,7 @@
 
   // テンプレートの <script> タグと tpl.js フィールドを実行する
   // innerHTML で挿入した <script> はブラウザが実行しないため、手動で再生成して appendChild する
-  function execTemplateScripts(root, tpl) {
+  function execTemplateScripts(root, tpl, creative) {
     // 1) HTML内に書かれた <script> タグを再実行
     var scripts = root.querySelectorAll("script");
     for (var i = 0; i < scripts.length; i++) {
@@ -450,8 +450,12 @@
     // 2) テンプレートの js フィールドを実行（root変数をクロージャで渡す）
     if (tpl && tpl.js && tpl.js.trim()) {
       var s2 = document.createElement("script");
+      // JS内の {{key}} もHTMLと同じように差し込む。
+      //   これが無いと、JSに書いた {{confirm_text}} 等が文字列のまま実行され、
+      //   プレビュー（置換あり）と本番で挙動がズレる。
+      var jsSrc = creative ? renderTemplate(tpl.js, creative) : tpl.js;
       // $cx_root でテンプレートのルート要素を参照できるようにする
-      s2.textContent = "(function(root){\n" + tpl.js + "\n})(document.currentScript && document.currentScript.parentElement);";
+      s2.textContent = "(function(root){\n" + jsSrc + "\n})(document.currentScript && document.currentScript.parentElement);";
       root.appendChild(s2);
     }
   }
@@ -531,7 +535,7 @@
       else document.body.appendChild(root);
 
       // JS実行（<script>タグ再挿入 + tpl.jsフィールド）
-      execTemplateScripts(root, tpl);
+      execTemplateScripts(root, tpl, creative);
 
       // impression
       postLog(apiBase, {
@@ -1067,7 +1071,7 @@
       root.innerHTML = renderTemplate(tpl.html, creative);
 
       // JS実行（<script>タグ再挿入 + tpl.jsフィールド）
-      execTemplateScripts(root, tpl);
+      execTemplateScripts(root, tpl, creative);
 
       var openBtn = root.querySelector("[data-cx-launcher-open]") || root.firstElementChild;
       if (openBtn) {

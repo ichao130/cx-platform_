@@ -389,7 +389,12 @@ export default function TemplatesPage() {
   const [fields, setFields] = useState<TemplateField[]>([]);
 
   // HTMLから独自 {{key}} を自動検出。宣言済みメタ（fields）とマージして編集行を作る。
-  const detectedKeys = useMemo(() => detectCustomKeys(html), [html]);
+  // HTMLだけでなくJSに書いた {{key}} も追加フィールドとして拾う。
+  // プッシュ通知テンプレートのように、差し込み変数がJS側にしか無いケースがあるため。
+  const detectedKeys = useMemo(
+    () => detectCustomKeys(`${html}\n${js}`),
+    [html, js]
+  );
   const customFields = useMemo<TemplateField[]>(
     () => detectedKeys.map((k) => {
       const meta = fields.find((f) => f.key === k);
@@ -583,7 +588,9 @@ export default function TemplatesPage() {
   // ---- 標準テンプレート（プラットフォーム共通の雛形）から複製して新規作成 ----
   async function openPlatformPicker() {
     setPickerOpen(true);
-    if (platformTpls.length || platformLoading) return;
+    // 運営側でテンプレートを更新した直後でも最新を掴めるよう、開くたびに取得し直す
+    // （以前はキャッシュして再取得しなかったため、古い内容を複製する恐れがあった）
+    if (platformLoading) return;
     setPlatformLoading(true);
     setPlatformError('');
     try {
