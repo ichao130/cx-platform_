@@ -1638,12 +1638,41 @@ export default function AnalyticsPage() {
     });
   }, [dailyTrend, visitorList, statRows, siteId]);
 
+  // ---- 新規/リピート別の売上（サーバー集計）----
+  // ブラウザで logs を読むと取得上限(5000件)に阻まれ、購入者の is_new を拾えず
+  // 「判定不明」だらけになる。上限を上げると読み取りコストと待ち時間が跳ね上がるため、
+  // Firestoreに近いサーバー側で集計して1リクエストで受け取る。
+  const [nrRevenueApi, setNrRevenueApi] = useState<{
+    days: Array<{ day: string; newRevenue: number; repeatRevenue: number; unknownRevenue: number }>;
+    totals: { newRevenue: number; repeatRevenue: number; unknownRevenue: number };
+  } | null>(null);
+
+  useEffect(() => {
+    if (!siteId) { setNrRevenueApi(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await apiPostJson<any>("/v1/stats/new-repeat-revenue", {
+          site_id: siteId,
+          day_from: effectiveFrom.toISOString(),
+          day_to: effectiveTo.toISOString(),
+        });
+        if (!cancelled && r?.ok) setNrRevenueApi({ days: r.days || [], totals: r.totals });
+      } catch (e) {
+        console.error("[new-repeat-revenue] failed:", e);
+        if (!cancelled) setNrRevenueApi(null); // 失敗時はローカル集計にフォールバック
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [siteId, effectiveFrom, effectiveTo]);
+
   // ---- computed: 新規/リピート 別の日別売上 ----
   // 訪問者の isNew（期間内の最初のpageview時点の判定）で購入を振り分ける。
   // 人数グラフと同じ基準にしているので、両者を並べて比較できる。
   // isNew が取れない訪問者（旧ログ・購入のみのvid）は「不明」として区別し、
   // 売上を黙って捨てない。合計が実売上と合わなくなるのを避けるため。
   const newRepeatRevenueTrend = useMemo(() => {
+    // 専用クエリの結果を最優先。無ければ visitorList（5000件上限の影響を受ける）で補完。
     const isNewByVid = new Map<string, boolean>();
     for (const v of visitorList) {
       if (v.isNew === true || v.isNew === false) isNewByVid.set(v.vid, v.isNew);
@@ -1661,8 +1690,15 @@ export default function AnalyticsPage() {
       else if (isNew === false) e.r += rev;
       else e.u += rev;
     }
+    // サーバー集計が取れていればそちらを優先（上限の影響を受けない正確な値）
+    const apiByDay = new Map<string, { n: number; r: number; u: number }>();
+    for (const d of nrRevenueApi?.days || []) {
+      apiByDay.set(d.day, { n: d.newRevenue, r: d.repeatRevenue, u: d.unknownRevenue });
+    }
+    const useApi = !!nrRevenueApi;
+
     return dailyTrend.map((d) => {
-      const e = byDay.get(d.day) || { n: 0, r: 0, u: 0 };
+      const e = (useApi ? apiByDay.get(d.day) : byDay.get(d.day)) || { n: 0, r: 0, u: 0 };
       return {
         ...d,
         newRevenue: Math.round(e.n),
@@ -1670,7 +1706,7 @@ export default function AnalyticsPage() {
         unknownRevenue: Math.round(e.u),
       };
     });
-  }, [dailyTrend, visitorList, purchaseLogs]);
+  }, [dailyTrend, visitorList, purchaseLogs, nrRevenueApi]);
 
   // 期間合計（見出しの内訳表示用）
   const newRepeatRevenueTotal = useMemo(() => {

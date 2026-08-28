@@ -4230,6 +4230,117 @@ export function registerV1Routes(app: Express) {
       return res.status(400).json({ error: "log_failed", message: e?.message || String(e) });
     }
   });
+  /* ============================================================
+     /v1/stats/new-repeat-revenue  ★管理画面専用
+     新規/リピート別の日別売上。
+     ------------------------------------------------------------
+     ブラウザ側で logs を読んで集計すると、取得上限(5000件)に阻まれて
+     購入者の is_new を拾えず「判定不明」だらけになる。かといって
+     上限を上げると読み取りコストと待ち時間が跳ね上がる。
+     → Firestoreに近いサーバー側で集計し、1リクエストで返す。
+     ============================================================ */
+  app.post("/v1/stats/new-repeat-revenue", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      if (req.method === "OPTIONS") return res.status(204).send("");
+      const body = req.body || {};
+      const siteId = String(body.site_id || "").trim();
+      const dayFrom = String(body.day_from || "").trim(); // ISO日時（UTC）
+      const dayTo = String(body.day_to || "").trim();
+      if (!siteId || !dayFrom || !dayTo) {
+        return res.status(400).json({ error: "site_id, day_from, day_to required" });
+      }
+      await requireWorkspaceAccessBySiteId(req, siteId, "dashboard", ["owner", "admin", "member"]);
+
+      const db = adminDb();
+
+      // 1) 期間内の購入（order_idで重複排除）
+      const pSnap = await db.collection("logs")
+        .where("site_id", "==", siteId).where("event", "==", "purchase")
+        .where("createdAt", ">=", dayFrom).where("createdAt", "<=", dayTo)
+        .get();
+      const seenOrder = new Set<string>();
+      const purchases: Array<{ vid: string | null; at: string; rev: number }> = [];
+      pSnap.forEach((d) => {
+        const x = d.data() as any;
+        const oid = x.order_id ? String(x.order_id) : "";
+        if (oid) { if (seenOrder.has(oid)) return; seenOrder.add(oid); }
+        purchases.push({
+          vid: x.vid || null,
+          at: String(x.createdAt || ""),
+          rev: typeof x.revenue === "number" ? x.revenue : 0,
+        });
+      });
+
+      // 2) 購入者vidの「期間内で最初のpageviewの is_new」を引く
+      const vids = [...new Set(purchases.map((p) => p.vid).filter(Boolean))] as string[];
+      const isNewByVid = new Map<string, boolean>();
+      const CHUNK = 10;   // Firestore の in 上限
+      const PARALLEL = 12;
+      const chunks: string[][] = [];
+      for (let i = 0; i < vids.length; i += CHUNK) chunks.push(vids.slice(i, i + CHUNK));
+
+      const earliest = new Map<string, string>(); // vid -> createdAt
+      const runChunk = async (chunk: string[]) => {
+        const snap = await db.collection("logs")
+          .where("site_id", "==", siteId).where("event", "==", "pageview")
+          .where("vid", "in", chunk)
+          .get();
+        snap.forEach((d) => {
+          const x = d.data() as any;
+          if (!x.vid || typeof x.is_new !== "boolean") return;
+          const at = String(x.createdAt || "");
+          if (!at || at < dayFrom || at > dayTo) return;
+          const cur = earliest.get(x.vid);
+          if (!cur || at < cur) { earliest.set(x.vid, at); isNewByVid.set(x.vid, x.is_new); }
+        });
+      };
+      for (let i = 0; i < chunks.length; i += PARALLEL) {
+        await Promise.all(chunks.slice(i, i + PARALLEL).map(runChunk));
+      }
+
+      // 3) 日別（JST）に集計
+      const byDay = new Map<string, { n: number; r: number; u: number }>();
+      let tn = 0, tr = 0, tu = 0;
+      for (const p of purchases) {
+        const day = p.at ? yyyyMmDdJST(new Date(p.at)) : "";
+        if (!day) continue;
+        let e = byDay.get(day);
+        if (!e) { e = { n: 0, r: 0, u: 0 }; byDay.set(day, e); }
+        const isNew = p.vid ? isNewByVid.get(p.vid) : undefined;
+        if (isNew === true) { e.n += p.rev; tn += p.rev; }
+        else if (isNew === false) { e.r += p.rev; tr += p.rev; }
+        else { e.u += p.rev; tu += p.rev; }
+      }
+
+      const days = [...byDay.entries()]
+        .map(([day, e]) => ({
+          day,
+          newRevenue: Math.round(e.n),
+          repeatRevenue: Math.round(e.r),
+          unknownRevenue: Math.round(e.u),
+        }))
+        .sort((a, b) => a.day.localeCompare(b.day));
+
+      return res.json({
+        ok: true,
+        days,
+        totals: { newRevenue: Math.round(tn), repeatRevenue: Math.round(tr), unknownRevenue: Math.round(tu) },
+        meta: { purchases: purchases.length, purchasers: vids.length, judged: isNewByVid.size },
+      });
+    } catch (e: any) {
+      console.error("[/v1/stats/new-repeat-revenue] error:", e);
+      // 認証・権限エラーは 401/403 で返す（既存の /v1/stats/summary と揃える）
+      const msg = String(e?.message || "");
+      const status =
+        msg === "missing_authorization" || msg === "invalid_token" ? 401
+        : msg.includes("forbidden") || msg.includes("denied") || msg.includes("not_allowed") ? 403
+        : 400;
+      return res.status(status).json({ error: msg || "failed" });
+    }
+  });
+  app.options("/v1/stats/new-repeat-revenue", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
   /* -----------------------------
      /v1/stats/summary  ★管理画面専用（ADMIN_ORIGINS）
      - stats_daily を集計してダッシュボード用の数字を返す
