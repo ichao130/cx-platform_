@@ -581,6 +581,7 @@ export default function AnalyticsPage() {
   const [paExcludeNoise, setPaExcludeNoise] = useState<boolean>(true); // カート/決済ページを除外
   const [paSort, setPaSort] = useState<"contact_revenue" | "last_revenue" | "pv" | "cv_rate">("contact_revenue");
   const [paMode, setPaMode] = useState<"total" | "new" | "repeat">("total"); // 合計 / 新規 / リピート
+  const [nrMode, setNrMode] = useState<"count" | "revenue">("count"); // 新規/リピートカード: 人数 or 売上
 
   // ---- 訪問者タグ（ジャーニーの追跡・検索用） ----
   const [visitorTags, setVisitorTags] = useState<Map<string, { tags: string[]; note: string }>>(new Map());
@@ -1637,6 +1638,52 @@ export default function AnalyticsPage() {
     });
   }, [dailyTrend, visitorList, statRows, siteId]);
 
+  // ---- computed: 新規/リピート 別の日別売上 ----
+  // 訪問者の isNew（期間内の最初のpageview時点の判定）で購入を振り分ける。
+  // 人数グラフと同じ基準にしているので、両者を並べて比較できる。
+  // isNew が取れない訪問者（旧ログ・購入のみのvid）は「不明」として区別し、
+  // 売上を黙って捨てない。合計が実売上と合わなくなるのを避けるため。
+  const newRepeatRevenueTrend = useMemo(() => {
+    const isNewByVid = new Map<string, boolean>();
+    for (const v of visitorList) {
+      if (v.isNew === true || v.isNew === false) isNewByVid.set(v.vid, v.isNew);
+    }
+    const byDay = new Map<string, { n: number; r: number; u: number }>();
+    for (const p of purchaseLogs as any[]) {
+      if (!p.vid) continue;
+      const day = utcIsoToJstDay(p.createdAt || "");
+      if (!day) continue;
+      const rev = typeof p.revenue === "number" ? p.revenue : 0;
+      let e = byDay.get(day);
+      if (!e) { e = { n: 0, r: 0, u: 0 }; byDay.set(day, e); }
+      const isNew = isNewByVid.get(p.vid);
+      if (isNew === true) e.n += rev;
+      else if (isNew === false) e.r += rev;
+      else e.u += rev;
+    }
+    return dailyTrend.map((d) => {
+      const e = byDay.get(d.day) || { n: 0, r: 0, u: 0 };
+      return {
+        ...d,
+        newRevenue: Math.round(e.n),
+        repeatRevenue: Math.round(e.r),
+        unknownRevenue: Math.round(e.u),
+      };
+    });
+  }, [dailyTrend, visitorList, purchaseLogs]);
+
+  // 期間合計（見出しの内訳表示用）
+  const newRepeatRevenueTotal = useMemo(() => {
+    return newRepeatRevenueTrend.reduce(
+      (a, d: any) => ({
+        n: a.n + safeNum(d.newRevenue),
+        r: a.r + safeNum(d.repeatRevenue),
+        u: a.u + safeNum(d.unknownRevenue),
+      }),
+      { n: 0, r: 0, u: 0 }
+    );
+  }, [newRepeatRevenueTrend]);
+
   // ---- computed: 訪問頻度分布（sessionCount別バケット） ----
   const visitFrequencyDist = useMemo(() => {
     const buckets = [
@@ -2169,7 +2216,7 @@ export default function AnalyticsPage() {
               <div className="card" style={{ padding: "20px 20px 8px", background: "#fff", marginBottom: 16 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: "#374151" }}>👤 新規 / リピート訪問者</div>
-                  {(() => {
+                  {nrMode === "count" ? (() => {
                     const totalNew = visitorList.filter((v) => v.isNew === true).length;
                     const totalRepeat = visitorList.filter((v) => v.isNew === false).length;
                     const total = totalNew + totalRepeat;
@@ -2179,22 +2226,87 @@ export default function AnalyticsPage() {
                         <span style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>リピート {totalRepeat}人 ({Math.round(totalRepeat / total * 100)}%)</span>
                       </div>
                     ) : <span className="small" style={{ opacity: 0.5 }}>データなし（SDK更新後から計測開始）</span>;
+                  })() : (() => {
+                    const { n, r, u } = newRepeatRevenueTotal;
+                    const total = n + r + u;
+                    if (total <= 0) return <span className="small" style={{ opacity: 0.5 }}>この期間の売上はありません</span>;
+                    const pct = (v: number) => Math.round((v / total) * 100);
+                    return (
+                      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: "#15803d" }}>新規 ¥{n.toLocaleString()} ({pct(n)}%)</span>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>リピート ¥{r.toLocaleString()} ({pct(r)}%)</span>
+                        {u > 0 && (
+                          <span style={{ fontSize: 12, fontWeight: 700, color: "#a16207" }} title="期間内に閲覧ログが無く、新規/リピートを判定できなかった購入です（期間外に初回訪問した方など）">
+                            不明 ¥{u.toLocaleString()} ({pct(u)}%)
+                          </span>
+                        )}
+                      </div>
+                    );
                   })()}
+                  {/* 人数 / 売上 切替 */}
+                  <div style={{ marginLeft: "auto", display: "flex", border: "1px solid rgba(15,23,42,.12)", borderRadius: 7, overflow: "hidden" }}>
+                    {([["count", "人数"], ["revenue", "売上"]] as const).map(([m, label]) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setNrMode(m)}
+                        style={{
+                          padding: "4px 12px", border: "none", fontSize: 12,
+                          fontWeight: nrMode === m ? 700 : 500,
+                          background: nrMode === m ? "#1f6573" : "transparent",
+                          color: nrMode === m ? "#fff" : "inherit", cursor: "pointer",
+                        }}
+                      >{label}</button>
+                    ))}
+                  </div>
                 </div>
                 <ResponsiveContainer width="100%" height={180}>
-                  <BarChart data={newRepeatTrend} margin={{ top: 4, right: 12, left: -16, bottom: 0 }}>
+                  <BarChart
+                    data={nrMode === "count" ? newRepeatTrend : newRepeatRevenueTrend}
+                    margin={{ top: 4, right: 12, left: -16, bottom: 0 }}
+                  >
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,.06)" />
                     <XAxis dataKey="label" tick={{ fontSize: 10, fill: "rgba(15,23,42,.45)" }} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fontSize: 10, fill: "rgba(15,23,42,.45)" }} axisLine={false} tickLine={false} allowDecimals={false} />
+                    <YAxis
+                      tick={{ fontSize: 10, fill: "rgba(15,23,42,.45)" }}
+                      axisLine={false}
+                      tickLine={false}
+                      allowDecimals={false}
+                      width={nrMode === "revenue" ? 56 : undefined}
+                      tickFormatter={nrMode === "revenue"
+                        ? (v: number) => (v >= 10000 ? `${Math.round(v / 10000)}万` : String(v))
+                        : undefined}
+                    />
                     <Tooltip
                       contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid rgba(15,23,42,.1)", boxShadow: "0 4px 12px rgba(0,0,0,.08)" }}
                       labelStyle={{ fontWeight: 700, marginBottom: 4 }}
+                      formatter={nrMode === "revenue"
+                        ? ((v: any, name: any) => [`¥${safeNum(v).toLocaleString()}`, name])
+                        : undefined}
                     />
                     <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
-                    <Bar dataKey="newCount" name="新規" stackId="a" fill="#22c55e" fillOpacity={0.8} radius={[0, 0, 0, 0]} maxBarSize={40} />
-                    <Bar dataKey="repeatCount" name="リピート" stackId="a" fill="#94a3b8" fillOpacity={0.7} radius={[3, 3, 0, 0]} maxBarSize={40} />
+                    {nrMode === "count" ? (
+                      <>
+                        <Bar dataKey="newCount" name="新規" stackId="a" fill="#22c55e" fillOpacity={0.8} radius={[0, 0, 0, 0]} maxBarSize={40} />
+                        <Bar dataKey="repeatCount" name="リピート" stackId="a" fill="#94a3b8" fillOpacity={0.7} radius={[3, 3, 0, 0]} maxBarSize={40} />
+                      </>
+                    ) : (
+                      <>
+                        <Bar dataKey="newRevenue" name="新規の売上" stackId="a" fill="#22c55e" fillOpacity={0.8} maxBarSize={40} />
+                        <Bar dataKey="repeatRevenue" name="リピートの売上" stackId="a" fill="#94a3b8" fillOpacity={0.7} maxBarSize={40} />
+                        {newRepeatRevenueTotal.u > 0 && (
+                          <Bar dataKey="unknownRevenue" name="判定不明" stackId="a" fill="#fbbf24" fillOpacity={0.65} radius={[3, 3, 0, 0]} maxBarSize={40} />
+                        )}
+                      </>
+                    )}
                   </BarChart>
                 </ResponsiveContainer>
+                {nrMode === "revenue" && (
+                  <div className="small" style={{ opacity: 0.6, padding: "0 4px 8px", lineHeight: 1.7 }}>
+                    ※ 購入した方が「期間内の初回訪問時に新規だったか」で振り分けています（人数グラフと同じ基準）。
+                    期間内に閲覧ログが無く判定できない購入は「判定不明」として分けており、合計は実際の売上と一致します。
+                  </div>
+                )}
               </div>
             )}
 
