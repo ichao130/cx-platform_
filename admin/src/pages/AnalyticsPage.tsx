@@ -1274,6 +1274,16 @@ export default function AnalyticsPage() {
   const inPeriodFunnelData = useMemo(() => funnelData, [funnelData]);
 
   // ---- computed: 日別トレンド ----
+  // 集計途中（当日）の点は中抜きの琥珀色にして「まだ確定していない」ことを示す
+  const PartialAwareDot = (color: string) => (props: any) => {
+    const { cx, cy, payload } = props;
+    if (cx == null || cy == null) return null as any;
+    if (payload?.isPartial) {
+      return <circle cx={cx} cy={cy} r={4} fill="#fff" stroke="#f59e0b" strokeWidth={2} />;
+    }
+    return <circle cx={cx} cy={cy} r={3} fill={color} />;
+  };
+
   const dailyTrend = useMemo<TrendPoint[]>(() => {
     // 事前バケット（各ログ・stats を日ごとに1パスで集計）— 日数×件数のO(n^2)を回避
     const pvAgg = new Map<string, { vids: Set<string>; sids: Set<string> }>();
@@ -1328,11 +1338,12 @@ export default function AnalyticsPage() {
       const imp = sa?.imp ?? 0;
       const cv = sa?.cv ?? 0;
       const revenue = revByDay.get(day) || 0;
-      result.push({ day, label, pv, uv, session, imp, cv, revenue });
+      // 当日は集計途中（1日分が揃っていない）。グラフで区別できるよう印を持たせる
+      result.push({ day, label, pv, uv, session, imp, cv, revenue, isPartial: day === todayStr } as any);
       cur.setDate(cur.getDate() + 1);
     }
     return result;
-  }, [pvLogs, statRows, purchaseLogs, effectiveFrom, effectiveTo, siteId]);
+  }, [pvLogs, statRows, purchaseLogs, effectiveFrom, effectiveTo, siteId, todayStr]);
 
   // ---- computed: 最近のセッション ----
   const sessionData = useMemo(() => {
@@ -2182,9 +2193,14 @@ export default function AnalyticsPage() {
 
           {/* ===== 日別トレンド ===== */}
           <div style={{ marginBottom: 32 }}>
-            <div className="h2" style={{ marginBottom: 14 }}>
+            <div className="h2" style={{ marginBottom: 6 }}>
               日別トレンド <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel}）</span>
             </div>
+            {dailyTrend.some((d: any) => d.isPartial) && (
+              <div className="small" style={{ marginBottom: 14, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "6px 12px", display: "inline-block" }}>
+                ⏳ 本日は集計途中です。1日分が揃っていないため他の日より少なく表示されます（グラフでは<b>◯印</b>）。
+              </div>
+            )}
 
             {journeyLoading ? (
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
@@ -2218,9 +2234,9 @@ export default function AnalyticsPage() {
                       <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: "#16a34a" }} axisLine={false} tickLine={false} tickFormatter={(v) => v === 0 ? "0" : `¥${(v >= 1000 ? `${Math.round(v / 1000)}k` : Math.round(v))}`} />
                       <Tooltip content={<DailyTrendTooltip />} />
                       <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
-                      <Area yAxisId="left" type="monotone" dataKey="pv" name="ページビュー" stroke="#2563eb" strokeWidth={2} fill="url(#gradPv)" dot={{ r: 3, fill: "#2563eb", strokeWidth: 0 }} activeDot={{ r: 5 }} />
-                      <Area yAxisId="left" type="monotone" dataKey="session" name="セッション数" stroke="#7c3aed" strokeWidth={2} fill="url(#gradSession)" dot={{ r: 3, fill: "#7c3aed", strokeWidth: 0 }} activeDot={{ r: 5 }} />
-                      <Area yAxisId="left" type="monotone" dataKey="uv" name="ユニーク訪問者" stroke="#0891b2" strokeWidth={2} fill="url(#gradUv)" dot={{ r: 3, fill: "#0891b2", strokeWidth: 0 }} activeDot={{ r: 5 }} />
+                      <Area yAxisId="left" type="monotone" dataKey="pv" name="ページビュー" stroke="#2563eb" strokeWidth={2} fill="url(#gradPv)" dot={PartialAwareDot("#2563eb")} activeDot={{ r: 5 }} />
+                      <Area yAxisId="left" type="monotone" dataKey="session" name="セッション数" stroke="#7c3aed" strokeWidth={2} fill="url(#gradSession)" dot={PartialAwareDot("#7c3aed")} activeDot={{ r: 5 }} />
+                      <Area yAxisId="left" type="monotone" dataKey="uv" name="ユニーク訪問者" stroke="#0891b2" strokeWidth={2} fill="url(#gradUv)" dot={PartialAwareDot("#0891b2")} activeDot={{ r: 5 }} />
                       <Bar yAxisId="right" dataKey="revenue" name="売上" fill="#86efac" fillOpacity={0.6} radius={[3, 3, 0, 0]} maxBarSize={20} />
                     </ComposedChart>
                   </ResponsiveContainer>
