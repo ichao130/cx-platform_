@@ -582,6 +582,9 @@ export default function AnalyticsPage() {
   const [paSort, setPaSort] = useState<"contact_revenue" | "last_revenue" | "pv" | "cv_rate">("contact_revenue");
   const [paMode, setPaMode] = useState<"total" | "new" | "repeat">("total"); // 合計 / 新規 / リピート
   const [nrMode, setNrMode] = useState<"count" | "revenue">("count"); // 新規/リピートカード: 人数 or 売上
+  // 当日は集計途中で必ず低く出るため、既定ではトレンドから外す。
+  // 数値としては正しくても、グラフ上は「急落したように見える」＝誤読を招くため。
+  const [includeToday, setIncludeToday] = useState(false);
 
   // ---- 訪問者タグ（ジャーニーの追跡・検索用） ----
   const [visitorTags, setVisitorTags] = useState<Map<string, { tags: string[]; note: string }>>(new Map());
@@ -1344,6 +1347,13 @@ export default function AnalyticsPage() {
     }
     return result;
   }, [pvLogs, statRows, purchaseLogs, effectiveFrom, effectiveTo, siteId, todayStr]);
+
+  // グラフに渡す系列。当日(集計途中)は既定で除外する。
+  // ※ 期間合計やKPIカードは当日も含めた dailyTrend をそのまま使う（実績としては正しいため）
+  const stripPartial = <T extends { isPartial?: boolean }>(rows: T[]) =>
+    includeToday ? rows : rows.filter((d) => !d.isPartial);
+
+  const dailyTrendChart = useMemo(() => stripPartial(dailyTrend as any[]), [dailyTrend, includeToday]);
 
   // ---- computed: 最近のセッション ----
   const sessionData = useMemo(() => {
@@ -2196,11 +2206,28 @@ export default function AnalyticsPage() {
             <div className="h2" style={{ marginBottom: 6 }}>
               日別トレンド <span className="small" style={{ fontWeight: 400, opacity: 0.6 }}>（{dateRangeLabel}）</span>
             </div>
-            {dailyTrend.some((d: any) => d.isPartial) && (
-              <div className="small" style={{ marginBottom: 14, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "6px 12px", display: "inline-block" }}>
-                ⏳ 本日は集計途中です。1日分が揃っていないため他の日より少なく表示されます（グラフでは<b>◯印</b>）。
-              </div>
-            )}
+            {(() => {
+              const t: any = (dailyTrend as any[]).find((d) => d.isPartial);
+              if (!t) return null;
+              const nowJst = new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit" }).format(new Date());
+              return (
+                <div style={{ marginBottom: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "10px 14px" }}>
+                  <span className="small" style={{ fontWeight: 700, color: "#92400e", whiteSpace: "nowrap" }}>
+                    ⏳ 本日（{t.label}）は集計途中 <span style={{ fontWeight: 400, opacity: 0.8 }}>{nowJst} 時点</span>
+                  </span>
+                  <span className="small" style={{ color: "#92400e", display: "flex", gap: 12, flexWrap: "wrap", fontVariantNumeric: "tabular-nums" }}>
+                    <span>PV <b>{safeNum(t.pv).toLocaleString()}</b></span>
+                    <span>セッション <b>{safeNum(t.session).toLocaleString()}</b></span>
+                    <span>UV <b>{safeNum(t.uv).toLocaleString()}</b></span>
+                    <span>売上 <b>¥{safeNum(t.revenue).toLocaleString()}</b></span>
+                  </span>
+                  <label className="small" style={{ marginLeft: "auto", cursor: "pointer", color: "#92400e", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+                    <input type="checkbox" checked={includeToday} onChange={(e) => setIncludeToday(e.target.checked)} />
+                    グラフにも含める
+                  </label>
+                </div>
+              );
+            })()}
 
             {journeyLoading ? (
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
@@ -2213,7 +2240,7 @@ export default function AnalyticsPage() {
                 <div className="card" style={{ padding: "20px 20px 8px", background: "#fff" }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: "#374151", marginBottom: 16 }}>📈 ページビュー / セッション数 / ユニーク訪問者</div>
                   <ResponsiveContainer width="100%" height={200}>
-                    <ComposedChart data={dailyTrend} margin={{ top: 4, right: 48, left: -16, bottom: 0 }}>
+                    <ComposedChart data={dailyTrendChart} margin={{ top: 4, right: 48, left: -16, bottom: 0 }}>
                       <defs>
                         <linearGradient id="gradPv" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="5%" stopColor="#2563eb" stopOpacity={0.18} />
@@ -2246,7 +2273,7 @@ export default function AnalyticsPage() {
                 <div className="card" style={{ padding: "20px 20px 8px", background: "#fff" }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: "#374151", marginBottom: 16 }}>🔄 施策表示数 / CV数</div>
                   <ResponsiveContainer width="100%" height={200}>
-                    <ComposedChart data={dailyTrend} margin={{ top: 4, right: 12, left: -16, bottom: 0 }}>
+                    <ComposedChart data={dailyTrendChart} margin={{ top: 4, right: 12, left: -16, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,.06)" />
                       <XAxis dataKey="label" tick={{ fontSize: 10, fill: "rgba(15,23,42,.45)" }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fontSize: 10, fill: "rgba(15,23,42,.45)" }} axisLine={false} tickLine={false} />
@@ -2314,7 +2341,7 @@ export default function AnalyticsPage() {
                 </div>
                 <ResponsiveContainer width="100%" height={180}>
                   <BarChart
-                    data={nrMode === "count" ? newRepeatTrend : newRepeatRevenueTrend}
+                    data={stripPartial((nrMode === "count" ? newRepeatTrend : newRepeatRevenueTrend) as any[])}
                     margin={{ top: 4, right: 12, left: -16, bottom: 0 }}
                   >
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,.06)" />
