@@ -388,7 +388,7 @@ function sectionTitle(text: string): string {
 
 export function renderWeeklyReportHtml(
   d: WeeklyReportData,
-  opts?: { dashboardUrl?: string; logoUrl?: string }
+  opts?: { dashboardUrl?: string; logoUrl?: string; ai?: WeeklyAiComment | null }
 ): string {
   const logoSrc = opts?.logoUrl || LOGO_URL;
   const c = d.current, p = d.previous;
@@ -436,9 +436,14 @@ export function renderWeeklyReportHtml(
 <tr><td align="center">
   <table role="presentation" width="600" style="width:600px;max-width:100%;border-collapse:collapse;background:${BRAND.panel};border-radius:16px;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Hiragino Sans','Noto Sans JP',sans-serif;box-shadow:0 2px 10px rgba(20,44,68,.06);">
 
-    <!-- ロゴ（白地に置く。ロゴは濃色文字のため） -->
-    <tr><td style="padding:24px 24px 14px;" align="left">
-      <img src="${logoSrc}" width="168" alt="MOKKEDA" style="display:block;width:168px;max-width:168px;height:auto;border:0;" />
+    <!-- ロゴ（白地に置く。ロゴは濃色文字のため）
+         ★多くのメールクライアントは既定で画像をブロックするため、
+           画像が出なくてもブランドが伝わるようテキストのフォールバックを併記する。
+           alt属性にスタイルを当て、画像非表示時もロゴ風に見えるようにしている。 -->
+    <tr><td style="padding:24px 24px 12px;" align="left">
+      <img src="${logoSrc}" width="168" height="41" alt="MOKKEDA"
+           style="display:block;width:168px;max-width:168px;height:auto;border:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Hiragino Sans',sans-serif;font-size:21px;font-weight:700;color:${BRAND.ink};letter-spacing:.04em;line-height:41px;" />
+      <div style="font-size:10px;color:${BRAND.mark};letter-spacing:.18em;margin-top:5px;">MAKE CX THANKABLE</div>
     </td></tr>
 
     <!-- 見出し帯（ブランドグラデーション） -->
@@ -470,6 +475,33 @@ export function renderWeeklyReportHtml(
         前週（${esc(MD(d.prevPeriod.from))}〜${esc(MD(d.prevPeriod.to))}）との比較
       </div>
     </td></tr>
+
+    <!-- AIコメント（取得できた場合のみ） -->
+    ${opts?.ai ? `
+    <tr><td style="padding:0 24px 20px;">
+      <table role="presentation" width="100%" style="border-collapse:collapse;background:${BRAND.panel2};border-left:3px solid ${BRAND.mark};border-radius:0 12px 12px 0;">
+        <tr><td style="padding:16px 18px;">
+          <div style="font-size:11px;color:${BRAND.mark};font-weight:700;letter-spacing:.08em;margin-bottom:8px;">今週のポイント</div>
+          <div style="font-size:15px;font-weight:700;color:${BRAND.ink};line-height:1.5;margin-bottom:8px;">${esc(opts.ai.headline)}</div>
+          <div style="font-size:13px;color:${BRAND.inkSoft};line-height:1.9;">${esc(opts.ai.summary)}</div>
+          ${opts.ai.observations?.length ? `
+          <div style="margin-top:12px;">
+            ${opts.ai.observations.map((o) => `
+              <div style="font-size:13px;color:${BRAND.ink};line-height:1.8;padding-left:14px;text-indent:-14px;margin-bottom:4px;">
+                <span style="color:${BRAND.mark};">●</span> ${esc(o)}
+              </div>`).join("")}
+          </div>` : ""}
+          ${opts.ai.suggestions?.length ? `
+          <div style="margin-top:12px;padding-top:12px;border-top:1px solid ${BRAND.border};">
+            <div style="font-size:11px;color:${BRAND.inkSoft};font-weight:700;margin-bottom:6px;">確認してみるとよい点</div>
+            ${opts.ai.suggestions.map((v) => `
+              <div style="font-size:13px;color:${BRAND.inkSoft};line-height:1.8;padding-left:14px;text-indent:-14px;margin-bottom:4px;">
+                <span style="color:${BRAND.inkSoft};">—</span> ${esc(v)}
+              </div>`).join("")}
+          </div>` : ""}
+        </td></tr>
+      </table>
+    </td></tr>` : ""}
 
     <!-- 日別PV -->
     <tr><td style="padding:6px 24px 20px;">
@@ -544,7 +576,7 @@ export function renderWeeklyReportHtml(
     <tr><td style="background:${BRAND.panel2};padding:18px 24px;border-top:1px solid ${BRAND.border};">
       <div style="font-size:11px;color:#9fb0c0;line-height:1.8;">
         <span style="color:${BRAND.teal};font-weight:700;">MOKKEDA</span>　Make CX Thankable<br/>
-        このレポートは自動送信されています。集計はすべて日本時間で、確定した1週間分のみを対象としています（集計途中の当日は含みません）。
+        このレポートは自動送信されています。集計はすべて日本時間で、確定した1週間分のみを対象としています（集計途中の当日は含みません）。${opts?.ai ? "<br/>「今週のポイント」は集計結果をもとにAIが作成した要約です。施策の判断は数値とあわせてご確認ください。" : ""}
       </div>
     </td></tr>
   </table>
@@ -556,3 +588,207 @@ export function renderWeeklyReportHtml(
 
 // FieldValue は将来の配信履歴記録で使う（未使用警告回避のため参照しておく）
 export const _unusedFieldValue = FieldValue;
+
+/* ========================= AIコメント ========================= */
+
+/**
+ * AIコメント生成。
+ *
+ * ★設計の前提（ここを緩めると信用を落とす）
+ * - 計算はすべてコード側で済ませ、AIには「文章化」だけをさせる。
+ *   AIに割り算をさせると平気で間違えるため、変化率も事実もこちらで用意する。
+ * - 原因の断定と将来予測を禁止する。レポートはクライアントに届くものなので、
+ *   「バナー変更が効きました」「来週も伸びるでしょう」のような言い切りは
+ *   外れたときにツールの信用を直接削る。
+ * - 母数が小さい指標には言及させない。週34クリックのような数字で
+ *   「クリック率が悪化」と書かれると誤った意思決定を招く。
+ */
+
+export type WeeklyAiComment = {
+  headline: string;        // 一行の見出し
+  summary: string;         // 2〜3文の要約
+  observations: string[];  // 気づき（事実ベース）
+  suggestions: string[];   // 確認・検討の提案（指示ではない）
+};
+
+/** 母数が小さく、増減を語るべきでない指標を洗い出す */
+function lowSampleNotes(d: WeeklyReportData): string[] {
+  const notes: string[] = [];
+  const c = d.current;
+  if (c.purchases < 30) notes.push(`購入件数が${c.purchases}件と少ないため、購入率の増減は誤差の影響を受けやすい`);
+  if (c.clicks < 100) notes.push(`クリックが${c.clicks}件と少ないため、クリック率の増減には言及しない`);
+  if (c.conversions < 30) notes.push(`CVが${c.conversions}件と少ないため、CV関連の増減には言及しない`);
+  if (c.impressions < 500) notes.push(`接客表示が${c.impressions}回と少ないため、施策の効果は論じない`);
+  return notes;
+}
+
+/** 変化率（前週比）。前週0なら null（比較不能） */
+function pctChange(cur: number, prev: number): number | null {
+  if (!prev) return null;
+  return Math.round(((cur - prev) / prev) * 1000) / 10;
+}
+
+/** AIに渡す「事実」。数値はすべてここで確定させる */
+export function buildAiFacts(d: WeeklyReportData) {
+  const c = d.current, p = d.previous;
+  const cvr = c.sessions ? Math.round((c.purchases / c.sessions) * 1000) / 10 : 0;
+  const prevCvr = p.sessions ? Math.round((p.purchases / p.sessions) * 1000) / 10 : 0;
+  const aov = c.purchases ? Math.round(c.revenue / c.purchases) : 0;
+  const prevAov = p.purchases ? Math.round(p.revenue / p.purchases) : 0;
+
+  const metric = (label: string, cur: number, prev: number, unit = "") => ({
+    指標: label, 今週: cur, 前週: prev, 変化率パーセント: pctChange(cur, prev), 単位: unit,
+  });
+
+  return {
+    サイト名: d.siteName,
+    対象期間: `${d.period.from} 〜 ${d.period.to}`,
+    比較対象: `${d.prevPeriod.from} 〜 ${d.prevPeriod.to}`,
+    主要指標: [
+      metric("売上", c.revenue, p.revenue, "円"),
+      metric("購入件数", c.purchases, p.purchases, "件"),
+      metric("平均購入単価", aov, prevAov, "円"),
+      metric("購入率", cvr, prevCvr, "%"),
+      metric("セッション", c.sessions, p.sessions, ""),
+      metric("ユニーク訪問者", c.uv, p.uv, ""),
+      metric("ページビュー", c.pv, p.pv, ""),
+      metric("接客表示", c.impressions, p.impressions, "回"),
+    ],
+    売上の内訳: {
+      新規訪問者: c.newVisitorRevenue,
+      リピート訪問者: c.repeatVisitorRevenue,
+      判定不明: c.unknownVisitorRevenue,
+    },
+    施策別: d.scenarios.map((s) => ({
+      施策名: s.name, 表示: s.impressions, クリック: s.clicks, CV: s.conversions, 売上: s.revenue,
+    })),
+    流入元上位: d.sources.map((s) => ({ 流入元: s.name, セッション: s.sessions })),
+    言及を避けるべき点: lowSampleNotes(d),
+  };
+}
+
+/** AIコメントのシステムプロンプト（制約を明示する） */
+export const AI_COMMENT_SYSTEM_PROMPT = [
+  "あなたはECサイトのアクセス解析レポートを書くアナリストです。日本語で、落ち着いた敬体で書いてください。",
+  "渡されたJSONの数値は確定値です。計算はすでに済んでいるので、自分で割り算や推計をしないでください。",
+  "",
+  "【厳守】",
+  "1. 原因を断定しないこと。『〜が効きました』『〜が原因です』は禁止。",
+  "   因果に触れる場合は『〜の可能性があります』『〜との関連を確認する価値があります』と留保をつける。",
+  "2. 将来の予測をしないこと。『来週は伸びるでしょう』のような記述は禁止。",
+  "3. 『言及を避けるべき点』に挙がった指標の増減には触れないこと。母数が小さく誤差が大きいため。",
+  "4. 煽らないこと。『急務』『危機的』『至急』などの強い語は使わない。",
+  "5. 数値は渡された値をそのまま書くこと。桁区切りのカンマのみ可。",
+  "   『約21万4500円』のような万・千表記や丸めは禁止。『214,515円』と書く。",
+  "   どの指標の数値かを必ず明示すること（売上の変化率と購入率の変化率を取り違えない）。",
+  "",
+  "【書き方】",
+  "- headline: 今週の状況を一行で（25文字程度）。",
+  "- summary: 2〜3文。良い点と気になる点の両方に触れる。",
+  "- observations: 事実ベースの気づきを2〜3個。数値を伴わせる。",
+  "- suggestions: 次に確認・検討するとよいことを1〜2個。指示ではなく提案として書く。",
+].join("\n");
+
+/**
+ * 生成されたコメントを機械的に検証する。
+ *
+ * AIは指示を守らないことがある（実測で「売上25%減少」と書いたが、実際は売上-19%・
+ * 購入率-25%の取り違えが発生した）。レポートはクライアントに届くため、
+ * プロンプトの指示だけに頼らず、コード側で弾く。
+ */
+export function validateAiComment(ai: WeeklyAiComment, facts: ReturnType<typeof buildAiFacts>): string[] {
+  const problems: string[] = [];
+  const all = [ai.headline, ai.summary, ...(ai.observations || []), ...(ai.suggestions || [])].join(" ");
+
+  // ① 事実に存在しない数値を書いていないか（丸めは許さない＝完全一致のみ）
+  const known = new Set<string>();
+  const addNum = (v: unknown) => {
+    const n = Number(v);
+    if (!isFinite(n)) return;
+    known.add(String(n));
+    known.add(Math.abs(n).toString());
+    known.add(Math.round(Math.abs(n)).toString());
+  };
+  facts.主要指標.forEach((m: any) => { addNum(m.今週); addNum(m.前週); addNum(m.変化率パーセント); });
+  Object.values(facts.売上の内訳).forEach(addNum);
+  facts.施策別.forEach((s: any) => { addNum(s.表示); addNum(s.クリック); addNum(s.CV); addNum(s.売上); });
+  facts.流入元上位.forEach((s: any) => addNum(s.セッション));
+
+  const nums = (all.match(/[0-9][0-9,]*(?:\.[0-9]+)?/g) || [])
+    .map((x) => x.replace(/,/g, "").replace(/\.$/, ""))
+    .filter((x) => x.length > 1); // 1桁は日付や箇条書き番号の可能性があるので除外
+  const invented = [...new Set(nums)].filter((n) => !known.has(n) && !known.has(String(Number(n))));
+  if (invented.length) problems.push(`事実に無い数値: ${invented.join(", ")}`);
+
+  // ② 万・千表記（丸めが混入する温床）
+  if (/[0-9]\s*万|[0-9]\s*千/.test(all)) problems.push("万/千表記が使われている（丸め誤差の原因になる）");
+
+  // ③ 煽り・断定・予測。「〜でしょうか」は丁寧表現なので除外する
+  const banned = ["急務", "危機", "至急", "深刻", "間違いなく", "確実に", "必ず増加", "必ず減少"];
+  const hitBanned = banned.filter((w) => all.includes(w));
+  if (/でしょう(?!か)/.test(all)) hitBanned.push("〜でしょう（予測）");
+  if (hitBanned.length) problems.push(`不適切な表現: ${hitBanned.join(", ")}`);
+
+  // ④ 因果の断定
+  const causal = ["が効い", "のおかげ", "が原因で", "により増加", "により減少", "のため増加", "のため減少"];
+  const hitCausal = causal.filter((w) => all.includes(w));
+  if (hitCausal.length) problems.push(`因果を断定: ${hitCausal.join(", ")}`);
+
+  // ⑤ 母数が小さい指標への言及
+  const low: string[] = [];
+  const notes = facts.言及を避けるべき点.join("");
+  if (notes.includes("クリック率") && /クリック率/.test(all)) low.push("クリック率");
+  if (notes.includes("CV") && /(CV率|コンバージョン率)/.test(all)) low.push("CV率");
+  if (low.length) problems.push(`母数が小さい指標に言及: ${low.join(", ")}`);
+
+  return problems;
+}
+
+/**
+ * AIコメントを生成する。検証に通らなければ作り直し、それでもダメなら null を返す。
+ *
+ * null でもレポート自体は送れる設計にしてある（AIは付加価値であって、
+ * 数値レポートの本体ではない）。誤ったコメントを載せるより、無いほうがよい。
+ */
+export async function generateWeeklyAiComment(
+  data: WeeklyReportData,
+  callOpenAIJson: (p: any) => Promise<any>,
+  z: any,
+  maxAttempts = 3
+): Promise<{ comment: WeeklyAiComment | null; attempts: number; lastProblems: string[] }> {
+  const facts = buildAiFacts(data);
+  const schema = z.object({
+    headline: z.string(),
+    summary: z.string(),
+    observations: z.array(z.string()).min(2).max(3),
+    suggestions: z.array(z.string()).min(1).max(2),
+  });
+
+  let lastProblems: string[] = [];
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      // 2回目以降は、前回の違反内容を伝えて直させる
+      const systemPrompt = lastProblems.length
+        ? `${AI_COMMENT_SYSTEM_PROMPT}\n\n【前回の出力には次の問題がありました。必ず修正してください】\n- ${lastProblems.join("\n- ")}`
+        : AI_COMMENT_SYSTEM_PROMPT;
+
+      const out = await callOpenAIJson({
+        model: "gpt-4.1-mini",
+        input: facts,
+        systemPrompt,
+        schema,
+      });
+
+      const problems = validateAiComment(out as WeeklyAiComment, facts);
+      if (!problems.length) return { comment: out as WeeklyAiComment, attempts: attempt, lastProblems: [] };
+
+      console.warn(`[weeklyReport] AIコメント検証NG (${attempt}/${maxAttempts}):`, problems.join(" / "));
+      lastProblems = problems;
+    } catch (e: any) {
+      console.error(`[weeklyReport] AIコメント生成失敗 (${attempt}/${maxAttempts}):`, e?.message || e);
+      lastProblems = [`生成エラー: ${e?.message || e}`];
+    }
+  }
+  // 諦める。コメント無しでレポートを送る
+  return { comment: null, attempts: maxAttempts, lastProblems };
+}
