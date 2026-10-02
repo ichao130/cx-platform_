@@ -43,6 +43,8 @@ async function check(label, p) {
     await setDoc(doc(db, "logs/lA"), { site_id: "siteA", event: "pageview", createdAt: "2026-06-18T00:00:00Z" });
     await setDoc(doc(db, "logs/lB"), { site_id: "siteB", event: "pageview", createdAt: "2026-06-18T00:00:00Z" });
     await setDoc(doc(db, "stats_daily/sA"), { siteId: "siteA", day: "2026-06-18", event: "pageview" });
+    // ops_admins（ドキュメントIDはメールアドレス）
+    await setDoc(doc(db, "ops_admins/ops@example.com"), { email: "ops@example.com" });
     await setDoc(doc(db, "stats_daily/sB"), { siteId: "siteB", day: "2026-06-18", event: "pageview" });
   });
 
@@ -74,6 +76,53 @@ async function check(label, p) {
   await check("actions where siteId==siteB", assertFails(getDocs(query(C("actions"), where("siteId", "==", "siteB")))));
   await check("sites where workspaceId==ws2", assertFails(getDocs(query(C("sites"), where("workspaceId", "==", "ws2")))));
   await check("sites 無フィルタ", assertFails(getDocs(C("sites"))));
+
+  // ── ops_admins: 運営だけが読める（社内スタッフのメール露出を防ぐ）──
+
+  console.log("\n[ops_admins]");
+
+  {
+
+    const superCtx = testEnv.authenticatedContext("superUid", { email: "iwatanabe@branberyheag.com" });
+
+    const opsCtx   = testEnv.authenticatedContext("opsUid",   { email: "ops@example.com" });
+
+    const userCtx  = testEnv.authenticatedContext("userA",    { email: "user@example.com" });
+
+    const anonCtx  = testEnv.unauthenticatedContext();
+
+
+    await check("スーパー管理者は一覧を読める",
+
+      assertSucceeds(getDocs(collection(superCtx.firestore(), "ops_admins"))));
+
+    await check("ops_admins登録者は一覧を読める",
+
+      assertSucceeds(getDocs(collection(opsCtx.firestore(), "ops_admins"))));
+
+    await check("一般ユーザーは読めない",
+
+      assertFails(getDocs(collection(userCtx.firestore(), "ops_admins"))));
+
+    await check("未認証は読めない",
+
+      assertFails(getDocs(collection(anonCtx.firestore(), "ops_admins"))));
+
+
+    await check("スーパー管理者は書ける",
+
+      assertSucceeds(setDoc(doc(superCtx.firestore(), "ops_admins/new@example.com"), { email: "new@example.com" })));
+
+    await check("ops_admins登録者でも書けない（昇格防止）",
+
+      assertFails(setDoc(doc(opsCtx.firestore(), "ops_admins/evil@example.com"), { email: "evil@example.com" })));
+
+    await check("一般ユーザーは自分を追加できない（昇格防止）",
+
+      assertFails(setDoc(doc(userCtx.firestore(), "ops_admins/user@example.com"), { email: "user@example.com" })));
+
+  }
+
 
   await testEnv.cleanup();
   console.log(`\n結果: ${passed} passed / ${failed} failed`);

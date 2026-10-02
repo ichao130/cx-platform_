@@ -30,6 +30,17 @@ import { SkeletonBar, SkeletonCard } from "../components/Skeleton";
 /** 購入ログの取得上限。超えると古い購入が欠けるため、打ち切りをUIで知らせる */
 const PURCHASE_LOG_LIMIT = 5000;
 
+/**
+ * 訪問ログ(journeyLogs)の取得上限。
+ * 直帰率・離脱率・ページ分析・訪問者リストがこれを元に計算されるため、
+ * 上限に達すると「古い日のデータだけ薄くなる」という分かりにくい形で歪む。
+ * 本来はサーバー側集計に移すべきだが、まずは歪んでいることを隠さない。
+ */
+// 5000では直近7日ですら27%しか読めず（実測: 18,283件中5,000件）、
+// 直帰率やページ分析が常に不正確だった。15000なら1週間は全件カバーできる。
+// 実測: 15000件の取得で約3.8秒・約11MB・読み取りコスト約$0.009/表示。
+const JOURNEY_LOG_LIMIT = 15000;
+
 function isoDay(d: Date) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -548,6 +559,8 @@ export default function AnalyticsPage() {
   // CV(コンバージョン)の vid→最終CV時刻。専用クエリで取得し journeyLogs(5000)上限に依存しない
   const [convVids, setConvVids] = useState<Map<string, string>>(new Map());
   const [purchaseTruncated, setPurchaseTruncated] = useState(false);
+  const [journeyTruncated, setJourneyTruncated] = useState(false);
+  const [journeyOldest, setJourneyOldest] = useState("");
   const [purchaseLoading, setPurchaseLoading] = useState(false);
 
   // ---- 比較期間データ ----
@@ -768,10 +781,15 @@ export default function AnalyticsPage() {
         where("createdAt", ">", since),
         where("createdAt", "<=", to),
         orderBy("createdAt", "desc"),
-        limit(5000)
+        limit(JOURNEY_LOG_LIMIT)
       ),
       (snap) => {
-        setJourneyLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        // 上限に達した＝期間の古い側のログが欠けている。
+        // 直帰率・ページ分析・訪問者リストが実態より小さく出るため、画面で知らせる
+        setJourneyTruncated(snap.size >= JOURNEY_LOG_LIMIT);
+        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setJourneyOldest(rows.length ? String(rows[rows.length - 1]?.createdAt || "") : "");
+        setJourneyLogs(rows);
         setJourneyLoading(false);
       },
       () => setJourneyLoading(false)
@@ -2022,6 +2040,19 @@ export default function AnalyticsPage() {
   return (
     <div style={{ padding: "28px 0 48px" }}>
       <WeeklyReportSettings siteId={siteId} open={reportSettingsOpen} onClose={() => setReportSettingsOpen(false)} />
+      {journeyTruncated && (
+        <div
+          className="small"
+          style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 10, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", lineHeight: 1.8 }}
+        >
+          ⚠️ この期間の訪問ログが取得上限（{JOURNEY_LOG_LIMIT.toLocaleString()}件）に達しています。
+          {journeyOldest ? <> 読み込めているのは <b>{String(journeyOldest).slice(0, 10)}</b> 以降の分のみです。</> : null}
+          <br />
+          <b>直帰率・離脱率・ページ別の分析・訪問者リスト</b>は、それより古い日のデータが欠けた状態で計算されています。
+          期間を短くすると正確に表示されます。
+          <span style={{ opacity: 0.85 }}>（PV・UV・セッション・売上・新規/リピートは別集計のため、この影響を受けません）</span>
+        </div>
+      )}
       {purchaseTruncated && (
         <div
           className="small"

@@ -9,6 +9,20 @@ service cloud.firestore {
     }
 
     // workspaces ドキュメントを取得してメンバー確認
+    // ── プラットフォーム管理者 ──
+    // ops_admins はドキュメントIDがメールアドレス。書き込みはスーパー管理者のみなので
+    // 「存在すること」を権限の根拠として信用できる（サーバー側 requirePlatformAdmin と同じ考え方）
+    function superAdminEmail() {
+      return "iwatanabe@branberyheag.com";
+    }
+    function isSuperAdmin() {
+      return isSignedIn() && request.auth.token.email.lower() == superAdminEmail();
+    }
+    function isOpsAdmin() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/ops_admins/$(request.auth.token.email.lower()));
+    }
+
     function isMember(workspaceId) {
       return isSignedIn() &&
         get(/databases/$(database)/documents/workspaces/$(workspaceId))
@@ -169,10 +183,15 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // ── BOオペレーター管理（読み取りは認証済み、書き込みはスーパー管理者のみ）──
+    // ── BOオペレーター管理 ──
+    // 以前は「認証済みなら誰でも読める」状態で、社内スタッフのメールアドレスが
+    // 一般ユーザーに見えていた。権限昇格はできないが不要な露出なので絞った。
+    // 読み取りは運営（スーパー管理者 or ops_admins 本人）のみ。
+    // ※一覧取得(list)が必要なため、ドキュメント単位ではなく呼び出し元で判定する条件にしている。
+    //   運営でないユーザーの list は失敗するが、backyard 側は空配列にフォールバックする。
     match /ops_admins/{email} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn() && request.auth.token.email == "iwatanabe@branberyheag.com";
+      allow read: if isSuperAdmin() || isOpsAdmin();
+      allow write: if isSuperAdmin();
     }
 
     // ── お知らせ（認証済みは読める、書き込みはplatform adminのみ）──
