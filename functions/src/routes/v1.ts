@@ -6978,7 +6978,11 @@ export function registerV1Routes(app: Express) {
         settings: {
           enabled: !!w.enabled,
           recipients: Array.isArray(w.recipients) ? w.recipients : [],
-          withAi: w.withAi !== false, // 既定ON
+          withAi: w.withAi !== false,                                   // 既定ON
+          weekday: Number.isInteger(w.weekday) ? w.weekday : 1,         // 既定: 月曜
+          hour: Number.isInteger(w.hour) ? w.hour : 9,                  // 既定: 9時(JST)
+          lastSentAt: w.lastSentAt || null,
+          lastPeriod: w.lastPeriod || null,
         },
       });
     } catch (e: any) {
@@ -7005,16 +7009,24 @@ export function registerV1Routes(app: Express) {
         return res.status(400).json({ error: "recipients_required", message: "配信をONにするには宛先が必要です。" });
       }
 
+      // 配信タイミング（JST）。曜日 0=日〜6=土、時刻 0〜23
+      const weekday = Number(body.weekday);
+      const hour = Number(body.hour);
+      if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) return res.status(400).json({ error: "invalid_weekday" });
+      if (!Number.isInteger(hour) || hour < 0 || hour > 23) return res.status(400).json({ error: "invalid_hour" });
+
       await adminDb().collection("sites").doc(siteId).set({
         weeklyReport: {
           enabled,
           recipients,
           withAi: body.with_ai !== false,
+          weekday,
+          hour,
           updatedAt: FieldValue.serverTimestamp(),
         },
       }, { merge: true });
 
-      return res.json({ ok: true, settings: { enabled, recipients, withAi: body.with_ai !== false } });
+      return res.json({ ok: true, settings: { enabled, recipients, withAi: body.with_ai !== false, weekday, hour } });
     } catch (e: any) {
       console.error("[/v1/reports/weekly/settings/save] error:", e);
       return res.status(reportErrStatus(e)).json({ error: e?.message });

@@ -569,7 +569,9 @@ export const processScheduledPush = onSchedule(
 export const sendWeeklyReports = onSchedule(
   {
     region: "asia-northeast1",
-    schedule: "0 0 * * 1",      // UTC 月曜 00:00 = JST 月曜 09:00
+    // 毎時実行し、サイトごとに設定された曜日・時刻（JST）に一致するものだけ送る。
+    // 固定cronだと全サイトが同じ時刻に固定されてしまうため。
+    schedule: "0 * * * *",
     timeZone: "UTC",
     timeoutSeconds: 540,
     memory: "512MiB",
@@ -581,16 +583,37 @@ export const sendWeeklyReports = onSchedule(
     const { callOpenAIJson } = await import("./services/openaiJson");
     const { z } = await import("zod");
 
-    const sitesSnap = await db.collection("sites").where("weeklyReport.enabled", "==", true).get();
-    console.log(`[sendWeeklyReports] 対象サイト: ${sitesSnap.size}件`);
+    // 現在のJST曜日・時刻
+    const nowJst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+    const curWeekday = nowJst.getUTCDay();   // 0=日 … 6=土
+    const curHour = nowJst.getUTCHours();
 
-    let sent = 0, failed = 0, skipped = 0;
+    const sitesSnap = await db.collection("sites").where("weeklyReport.enabled", "==", true).get();
+    console.log(`[sendWeeklyReports] JST 曜日=${curWeekday} 時=${curHour} / 有効サイト: ${sitesSnap.size}件`);
+
+    let sent = 0, failed = 0, skipped = 0, notNow = 0;
     for (const doc of sitesSnap.docs) {
       const site = doc.data() as any;
-      const recipients: string[] = Array.isArray(site?.weeklyReport?.recipients) ? site.weeklyReport.recipients : [];
+      const w = site?.weeklyReport || {};
+      const recipients: string[] = Array.isArray(w.recipients) ? w.recipients : [];
       if (!recipients.length) { skipped++; continue; }
 
+      // 配信タイミング（未設定は 月曜9時）
+      const wd = Number.isInteger(w.weekday) ? Number(w.weekday) : 1;
+      const hh = Number.isInteger(w.hour) ? Number(w.hour) : 9;
+      if (wd !== curWeekday || hh !== curHour) { notNow++; continue; }
+
       try {
+        // 同じ週を二重送信しない（関数のリトライや重複起動に備える）
+        const { lastCompleteWeek } = await import("./services/weeklyReport");
+        const wk = lastCompleteWeek();
+        const periodKey = `${wk.from}〜${wk.to}`;
+        if (w.lastPeriod === periodKey) {
+          console.log(`[sendWeeklyReports] ${doc.id} は ${periodKey} を送信済みのためスキップ`);
+          skipped++;
+          continue;
+        }
+
         const { subject, html, data, aiProblems } = await composeWeeklyReportEmail({
           db,
           siteId: doc.id,
@@ -622,7 +645,7 @@ export const sendWeeklyReports = onSchedule(
         console.error(`[sendWeeklyReports] ${doc.id} 失敗:`, e?.message || e);
       }
     }
-    console.log(`[sendWeeklyReports] 完了: 送信${sent}通 / 失敗${failed}サイト / スキップ${skipped}サイト`);
+    console.log(`[sendWeeklyReports] 完了: 送信${sent}通 / 失敗${failed} / スキップ${skipped} / 時刻外${notNow}`);
   }
 );
 

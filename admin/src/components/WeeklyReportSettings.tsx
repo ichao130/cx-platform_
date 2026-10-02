@@ -4,7 +4,13 @@ import React, { useCallback, useEffect, useState } from "react";
 import { apiPostJson } from "../firebase";
 
 type Props = { siteId: string; open: boolean; onClose: () => void };
-type Settings = { enabled: boolean; recipients: string[]; withAi: boolean };
+type Settings = {
+  enabled: boolean; recipients: string[]; withAi: boolean;
+  weekday: number; hour: number;
+  lastSentAt?: string | null; lastPeriod?: string | null;
+};
+
+const WEEKDAYS = ["日", "月", "火", "水", "木", "金", "土"];
 
 export default function WeeklyReportSettings({ siteId, open, onClose }: Props) {
   const [loading, setLoading] = useState(false);
@@ -14,6 +20,9 @@ export default function WeeklyReportSettings({ siteId, open, onClose }: Props) {
   const [enabled, setEnabled] = useState(false);
   const [withAi, setWithAi] = useState(true);
   const [recipientsText, setRecipientsText] = useState("");
+  const [weekday, setWeekday] = useState(1); // 既定: 月曜
+  const [hour, setHour] = useState(9);       // 既定: 9時(JST)
+  const [lastSent, setLastSent] = useState<{ at?: string | null; period?: string | null }>({});
 
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
@@ -28,6 +37,9 @@ export default function WeeklyReportSettings({ siteId, open, onClose }: Props) {
       setEnabled(!!r.settings.enabled);
       setWithAi(r.settings.withAi !== false);
       setRecipientsText((r.settings.recipients || []).join("\n"));
+      setWeekday(Number.isInteger(r.settings.weekday) ? r.settings.weekday : 1);
+      setHour(Number.isInteger(r.settings.hour) ? r.settings.hour : 9);
+      setLastSent({ at: r.settings.lastSentAt, period: r.settings.lastPeriod });
     } catch (e: any) {
       setMsg({ text: e?.message || "設定の取得に失敗しました", ok: false });
     } finally { setLoading(false); }
@@ -43,7 +55,7 @@ export default function WeeklyReportSettings({ siteId, open, onClose }: Props) {
     setSaving(true); setMsg(null);
     try {
       await apiPostJson("/v1/reports/weekly/settings/save", {
-        site_id: siteId, enabled, recipients, with_ai: withAi,
+        site_id: siteId, enabled, recipients, with_ai: withAi, weekday, hour,
       });
       setMsg({ text: "保存しました", ok: true });
     } catch (e: any) {
@@ -52,6 +64,7 @@ export default function WeeklyReportSettings({ siteId, open, onClose }: Props) {
         text: m.startsWith("invalid_email:") ? `メールアドレスの形式が正しくありません: ${m.split(":")[1]}`
           : m === "recipients_required" ? "配信をONにするには宛先が必要です"
           : m === "too_many_recipients" ? "宛先は20件までです"
+          : m === "invalid_weekday" || m === "invalid_hour" ? "配信タイミングの指定が正しくありません"
           : m || "保存に失敗しました",
         ok: false,
       });
@@ -95,7 +108,7 @@ export default function WeeklyReportSettings({ siteId, open, onClose }: Props) {
         <div style={{ padding: "16px 20px", borderBottom: "1px solid rgba(15,23,42,.08)", display: "flex", alignItems: "center" }}>
           <div>
             <div className="h2" style={{ margin: 0 }}>📧 週次レポートのメール配信</div>
-            <div className="small" style={{ opacity: 0.68 }}>毎週月曜の朝9時に、前週（月〜日）の実績をお送りします。</div>
+            <div className="small" style={{ opacity: 0.68 }}>前週（月〜日）の実績を、指定した曜日・時刻にお送りします。</div>
           </div>
           <button className="btn" style={{ marginLeft: "auto" }} onClick={onClose}>✕ 閉じる</button>
         </div>
@@ -107,6 +120,33 @@ export default function WeeklyReportSettings({ siteId, open, onClose }: Props) {
                 <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
                 {" "}毎週このレポートを配信する
               </label>
+
+              <div style={{ height: 16 }} />
+              <div className="h2">配信タイミング</div>
+              <div className="small" style={{ opacity: 0.68, marginBottom: 6 }}>
+                日本時間で、毎週この曜日・時刻にお送りします。
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <span className="small">毎週</span>
+                <select className="input" style={{ width: 90 }} value={weekday} onChange={(e) => setWeekday(Number(e.target.value))}>
+                  {WEEKDAYS.map((w, i) => <option key={i} value={i}>{w}曜日</option>)}
+                </select>
+                <select className="input" style={{ width: 100 }} value={hour} onChange={(e) => setHour(Number(e.target.value))}>
+                  {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{h}:00</option>)}
+                </select>
+                <span className="small" style={{ opacity: 0.7 }}>（日本時間）</span>
+              </div>
+              {weekday !== 1 && (
+                <div className="small" style={{ marginTop: 6, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "6px 10px", lineHeight: 1.7 }}>
+                  集計対象は「先週の月曜〜日曜」で固定です。{WEEKDAYS[weekday]}曜日に受け取る場合、
+                  直近の{weekday === 0 ? "日" : WEEKDAYS[weekday]}曜日までの実績は次回分に含まれます。
+                </div>
+              )}
+              {lastSent.at && (
+                <div className="small" style={{ opacity: 0.6, marginTop: 6 }}>
+                  最終送信: {String(lastSent.at).slice(0, 16).replace("T", " ")}（対象 {lastSent.period}）
+                </div>
+              )}
 
               <div style={{ height: 16 }} />
               <div className="h2">宛先</div>
