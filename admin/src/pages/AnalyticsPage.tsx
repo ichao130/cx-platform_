@@ -27,6 +27,9 @@ import WeeklyReportSettings from "../components/WeeklyReportSettings";
 import { SkeletonBar, SkeletonCard } from "../components/Skeleton";
 
 // ---- helpers ----
+/** 購入ログの取得上限。超えると古い購入が欠けるため、打ち切りをUIで知らせる */
+const PURCHASE_LOG_LIMIT = 5000;
+
 function isoDay(d: Date) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -544,6 +547,7 @@ export default function AnalyticsPage() {
   const [purchaseLogs, setPurchaseLogs] = useState<any[]>([]);
   // CV(コンバージョン)の vid→最終CV時刻。専用クエリで取得し journeyLogs(5000)上限に依存しない
   const [convVids, setConvVids] = useState<Map<string, string>>(new Map());
+  const [purchaseTruncated, setPurchaseTruncated] = useState(false);
   const [purchaseLoading, setPurchaseLoading] = useState(false);
 
   // ---- 比較期間データ ----
@@ -817,9 +821,15 @@ export default function AnalyticsPage() {
         where("site_id", "==", siteId),
         where("event", "==", "purchase"),
         where("createdAt", ">", since),
-        limit(1000)
+        // ★orderBy が無いと「直近1000件」ではなく不定な1000件が返り、
+        //   期間を広げたときに売上が静かに欠ける。必ず新しい順で取る。
+        //   （複合インデックス site_id+event+createdAt DESC は定義済み）
+        orderBy("createdAt", "desc"),
+        limit(PURCHASE_LOG_LIMIT)
       ),
       (snap) => {
+        // 上限に達した＝古い購入が欠けている可能性がある。売上が過少になるため警告する
+        setPurchaseTruncated(snap.size >= PURCHASE_LOG_LIMIT);
         const raw = snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((l) => (l.createdAt || "") <= to);
         // order_id で重複排除（同一注文が複数回ログされてもカウント1回）
         const seen = new Set<string>();
@@ -2012,6 +2022,15 @@ export default function AnalyticsPage() {
   return (
     <div style={{ padding: "28px 0 48px" }}>
       <WeeklyReportSettings siteId={siteId} open={reportSettingsOpen} onClose={() => setReportSettingsOpen(false)} />
+      {purchaseTruncated && (
+        <div
+          className="small"
+          style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 10, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", lineHeight: 1.8 }}
+        >
+          ⚠️ この期間の購入件数が取得上限（{PURCHASE_LOG_LIMIT.toLocaleString()}件）に達しています。
+          古い購入が集計から漏れ、<b>売上が実際より少なく表示されている可能性</b>があります。期間を短くしてご確認ください。
+        </div>
+      )}
       {/* ヘッダー */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
         <div>
