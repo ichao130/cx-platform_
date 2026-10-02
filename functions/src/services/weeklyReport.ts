@@ -792,3 +792,31 @@ export async function generateWeeklyAiComment(
   // 諦める。コメント無しでレポートを送る
   return { comment: null, attempts: maxAttempts, lastProblems };
 }
+
+/**
+ * 週次レポートのメール（件名＋HTML）を組み立てる。
+ * APIのプレビュー／テスト送信と、スケジュール配信の両方から使う共通処理。
+ */
+export async function composeWeeklyReportEmail(args: {
+  db: FirebaseFirestore.Firestore;
+  siteId: string;
+  withAi: boolean;
+  callOpenAIJson?: (p: any) => Promise<any>;
+  z?: any;
+  dashboardUrl?: string;
+}): Promise<{ subject: string; html: string; data: WeeklyReportData; aiProblems: string[] }> {
+  const data = await buildWeeklyReportData(args.db, args.siteId);
+
+  let ai: WeeklyAiComment | null = null;
+  let aiProblems: string[] = [];
+  if (args.withAi && args.callOpenAIJson && args.z) {
+    const r = await generateWeeklyAiComment(data, args.callOpenAIJson, args.z);
+    ai = r.comment;
+    aiProblems = r.lastProblems;
+  }
+
+  const md = (d: string) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`;
+  const subject = `【MOKKEDA】週次レポート ${data.siteName}（${md(data.period.from)}〜${md(data.period.to)}）`;
+  const html = renderWeeklyReportHtml(data, { dashboardUrl: args.dashboardUrl, ai });
+  return { subject, html, data, aiProblems };
+}

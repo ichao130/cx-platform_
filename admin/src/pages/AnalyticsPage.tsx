@@ -23,6 +23,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { db, apiPostJson } from "../firebase";
+import WeeklyReportSettings from "../components/WeeklyReportSettings";
 import { SkeletonBar, SkeletonCard } from "../components/Skeleton";
 
 // ---- helpers ----
@@ -585,6 +586,7 @@ export default function AnalyticsPage() {
   // 当日は集計途中で必ず低く出るため、既定ではトレンドから外す。
   // 数値としては正しくても、グラフ上は「急落したように見える」＝誤読を招くため。
   const [includeToday, setIncludeToday] = useState(false);
+  const [reportSettingsOpen, setReportSettingsOpen] = useState(false);
 
   // ---- 訪問者タグ（ジャーニーの追跡・検索用） ----
   const [visitorTags, setVisitorTags] = useState<Map<string, { tags: string[]; note: string }>>(new Map());
@@ -2009,6 +2011,7 @@ export default function AnalyticsPage() {
 
   return (
     <div style={{ padding: "28px 0 48px" }}>
+      <WeeklyReportSettings siteId={siteId} open={reportSettingsOpen} onClose={() => setReportSettingsOpen(false)} />
       {/* ヘッダー */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
         <div>
@@ -2018,6 +2021,12 @@ export default function AnalyticsPage() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <button
+            className="btn"
+            onClick={() => setReportSettingsOpen(true)}
+            disabled={!siteId}
+            title="週次レポートをメールで受け取る設定"
+          >📧 レポート配信</button>
           {/* サイト選択 */}
           <select
             className="input"

@@ -17,6 +17,7 @@ import { generateCopy3 } from "../services/openaiCopy";
 import { pickVariant } from "../services/experiment";
 import { callOpenAIJson, callOpenAIVisionJson } from "../services/openaiJson";
 import { PLATFORM_TEMPLATE_PRESETS } from "../data/platformTemplatePresets";
+import { composeWeeklyReportEmail } from "../services/weeklyReport";
 import { defineString, defineSecret } from "firebase-functions/params";
 import Stripe from "stripe";
 import { getMisocaAccessToken, getMisocaStatus, sendMisocaInvoicesJob } from "../services/misoca";
@@ -1221,6 +1222,41 @@ function getInviteTemplateAlias(): string {
 function getInviteMessageStream(): string {
   const raw = String(INVITE_MESSAGE_STREAM.value() || "").trim();
   return raw || "outbound";
+}
+
+/**
+ * 汎用のHTMLメール送信（Postmark）。
+ * 招待メールの実装と同じ経路を使うが、本文を自由に渡せるようにしたもの。
+ */
+async function sendHtmlEmail(args: {
+  to: string;
+  subject: string;
+  html: string;
+  from?: string;
+  messageStream?: string;
+}): Promise<void> {
+  const token = String(POSTMARK_SERVER_TOKEN.value() || "").trim();
+  if (!token) throw new Error("missing_postmark_server_token");
+
+  const resp = await fetch("https://api.postmarkapp.com/email", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "X-Postmark-Server-Token": token,
+    },
+    body: JSON.stringify({
+      From: args.from || getInviteFromEmail(),
+      To: args.to,
+      Subject: args.subject,
+      HtmlBody: args.html,
+      MessageStream: args.messageStream || getInviteMessageStream(),
+    }),
+  });
+  const json: any = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    throw new Error(`postmark_send_failed:${resp.status}:${json?.Message || resp.statusText || "unknown"}`);
+  }
 }
 
 async function sendWorkspaceInviteEmail(args: {
@@ -6883,6 +6919,153 @@ export function registerV1Routes(app: Express) {
     }
   });
   app.options("/v1/platform-templates/list", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /* ============================================================
+     週次レポートのメール配信
+     ------------------------------------------------------------
+     設定は sites/{siteId}.weeklyReport に保存する。
+       { enabled, recipients: string[], withAi, updatedAt }
+     実際の送信は index.ts の sendWeeklyReports（毎週月曜 JST 9:00）。
+     ============================================================ */
+
+  const reportErrStatus = (e: any) => {
+    const m = String(e?.message || "");
+    if (m === "missing_authorization" || m === "invalid_token") return 401;
+    if (m.includes("forbidden") || m.includes("denied") || m.includes("not_allowed")) return 403;
+    return 400;
+  };
+
+  /** レポートメールを組み立てる（AIはフラグで切替） */
+  async function buildWeeklyReportEmail(siteId: string, withAi: boolean) {
+    return composeWeeklyReportEmail({
+      db: adminDb(),
+      siteId,
+      withAi,
+      callOpenAIJson,
+      z,
+      dashboardUrl: "https://app.mokkeda.com/analytics",
+    });
+  }
+
+  /** メールアドレスの素朴な検証（表記ゆれを弾きすぎない程度） */
+  function normalizeRecipients(raw: unknown): string[] {
+    const arr = Array.isArray(raw)
+      ? raw
+      : String(raw || "").split(/[\s,、]+/);
+    const out: string[] = [];
+    for (const v of arr) {
+      const e = String(v || "").trim().toLowerCase();
+      if (!e) continue;
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) throw new Error(`invalid_email:${e}`);
+      if (!out.includes(e)) out.push(e);
+    }
+    if (out.length > 20) throw new Error("too_many_recipients");
+    return out;
+  }
+
+  /** POST /v1/reports/weekly/settings/get */
+  app.post("/v1/reports/weekly/settings/get", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      if (req.method === "OPTIONS") return res.status(204).send("");
+      const siteId = String((req.body as any)?.site_id || "").trim();
+      if (!siteId) return res.status(400).json({ error: "site_id required" });
+      await requireWorkspaceAccessBySiteId(req, siteId, "dashboard", ["owner", "admin", "member"]);
+      const snap = await adminDb().collection("sites").doc(siteId).get();
+      const w = ((snap.data() as any)?.weeklyReport || {}) as any;
+      return res.json({
+        ok: true,
+        settings: {
+          enabled: !!w.enabled,
+          recipients: Array.isArray(w.recipients) ? w.recipients : [],
+          withAi: w.withAi !== false, // 既定ON
+        },
+      });
+    } catch (e: any) {
+      console.error("[/v1/reports/weekly/settings/get] error:", e);
+      return res.status(reportErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/reports/weekly/settings/get", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /** POST /v1/reports/weekly/settings/save */
+  app.post("/v1/reports/weekly/settings/save", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      if (req.method === "OPTIONS") return res.status(204).send("");
+      const body = (req.body as any) || {};
+      const siteId = String(body.site_id || "").trim();
+      if (!siteId) return res.status(400).json({ error: "site_id required" });
+      // 設定変更は owner/admin のみ（宛先にメールを送る操作のため）
+      await requireWorkspaceAccessBySiteId(req, siteId, "dashboard", ["owner", "admin"]);
+
+      const recipients = normalizeRecipients(body.recipients);
+      const enabled = !!body.enabled;
+      if (enabled && recipients.length === 0) {
+        return res.status(400).json({ error: "recipients_required", message: "配信をONにするには宛先が必要です。" });
+      }
+
+      await adminDb().collection("sites").doc(siteId).set({
+        weeklyReport: {
+          enabled,
+          recipients,
+          withAi: body.with_ai !== false,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+      }, { merge: true });
+
+      return res.json({ ok: true, settings: { enabled, recipients, withAi: body.with_ai !== false } });
+    } catch (e: any) {
+      console.error("[/v1/reports/weekly/settings/save] error:", e);
+      return res.status(reportErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/reports/weekly/settings/save", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /** POST /v1/reports/weekly/preview — 送信せずHTMLを返す */
+  app.post("/v1/reports/weekly/preview", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      if (req.method === "OPTIONS") return res.status(204).send("");
+      const body = (req.body as any) || {};
+      const siteId = String(body.site_id || "").trim();
+      if (!siteId) return res.status(400).json({ error: "site_id required" });
+      await requireWorkspaceAccessBySiteId(req, siteId, "dashboard", ["owner", "admin", "member"]);
+
+      const { html, aiProblems } = await buildWeeklyReportEmail(siteId, body.with_ai !== false);
+      return res.json({ ok: true, html, aiProblems });
+    } catch (e: any) {
+      console.error("[/v1/reports/weekly/preview] error:", e);
+      return res.status(reportErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/reports/weekly/preview", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
+  /** POST /v1/reports/weekly/send-test — 自分宛にテスト送信 */
+  app.post("/v1/reports/weekly/send-test", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      if (req.method === "OPTIONS") return res.status(204).send("");
+      const body = (req.body as any) || {};
+      const siteId = String(body.site_id || "").trim();
+      if (!siteId) return res.status(400).json({ error: "site_id required" });
+      await requireWorkspaceAccessBySiteId(req, siteId, "dashboard", ["owner", "admin"]);
+
+      const to = normalizeRecipients(body.to);
+      if (!to.length) return res.status(400).json({ error: "to_required" });
+      if (to.length > 3) return res.status(400).json({ error: "too_many_test_recipients" });
+
+      const { html, subject } = await buildWeeklyReportEmail(siteId, body.with_ai !== false);
+      for (const addr of to) {
+        await sendHtmlEmail({ to: addr, subject: `[テスト] ${subject}`, html });
+      }
+      return res.json({ ok: true, sent: to.length });
+    } catch (e: any) {
+      console.error("[/v1/reports/weekly/send-test] error:", e);
+      return res.status(reportErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/reports/weekly/send-test", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
 
   /* ============================================================
      代理店（Agency）

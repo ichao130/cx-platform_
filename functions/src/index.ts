@@ -557,3 +557,96 @@ export const processScheduledPush = onSchedule(
     }
   }
 );
+
+/* ==========================
+ * 週次レポートのメール配信
+ * - 毎週月曜 JST 9:00（= UTC 日曜 0:00）
+ * - 対象は sites/{siteId}.weeklyReport.enabled が true のサイト
+ * - 集計対象は「確定した先週（月〜日）」。集計途中の日は含まない
+ * - 1サイト失敗しても他サイトの配信は続行する
+ * ==========================
+ */
+export const sendWeeklyReports = onSchedule(
+  {
+    region: "asia-northeast1",
+    schedule: "0 0 * * 1",      // UTC 月曜 00:00 = JST 月曜 09:00
+    timeZone: "UTC",
+    timeoutSeconds: 540,
+    memory: "512MiB",
+    secrets: [OPENAI_API_KEY, POSTMARK_SERVER_TOKEN],
+  },
+  async () => {
+    const db = adminDb();
+    const { composeWeeklyReportEmail } = await import("./services/weeklyReport");
+    const { callOpenAIJson } = await import("./services/openaiJson");
+    const { z } = await import("zod");
+
+    const sitesSnap = await db.collection("sites").where("weeklyReport.enabled", "==", true).get();
+    console.log(`[sendWeeklyReports] 対象サイト: ${sitesSnap.size}件`);
+
+    let sent = 0, failed = 0, skipped = 0;
+    for (const doc of sitesSnap.docs) {
+      const site = doc.data() as any;
+      const recipients: string[] = Array.isArray(site?.weeklyReport?.recipients) ? site.weeklyReport.recipients : [];
+      if (!recipients.length) { skipped++; continue; }
+
+      try {
+        const { subject, html, data, aiProblems } = await composeWeeklyReportEmail({
+          db,
+          siteId: doc.id,
+          withAi: site?.weeklyReport?.withAi !== false,
+          callOpenAIJson,
+          z,
+          dashboardUrl: "https://app.mokkeda.com/analytics",
+        });
+        if (aiProblems.length) {
+          // AIコメントは諦めたがレポート自体は送る（誤ったコメントを載せるよりよい）
+          console.warn(`[sendWeeklyReports] ${doc.id} AIコメント省略: ${aiProblems.join(" / ")}`);
+        }
+
+        for (const to of recipients) {
+          await sendReportEmail(to, subject, html);
+        }
+        // 送信履歴（重複送信の調査用）
+        await doc.ref.set({
+          weeklyReport: {
+            lastSentAt: new Date().toISOString(),
+            lastPeriod: `${data.period.from}〜${data.period.to}`,
+          },
+        }, { merge: true });
+        sent += recipients.length;
+        console.log(`[sendWeeklyReports] ${doc.id} → ${recipients.length}件送信`);
+      } catch (e: any) {
+        // 1サイトのエラーで全体を止めない
+        failed++;
+        console.error(`[sendWeeklyReports] ${doc.id} 失敗:`, e?.message || e);
+      }
+    }
+    console.log(`[sendWeeklyReports] 完了: 送信${sent}通 / 失敗${failed}サイト / スキップ${skipped}サイト`);
+  }
+);
+
+/** レポートメール送信（Postmark） */
+async function sendReportEmail(to: string, subject: string, html: string): Promise<void> {
+  const token = String(POSTMARK_SERVER_TOKEN.value() || "").trim();
+  if (!token) throw new Error("missing_postmark_server_token");
+  const resp = await fetch("https://api.postmarkapp.com/email", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "X-Postmark-Server-Token": token,
+    },
+    body: JSON.stringify({
+      From: "no-reply@mokkeda.com",
+      To: to,
+      Subject: subject,
+      HtmlBody: html,
+      MessageStream: "outbound",
+    }),
+  });
+  if (!resp.ok) {
+    const j: any = await resp.json().catch(() => ({}));
+    throw new Error(`postmark_send_failed:${resp.status}:${j?.Message || resp.statusText}`);
+  }
+}
