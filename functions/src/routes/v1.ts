@@ -18,6 +18,7 @@ import { pickVariant } from "../services/experiment";
 import { callOpenAIJson, callOpenAIVisionJson } from "../services/openaiJson";
 import { PLATFORM_TEMPLATE_PRESETS } from "../data/platformTemplatePresets";
 import { composeWeeklyReportEmail } from "../services/weeklyReport";
+import { wrapEmail, mailButton, mailInfoBox, roleLabelJa, formatJstDateTime, MAIL_BRAND, escapeHtml as escMail } from "../services/emailTemplate";
 import { defineString, defineSecret } from "firebase-functions/params";
 import Stripe from "stripe";
 import { getMisocaAccessToken, getMisocaStatus, sendMisocaInvoicesJob } from "../services/misoca";
@@ -1277,25 +1278,44 @@ async function sendWorkspaceInviteEmail(args: {
   const templateAlias = getInviteTemplateAlias();
   const messageStream = getInviteMessageStream();
 
-  const subject = `MOKKEDAへの招待: ${args.workspaceName}`;
+  const subject = `【MOKKEDA】${args.workspaceName} に招待されました`;
+  // 権限コードと有効期限は、そのまま出すと「owner」「2026-10-09T12:34:56.789Z」になって
+  // 受け取った人に伝わらないため、日本語・JST表記に変換する
+  const roleJa = roleLabelJa(args.role);
+  const expiresJa = formatJstDateTime(expiresAtIso) || "送信から7日間";
+
   const textBody = [
     `${args.workspaceName} に招待されました。`,
     "",
-    `権限: ${args.role}`,
-    `有効期限: ${expiresAtIso || "7日以内"}`,
+    `権限: ${roleJa}`,
+    `有効期限: ${expiresJa}`,
     "",
-    "参加する:",
+    "下のURLから参加してください:",
     inviteUrl,
   ].join("\n");
 
-  const htmlBody = `
-    <div style="font-family:Arial,Helvetica,sans-serif;line-height:1.6;color:#111827;">
-      <p><strong>${args.workspaceName}</strong> に招待されました。</p>
-      <p>権限: <strong>${args.role}</strong><br/>有効期限: <strong>${expiresAtIso || "7日以内"}</strong></p>
-      <p><a href="${inviteUrl}" style="display:inline-block;padding:10px 16px;border-radius:8px;background:#111827;color:#ffffff;text-decoration:none;">参加する</a></p>
-      <p style="word-break:break-all;">${inviteUrl}</p>
-    </div>
-  `.trim();
+  const htmlBody = wrapEmail({
+    title: "ワークスペースへの招待",
+    preheader: `${args.workspaceName} に招待されました（有効期限 ${expiresJa}）`,
+    footerNote: "お心当たりのない場合は、このメールを破棄してください。",
+    bodyHtml: `
+      <div style="font-size:15px;color:${MAIL_BRAND.ink};line-height:1.9;">
+        <b>${escMail(args.workspaceName)}</b> に招待されました。
+      </div>
+      <div style="font-size:13px;color:${MAIL_BRAND.inkSoft};line-height:1.9;margin-top:6px;">
+        下のボタンから参加すると、サイトの分析や接客施策の管理ができるようになります。
+      </div>
+      ${mailInfoBox([
+        { label: "ワークスペース", value: args.workspaceName },
+        { label: "あなたの権限", value: roleJa },
+        { label: "有効期限", value: expiresJa },
+      ])}
+      ${mailButton(inviteUrl, "招待を受けて参加する")}
+      <div style="font-size:11px;color:#9fb0c0;line-height:1.8;">
+        ボタンが使えない場合は、次のURLをブラウザに貼り付けてください。<br/>
+        <span style="word-break:break-all;color:${MAIL_BRAND.teal};">${escMail(inviteUrl)}</span>
+      </div>`,
+  });
 
   const endpoint = templateAlias
     ? "https://api.postmarkapp.com/email/withTemplate"
@@ -7443,36 +7463,55 @@ export function registerV1Routes(app: Express) {
       const messageStream = getInviteMessageStream();
       const loginUrl = "https://app.mokkeda.com";
 
-      const subject = "MOKKEDAへようこそ！🎉";
-      const htmlBody = `
-        <div style="font-family:Arial,Helvetica,sans-serif;line-height:1.7;color:#111827;max-width:560px;margin:0 auto;">
-          <div style="background:linear-gradient(135deg,#d1f0ee,#b2e4e1);padding:32px;text-align:center;border-radius:12px 12px 0 0;">
-            <img src="https://cx-platform-v1.web.app/logo_mokkeda_v1.svg" alt="MOKKEDA" style="width:180px;" />
+      const subject = "【MOKKEDA】ご登録ありがとうございます";
+      // 以前はロゴにSVGを指定していたが、GmailもOutlookもSVGを表示できないため
+      // 共通テンプレート（PNGロゴ＋画像ブロック対策）に統一した
+      const htmlBody = wrapEmail({
+        title: "ようこそ MOKKEDA へ",
+        preheader: `${name} さん、${wsName} のワークスペースを作成しました`,
+        bodyHtml: `
+          <div style="font-size:16px;font-weight:700;color:${MAIL_BRAND.ink};line-height:1.7;">
+            ${escMail(name)} さん、ようこそ
           </div>
-          <div style="background:#fff;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
-            <p style="font-size:18px;font-weight:700;margin:0 0 16px;">${name} さん、ようこそ！🎉</p>
-            <p>MOKKEDAへご登録いただきありがとうございます。<br/>
-            <strong>${wsName}</strong> のワークスペースが作成されました。</p>
-            <p>まずはサイトを登録して、シナリオを設定してみましょう。</p>
-            <p style="margin:24px 0;">
-              <a href="${loginUrl}" style="display:inline-block;padding:12px 28px;background:#49b1b8;color:#fff;text-decoration:none;border-radius:8px;font-weight:700;font-size:15px;">
-                管理画面を開く →
-              </a>
-            </p>
-            <hr style="border:none;border-top:1px solid #f3f4f6;margin:24px 0;" />
-            <p style="font-size:12px;color:#9ca3af;">
-              ご不明な点はサポートまでお気軽にご連絡ください。<br/>
-              このメールはMOKKEDAよりお送りしています。
-            </p>
+          <div style="font-size:13px;color:${MAIL_BRAND.inkSoft};line-height:1.9;margin-top:8px;">
+            MOKKEDAへご登録いただきありがとうございます。<br/>
+            <b style="color:${MAIL_BRAND.ink};">${escMail(wsName)}</b> のワークスペースを作成しました。
           </div>
-        </div>
-      `.trim();
+
+          <div style="margin-top:18px;font-size:13px;font-weight:700;color:${MAIL_BRAND.ink};">はじめの3ステップ</div>
+          <table role="presentation" width="100%" style="border-collapse:collapse;background:${MAIL_BRAND.panel2};border-radius:12px;margin-top:8px;">
+            ${[
+              ["1", "サイトを登録する", "計測したいサイトのURLを登録します"],
+              ["2", "タグを設置する", "発行されたタグをサイトに貼ると計測が始まります"],
+              ["3", "接客をつくる", "テンプレートから選んで、配信する条件を決めます"],
+            ].map(([n, t, d]) => `
+              <tr>
+                <td style="padding:12px 10px 12px 14px;width:28px;vertical-align:top;">
+                  <div style="width:22px;height:22px;border-radius:50%;background:${MAIL_BRAND.mark};color:#fff;font-size:12px;font-weight:700;text-align:center;line-height:22px;">${n}</div>
+                </td>
+                <td style="padding:12px 14px 12px 0;">
+                  <div style="font-size:13px;font-weight:700;color:${MAIL_BRAND.ink};">${t}</div>
+                  <div style="font-size:12px;color:${MAIL_BRAND.inkSoft};line-height:1.7;margin-top:2px;">${d}</div>
+                </td>
+              </tr>`).join("")}
+          </table>
+
+          ${mailButton(loginUrl, "管理画面を開く")}
+          <div style="font-size:12px;color:${MAIL_BRAND.inkSoft};line-height:1.8;">
+            ご不明な点はサポートまでお気軽にご連絡ください。
+          </div>`,
+      });
 
       const textBody = [
-        `${name} さん、ようこそ！`,
+        `${name} さん、ようこそ`,
         "",
-        `MOKKEDAへご登録いただきありがとうございます。`,
-        `「${wsName}」のワークスペースが作成されました。`,
+        "MOKKEDAへご登録いただきありがとうございます。",
+        `「${wsName}」のワークスペースを作成しました。`,
+        "",
+        "はじめの3ステップ:",
+        "  1. サイトを登録する",
+        "  2. タグを設置する",
+        "  3. 接客をつくる",
         "",
         `管理画面: ${loginUrl}`,
       ].join("\n");
