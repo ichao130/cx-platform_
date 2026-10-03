@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
+  getDocs,
   limit,
   onSnapshot,
   orderBy,
@@ -27,7 +28,8 @@ import WeeklyReportSettings from "../components/WeeklyReportSettings";
 import { SkeletonBar, SkeletonCard } from "../components/Skeleton";
 
 // ---- helpers ----
-/** 購入ログの取得上限。超えると古い購入が欠けるため、打ち切りをUIで知らせる */
+/** 購入ログの取得上限。超えると古い購入が欠けるため、打ち切りをUIで知らせる。
+ *  （Firestoreの limit 上限は10,000なのでそれ以下にすること） */
 const PURCHASE_LOG_LIMIT = 5000;
 
 /**
@@ -36,11 +38,12 @@ const PURCHASE_LOG_LIMIT = 5000;
  * 上限に達すると「古い日のデータだけ薄くなる」という分かりにくい形で歪む。
  * 本来はサーバー側集計に移すべきだが、まずは歪んでいることを隠さない。
  */
-// 5000では直近7日ですら27%しか読めず（実測: 18,295件中5,000件）、
-// 直帰率やページ分析が常に不正確だった。
-// 20000にすると直近7日を全件カバーできる（実測: 18,295件を4.3秒・約$0.011で取得）。
-// ただし月単位では再び足りなくなるため、その場合は警告を出して歪みを隠さない。
-const JOURNEY_LOG_LIMIT = 20000;
+// ★Firestoreの limit は最大10,000。これを超える値を指定すると
+//   "Limit value in the structured query is over the maximum value of 10000"
+//   でクエリ自体が失敗する（20000を指定して全件0になる事故を起こした）。
+//   5000では直近7日ですら27%しか読めなかったため、上限いっぱいの10000にする。
+//   足りない期間は警告を出して歪みを隠さない。
+const JOURNEY_LOG_LIMIT = 10000;
 
 function isoDay(d: Date) {
   const y = d.getFullYear();
@@ -562,6 +565,7 @@ export default function AnalyticsPage() {
   const [purchaseTruncated, setPurchaseTruncated] = useState(false);
   const [journeyTruncated, setJourneyTruncated] = useState(false);
   const [journeyOldest, setJourneyOldest] = useState("");
+  const [journeyError, setJourneyError] = useState("");
   const [purchaseLoading, setPurchaseLoading] = useState(false);
 
   // ---- 比較期間データ ----
@@ -767,35 +771,52 @@ export default function AnalyticsPage() {
     setSelectedVid(null);
   }, [siteId]);
 
-  // ---- 訪問者ジャーニー用ログ（リアルタイム: onSnapshot） ----
+  // ---- 訪問者ジャーニー用ログ（一度だけ取得: getDocs） ----
+  // ★以前は onSnapshot（リアルタイム監視）だったが、上限を20,000件に上げた結果
+  //   16MB級のリスナーになり、取得に失敗してPVが0件になる事故が起きた。
+  //   分析画面にリアルタイム性は不要なので、一度だけ取得する方式にした。
+  //   （「最近のセッション」は別クエリ(limit 50)でリアルタイムのまま）
   useEffect(() => {
     setJourneyLogs([]);
+    setJourneyError("");
     if (!siteId) { return; }
     setJourneyLoading(true);
 
     const since = effectiveFrom.toISOString();
     const to    = effectiveTo.toISOString();
-    const unsub = onSnapshot(
-      query(
-        collection(db, "logs"),
-        where("site_id", "==", siteId),
-        where("createdAt", ">", since),
-        where("createdAt", "<=", to),
-        orderBy("createdAt", "desc"),
-        limit(JOURNEY_LOG_LIMIT)
-      ),
-      (snap) => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const snap = await getDocs(query(
+          collection(db, "logs"),
+          where("site_id", "==", siteId),
+          where("createdAt", ">", since),
+          where("createdAt", "<=", to),
+          orderBy("createdAt", "desc"),
+          limit(JOURNEY_LOG_LIMIT)
+        ));
+        if (cancelled) return;
         // 上限に達した＝期間の古い側のログが欠けている。
         // 直帰率・ページ分析・訪問者リストが実態より小さく出るため、画面で知らせる
         setJourneyTruncated(snap.size >= JOURNEY_LOG_LIMIT);
         const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         setJourneyOldest(rows.length ? String(rows[rows.length - 1]?.createdAt || "") : "");
         setJourneyLogs(rows);
-        setJourneyLoading(false);
-      },
-      () => setJourneyLoading(false)
-    );
-    return unsub;
+      } catch (e: any) {
+        // ★以前はエラーを握りつぶしており、失敗してもPV=0と表示されるだけで
+        //   原因が分からなかった。必ず残す＋画面にも出す。
+        console.error("[journeyLogs] 取得失敗:", e);
+        if (!cancelled) {
+          setJourneyError(e?.message || "訪問ログの取得に失敗しました");
+          setJourneyLogs([]);
+        }
+      } finally {
+        if (!cancelled) setJourneyLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
   }, [siteId, effectiveFrom, effectiveTo]);
 
   // ---- CV(コンバージョン)の vid を専用クエリで取得（CVフィルターを上限から外す）----
@@ -2041,6 +2062,16 @@ export default function AnalyticsPage() {
   return (
     <div style={{ padding: "28px 0 48px" }}>
       <WeeklyReportSettings siteId={siteId} open={reportSettingsOpen} onClose={() => setReportSettingsOpen(false)} />
+      {journeyError && (
+        <div
+          className="small"
+          style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 10, background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", lineHeight: 1.8 }}
+        >
+          ⚠️ 訪問ログの取得に失敗しました。<b>PV・流入元・ページ分析・訪問者リストが0件で表示されています</b>
+          （購入・売上は別集計のため正しく表示されています）。期間を短くすると改善する場合があります。
+          <br /><span style={{ opacity: 0.8, fontSize: 11 }}>{journeyError}</span>
+        </div>
+      )}
       {journeyTruncated && (
         <div
           className="small"

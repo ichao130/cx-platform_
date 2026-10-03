@@ -4630,6 +4630,8 @@ export function registerV1Routes(app: Express) {
           .where("event", "==", "purchase")
           .where("createdAt", "<=", toIso)
           .orderBy("createdAt", "asc")
+          // ※Admin SDKには limit 10000 の制約が無い（クライアントSDKのみ）。
+          //   ここはサーバー実行なので20000でよい。
           .limit(20000)
           .get();
         for (const d of pSnap.docs) {
