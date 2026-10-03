@@ -673,3 +673,46 @@ async function sendReportEmail(to: string, subject: string, html: string): Promi
     throw new Error(`postmark_send_failed:${resp.status}:${j?.Message || resp.statusText}`);
   }
 }
+
+/* ==========================
+ * pageview集計の日次ロールアップ
+ * - 毎日 JST 4:00（UTC 19:00）に前日分を集計して pv_daily に保存
+ * - 画面はログを直接読まず、この日次ドキュメントを合算する
+ *   （American Needleは30日で98,000件あり、毎回走査すると37秒かかるため）
+ * ==========================
+ */
+export const rollupPvDailyAll = onSchedule(
+  {
+    region: "asia-northeast1",
+    schedule: "0 19 * * *",   // UTC 19:00 = JST 翌4:00
+    timeZone: "UTC",
+    timeoutSeconds: 540,
+    memory: "1GiB",
+  },
+  async () => {
+    const db = adminDb();
+    const { rollupPvDaily } = await import("./services/pvAggregates");
+
+    // 前日(JST)
+    const jst = new Date(Date.now() + 9 * 3600 * 1000);
+    jst.setUTCDate(jst.getUTCDate() - 1);
+    const p = new Intl.DateTimeFormat("en-CA", { timeZone: "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(jst);
+    const g = (t: string) => p.find((x) => x.type === t)!.value;
+    const day = `${g("year")}-${g("month")}-${g("day")}`;
+
+    const sites = await db.collection("sites").get();
+    let ok = 0, failed = 0;
+    for (const doc of sites.docs) {
+      if ((doc.data() as any)?.status === "deleted") continue;
+      try {
+        const r = await rollupPvDaily(db, doc.id, day);
+        if (r.pv > 0) ok++;
+      } catch (e: any) {
+        // 1サイト失敗しても他は続行する
+        failed++;
+        console.error(`[rollupPvDailyAll] ${doc.id} (${day}) 失敗:`, e?.message || e);
+      }
+    }
+    console.log(`[rollupPvDailyAll] ${day} 完了: 集計${ok}サイト / 失敗${failed}`);
+  }
+);

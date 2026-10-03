@@ -6942,6 +6942,39 @@ export function registerV1Routes(app: Express) {
   });
   app.options("/v1/platform-templates/list", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
 
+  /** POST /v1/stats/pv-aggregates — PV系の集計（日次ロールアップを合算） */
+  app.post("/v1/stats/pv-aggregates", async (req, res) => {
+    try {
+      corsByAdminOrigins(req, res);
+      if (req.method === "OPTIONS") return res.status(204).send("");
+      const body = (req.body as any) || {};
+      const siteId = String(body.site_id || "").trim();
+      const dayFrom = String(body.day_from || "").trim();  // "YYYY-MM-DD" (JST)
+      const dayTo = String(body.day_to || "").trim();
+      if (!siteId || !dayFrom || !dayTo) return res.status(400).json({ error: "site_id, day_from, day_to required" });
+      await requireWorkspaceAccessBySiteId(req, siteId, "dashboard", ["owner", "admin", "member"]);
+
+      const { readPvAggregatesFromDaily, rollupPvDaily } = await import("../services/pvAggregates");
+      let agg = await readPvAggregatesFromDaily(adminDb(), siteId, dayFrom, dayTo);
+
+      // 未集計の日があれば、その場で集計して埋める（当日分やロールアップ前の日）。
+      // 走査が重いので最大3日までに留め、それ以上は未集計として画面に知らせる。
+      if (agg.missingDays.length) {
+        const fill = agg.missingDays.slice(-3); // 新しい側から
+        for (const d of fill) {
+          try { await rollupPvDaily(adminDb(), siteId, d); } catch (e) { /* 失敗しても他を返す */ }
+        }
+        agg = await readPvAggregatesFromDaily(adminDb(), siteId, dayFrom, dayTo);
+      }
+
+      return res.json({ ok: true, ...agg });
+    } catch (e: any) {
+      console.error("[/v1/stats/pv-aggregates] error:", e);
+      return res.status(reportErrStatus(e)).json({ error: e?.message });
+    }
+  });
+  app.options("/v1/stats/pv-aggregates", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+
   /* ============================================================
      週次レポートのメール配信
      ------------------------------------------------------------
