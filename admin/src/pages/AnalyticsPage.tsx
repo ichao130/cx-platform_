@@ -3,6 +3,7 @@ import {
   collection,
   getDocs,
   limit,
+  startAfter,
   onSnapshot,
   orderBy,
   query,
@@ -38,12 +39,14 @@ const PURCHASE_LOG_LIMIT = 5000;
  * 上限に達すると「古い日のデータだけ薄くなる」という分かりにくい形で歪む。
  * 本来はサーバー側集計に移すべきだが、まずは歪んでいることを隠さない。
  */
-// ★Firestoreの limit は最大10,000。これを超える値を指定すると
+// ★Firestoreの limit は1クエリあたり最大10,000。超えると
 //   "Limit value in the structured query is over the maximum value of 10000"
 //   でクエリ自体が失敗する（20000を指定して全件0になる事故を起こした）。
-//   5000では直近7日ですら27%しか読めなかったため、上限いっぱいの10000にする。
-//   足りない期間は警告を出して歪みを隠さない。
-const JOURNEY_LOG_LIMIT = 10000;
+//   ただし制約は1クエリ単位なので、startAfter で続きを取れば上限を越えられる。
+const JOURNEY_PAGE_SIZE = 10000;
+// 総取得上限。これを超える期間は読み込み時間とコストが現実的でないため打ち切り、
+// 警告を出して歪みを隠さない（1件あたり約0.8KB・読み取り$0.06/10万件）。
+const JOURNEY_LOG_LIMIT = 50000;
 
 function isoDay(d: Date) {
   const y = d.getFullYear();
@@ -566,6 +569,7 @@ export default function AnalyticsPage() {
   const [journeyTruncated, setJourneyTruncated] = useState(false);
   const [journeyOldest, setJourneyOldest] = useState("");
   const [journeyError, setJourneyError] = useState("");
+  const [journeyProgress, setJourneyProgress] = useState(0);
   const [purchaseLoading, setPurchaseLoading] = useState(false);
 
   // ---- 比較期間データ ----
@@ -779,6 +783,7 @@ export default function AnalyticsPage() {
   useEffect(() => {
     setJourneyLogs([]);
     setJourneyError("");
+    setJourneyProgress(0);
     if (!siteId) { return; }
     setJourneyLoading(true);
 
@@ -788,19 +793,33 @@ export default function AnalyticsPage() {
 
     (async () => {
       try {
-        const snap = await getDocs(query(
-          collection(db, "logs"),
-          where("site_id", "==", siteId),
-          where("createdAt", ">", since),
-          where("createdAt", "<=", to),
-          orderBy("createdAt", "desc"),
-          limit(JOURNEY_LOG_LIMIT)
-        ));
+        // 1クエリ10,000件の制約を、カーソル(startAfter)で分割取得して越える
+        const rows: any[] = [];
+        let cursor: any = null;
+        let reachedCap = false;
+        for (;;) {
+          const base = [
+            collection(db, "logs"),
+            where("site_id", "==", siteId),
+            where("createdAt", ">", since),
+            where("createdAt", "<=", to),
+            orderBy("createdAt", "desc"),
+          ] as const;
+          const q = cursor
+            ? query(...base, startAfter(cursor), limit(JOURNEY_PAGE_SIZE))
+            : query(...base, limit(JOURNEY_PAGE_SIZE));
+          const snap = await getDocs(q);
+          if (cancelled) return;
+          snap.docs.forEach((d) => rows.push({ id: d.id, ...d.data() }));
+          setJourneyProgress(rows.length);
+
+          if (snap.size < JOURNEY_PAGE_SIZE) break;          // 最後のページまで到達
+          if (rows.length >= JOURNEY_LOG_LIMIT) { reachedCap = true; break; }
+          cursor = snap.docs[snap.docs.length - 1];
+        }
         if (cancelled) return;
-        // 上限に達した＝期間の古い側のログが欠けている。
-        // 直帰率・ページ分析・訪問者リストが実態より小さく出るため、画面で知らせる
-        setJourneyTruncated(snap.size >= JOURNEY_LOG_LIMIT);
-        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        // 総上限に達した場合のみ「欠けている」。通常は全件取れている
+        setJourneyTruncated(reachedCap);
         setJourneyOldest(rows.length ? String(rows[rows.length - 1]?.createdAt || "") : "");
         setJourneyLogs(rows);
       } catch (e: any) {
@@ -2062,6 +2081,11 @@ export default function AnalyticsPage() {
   return (
     <div style={{ padding: "28px 0 48px" }}>
       <WeeklyReportSettings siteId={siteId} open={reportSettingsOpen} onClose={() => setReportSettingsOpen(false)} />
+      {journeyLoading && journeyProgress > 0 && (
+        <div className="small" style={{ marginBottom: 16, padding: "8px 14px", borderRadius: 10, background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1d4ed8" }}>
+          訪問ログを読み込み中… {journeyProgress.toLocaleString()} 件
+        </div>
+      )}
       {journeyError && (
         <div
           className="small"
@@ -2077,7 +2101,7 @@ export default function AnalyticsPage() {
           className="small"
           style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 10, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", lineHeight: 1.8 }}
         >
-          ⚠️ この期間の訪問ログが取得上限（{JOURNEY_LOG_LIMIT.toLocaleString()}件）に達しています。
+          ⚠️ この期間の訪問ログが上限（{JOURNEY_LOG_LIMIT.toLocaleString()}件）に達しました。
           {journeyOldest ? <> 読み込めているのは <b>{String(journeyOldest).slice(0, 10)}</b> 以降の分のみです。</> : null}
           <br />
           <b>直帰率・離脱率・ページ別の分析・訪問者リスト</b>は、それより古い日のデータが欠けた状態で計算されています。
