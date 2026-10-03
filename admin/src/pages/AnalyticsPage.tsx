@@ -1262,8 +1262,41 @@ export default function AnalyticsPage() {
       .slice(0, 8);
   }, [pvLogs]);
 
+  // ---- PV系集計（サーバーの日次ロールアップ）----
+  // ログをブラウザで直読みすると American Needle は30日で98,000件・37秒かかる。
+  // サーバーが日次で集計した結果を読む（30日でも1秒程度）。
+  // 取得できなければ従来のログ集計にフォールバックするので、画面が空になることはない。
+  const [serverPv, setServerPv] = useState<any | null>(null);
+  const [serverPvLoading, setServerPvLoading] = useState(false);
+
+  useEffect(() => {
+    if (!siteId) { setServerPv(null); return; }
+    let cancelled = false;
+    setServerPvLoading(true);
+    (async () => {
+      try {
+        const r = await apiPostJson<any>("/v1/stats/pv-aggregates", {
+          site_id: siteId,
+          day_from: isoDay(effectiveFrom),
+          day_to: isoDay(effectiveTo),
+        });
+        if (!cancelled && r?.ok) setServerPv(r);
+      } catch (e) {
+        console.error("[pv-aggregates] 取得失敗:", e);
+        if (!cancelled) setServerPv(null);
+      } finally {
+        if (!cancelled) setServerPvLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [siteId, effectiveFrom, effectiveTo]);
+
   // ---- computed: ページ別PV ----
   const pageData = useMemo(() => {
+    // サーバー集計を優先（ログ上限の影響を受けない）
+    if (serverPv?.pages?.length) {
+      return serverPv.pages.slice(0, 10).map((p: any) => ({ path: p.path, count: p.pv }));
+    }
     const map = new Map<string, number>();
     for (const l of pvLogs) {
       const p = l.path || "/";
@@ -1273,7 +1306,7 @@ export default function AnalyticsPage() {
       .map(([path, count]) => ({ path, count }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 10);
-  }, [pvLogs]);
+  }, [pvLogs, serverPv]);
 
   const pageMax = useMemo(() => Math.max(...pageData.map((r) => r.count), 1), [pageData]);
 
@@ -1281,6 +1314,18 @@ export default function AnalyticsPage() {
   // 直帰率 = 1ページだけ見て離脱したセッション / 全セッション
   // ページ別離脱率 = そのページで離脱したセッション数 / そのページのPV数
   const exitStats = useMemo(() => {
+    // サーバー集計を優先（ログ上限の影響を受けない）
+    if (serverPv?.totals && serverPv?.pages?.length) {
+      return {
+        bounceRate: serverPv.totals.bounceRate,
+        totalSessions: serverPv.totals.sessions,
+        bounces: Math.round((serverPv.totals.bounceRate / 100) * serverPv.totals.sessions),
+        exitRates: serverPv.pages
+          .filter((p: any) => p.pv > 0)
+          .map((p: any) => ({ path: p.path, pv: p.pv, exits: p.exits, rate: p.exitRate }))
+          .slice(0, 10),
+      };
+    }
     const sessions = new Map<string, string[]>();
     const pvByPage = new Map<string, number>();
     const sorted = [...pvLogs]
@@ -1312,7 +1357,7 @@ export default function AnalyticsPage() {
       .sort((a, b) => b.exits - a.exits)
       .slice(0, 10);
     return { bounceRate, totalSessions, bounces, exitRates };
-  }, [pvLogs]);
+  }, [pvLogs, serverPv]);
 
   // ---- computed: シナリオファネル ----
   const funnelData = useMemo(() => {
@@ -1572,9 +1617,14 @@ export default function AnalyticsPage() {
       return "直接流入";
     };
     const sessionMap = new Map<string, number>();
-    for (const l of pvLogs) {
-      const src = resolveSource(l.utm_source, l.ref, l.referrer_app);
-      sessionMap.set(src, (sessionMap.get(src) || 0) + 1);
+    // サーバー集計を優先（ログ上限の影響を受けない）。無ければログから
+    if (serverPv?.sources?.length) {
+      for (const sv of serverPv.sources) sessionMap.set(String(sv.name), sv.pv || sv.sessions || 0);
+    } else {
+      for (const l of pvLogs) {
+        const src = resolveSource(l.utm_source, l.ref, l.referrer_app);
+        sessionMap.set(src, (sessionMap.get(src) || 0) + 1);
+      }
     }
     // 訪問者の流入元: utm_source優先、なければ最初のpageviewの参照元、なければアプリ内判定
     const vidSourceMap = new Map<string, string>();
@@ -1602,7 +1652,7 @@ export default function AnalyticsPage() {
       }))
       .sort((a, b) => b.revenue - a.revenue || b.sessions - a.sessions)
       .slice(0, 10);
-  }, [pvLogs, visitorList, purchaseLogs]);
+  }, [pvLogs, visitorList, purchaseLogs, serverPv]);
 
   const referrerMax = useMemo(() => Math.max(...referrerData.map((r) => r.sessions), 1), [referrerData]);
   const referrerTotal = useMemo(() => referrerData.reduce((s, r) => s + r.sessions, 0), [referrerData]);
@@ -1612,9 +1662,16 @@ export default function AnalyticsPage() {
   // ⚠️ 日本のモバイルはキャリア拠点(東京)に寄るため都道府県は参考値。
   const regionData = useMemo(() => {
     const pvByRegion = new Map<string, number>();
-    for (const l of pvLogs) {
-      const r = l.geo_region || "（不明）";
-      pvByRegion.set(r, (pvByRegion.get(r) || 0) + 1);
+    // サーバー集計を優先。無ければログから（上限の影響を受ける）
+    if (serverPv?.regions?.length) {
+      for (const r of serverPv.regions) {
+        pvByRegion.set(String(r.region || "（不明）"), r.pv);
+      }
+    } else {
+      for (const l of pvLogs) {
+        const r = l.geo_region || "（不明）";
+        pvByRegion.set(r, (pvByRegion.get(r) || 0) + 1);
+      }
     }
     const revByRegion = new Map<string, { revenue: number; count: number; buyers: Set<string> }>();
     for (const p of purchaseLogs) {
@@ -1635,7 +1692,7 @@ export default function AnalyticsPage() {
       }))
       .sort((a, b) => b.pv - a.pv)
       .slice(0, 15);
-  }, [pvLogs, purchaseLogs]);
+  }, [pvLogs, purchaseLogs, serverPv]);
   // 地域データが実質的に取れているか（「（不明）」以外が1件でもあるか）
   const hasGeoData = useMemo(() => regionData.some((r) => r.region !== "（不明）"), [regionData]);
   const regionPvMax = useMemo(() => Math.max(...regionData.map((r) => r.pv), 1), [regionData]);
