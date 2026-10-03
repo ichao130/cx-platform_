@@ -780,11 +780,16 @@ export default function AnalyticsPage() {
   //   16MB級のリスナーになり、取得に失敗してPVが0件になる事故が起きた。
   //   分析画面にリアルタイム性は不要なので、一度だけ取得する方式にした。
   //   （「最近のセッション」は別クエリ(limit 50)でリアルタイムのまま）
+  // 訪問ログ（生ログ）が必要なのは「訪問者リスト」と「施策のラストタッチ帰属」だけ。
+  // PV系はサーバー集計に移したので、該当タブを開いたときだけ読み込む。
+  // 常時読むと American Needle のような大規模サイトで毎回数十秒かかってしまう。
+  const needsJourneyLogs = tab === "visitor" || tab === "campaign";
+
   useEffect(() => {
     setJourneyLogs([]);
     setJourneyError("");
     setJourneyProgress(0);
-    if (!siteId) { return; }
+    if (!siteId || !needsJourneyLogs) { setJourneyTruncated(false); return; }
     setJourneyLoading(true);
 
     const since = effectiveFrom.toISOString();
@@ -836,7 +841,7 @@ export default function AnalyticsPage() {
     })();
 
     return () => { cancelled = true; };
-  }, [siteId, effectiveFrom, effectiveTo]);
+  }, [siteId, effectiveFrom, effectiveTo, needsJourneyLogs]);
 
   // ---- CV(コンバージョン)の vid を専用クエリで取得（CVフィルターを上限から外す）----
   useEffect(() => {
@@ -865,7 +870,7 @@ export default function AnalyticsPage() {
       },
       () => setConvVids(new Map())
     );
-  }, [siteId, effectiveFrom, effectiveTo]);
+  }, [siteId, effectiveFrom, effectiveTo, needsJourneyLogs]);
 
   // ---- 購入ログ取得（リアルタイム） ----
   useEffect(() => {
@@ -2161,9 +2166,9 @@ export default function AnalyticsPage() {
           ⚠️ この期間の訪問ログが上限（{JOURNEY_LOG_LIMIT.toLocaleString()}件）に達しました。
           {journeyOldest ? <> 読み込めているのは <b>{String(journeyOldest).slice(0, 10)}</b> 以降の分のみです。</> : null}
           <br />
-          <b>直帰率・離脱率・ページ別の分析・訪問者リスト</b>は、それより古い日のデータが欠けた状態で計算されています。
+          <b>訪問者リスト</b>と<b>施策の帰属</b>は、それより古い日のデータが欠けた状態で計算されています。
           期間を短くすると正確に表示されます。
-          <span style={{ opacity: 0.85 }}>（PV・UV・セッション・売上・新規/リピートは別集計のため、この影響を受けません）</span>
+          <span style={{ opacity: 0.85 }}>（PV・直帰率・離脱率・ページ分析・流入元・地域・売上はサーバー集計のため、この影響を受けません）</span>
         </div>
       )}
       {purchaseTruncated && (
