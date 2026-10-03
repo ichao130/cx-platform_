@@ -34,18 +34,27 @@ import { SkeletonBar, SkeletonCard } from "../components/Skeleton";
 const PURCHASE_LOG_LIMIT = 5000;
 
 /**
- * 訪問ログ(journeyLogs)の取得上限。
- * 直帰率・離脱率・ページ分析・訪問者リストがこれを元に計算されるため、
- * 上限に達すると「古い日のデータだけ薄くなる」という分かりにくい形で歪む。
- * 本来はサーバー側集計に移すべきだが、まずは歪んでいることを隠さない。
+ * 訪問ログ(journeyLogs)の取得設定。
+ *
+ * この生ログを使うのは「訪問者リストのカード表示」と「旧データの施策帰属」だけ。
+ * PV・セッション・直帰率・ページ分析・流入元・地域はサーバー集計(pv_daily)に移した。
+ *
+ * 期間の全ログを読もうとすると American Needle が14日で60,745件・30日で99,247件あり、
+ * 5〜10回のクエリで40〜80秒かかり、しかも上限を超えて静かに欠損していた。
+ * 一方で訪問者リストは「直近1,000人」しか表示しない。
+ * → 必要な人数ぶんのvidが集まったら取得を打ち切る（新しい順に取っているので
+ *   打ち切っても「直近◯人」として正しい。何日ぶん取れたかは画面に明示する）。
  */
 // ★Firestoreの limit は1クエリあたり最大10,000。超えると
 //   "Limit value in the structured query is over the maximum value of 10000"
 //   でクエリ自体が失敗する（20000を指定して全件0になる事故を起こした）。
 //   ただし制約は1クエリ単位なので、startAfter で続きを取れば上限を越えられる。
-const JOURNEY_PAGE_SIZE = 10000;
-// 総取得上限。これを超える期間は読み込み時間とコストが現実的でないため打ち切り、
-// 警告を出して歪みを隠さない（1件あたり約0.8KB・読み取り$0.06/10万件）。
+//   打ち切り判定を細かく効かせたいので1ページは小さめにしている。
+const JOURNEY_PAGE_SIZE = 5000;
+// 訪問者リストの表示上限(1,000人)＋絞り込み用の余裕。
+// これだけのvidが集まった時点で取得をやめる。
+const JOURNEY_TARGET_VIDS = 1200;
+// 保険の総上限。小規模サイトは全期間を読み切るのでここには到達しない。
 const JOURNEY_LOG_LIMIT = 50000;
 
 function isoDay(d: Date) {
@@ -568,6 +577,10 @@ export default function AnalyticsPage() {
   const [purchaseTruncated, setPurchaseTruncated] = useState(false);
   const [journeyTruncated, setJourneyTruncated] = useState(false);
   const [journeyOldest, setJourneyOldest] = useState("");
+  // 訪問ログから拾えた実人数（打ち切り時に「直近◯人」と出すため）
+  const [journeyVidCount, setJourneyVidCount] = useState(0);
+  // 購入者・CV者のうち、上の一括取得に入らなかった人の訪問ログ（vid指定で取り直す）
+  const [extraJourneyLogs, setExtraJourneyLogs] = useState<any[]>([]);
   const [journeyError, setJourneyError] = useState("");
   const [journeyProgress, setJourneyProgress] = useState(0);
   const [purchaseLoading, setPurchaseLoading] = useState(false);
@@ -789,6 +802,7 @@ export default function AnalyticsPage() {
     setJourneyLogs([]);
     setJourneyError("");
     setJourneyProgress(0);
+    setJourneyVidCount(0);
     if (!siteId || !needsJourneyLogs) { setJourneyTruncated(false); return; }
     setJourneyLoading(true);
 
@@ -798,10 +812,12 @@ export default function AnalyticsPage() {
 
     (async () => {
       try {
-        // 1クエリ10,000件の制約を、カーソル(startAfter)で分割取得して越える
+        // 1クエリ10,000件の制約を、カーソル(startAfter)で分割取得して越える。
+        // 新しい順に取り、訪問者リストの表示上限ぶんのvidが集まったら打ち切る。
         const rows: any[] = [];
+        const vidsSeen = new Set<string>();
         let cursor: any = null;
-        let reachedCap = false;
+        let stoppedEarly = false;
         for (;;) {
           const base = [
             collection(db, "logs"),
@@ -815,16 +831,23 @@ export default function AnalyticsPage() {
             : query(...base, limit(JOURNEY_PAGE_SIZE));
           const snap = await getDocs(q);
           if (cancelled) return;
-          snap.docs.forEach((d) => rows.push({ id: d.id, ...d.data() }));
+          snap.docs.forEach((d) => {
+            const row = { id: d.id, ...(d.data() as any) };
+            rows.push(row);
+            if (row.vid) vidsSeen.add(String(row.vid));
+          });
           setJourneyProgress(rows.length);
 
-          if (snap.size < JOURNEY_PAGE_SIZE) break;          // 最後のページまで到達
-          if (rows.length >= JOURNEY_LOG_LIMIT) { reachedCap = true; break; }
+          if (snap.size < JOURNEY_PAGE_SIZE) break;          // 期間を読み切った
+          // 表示に必要な人数が揃った → ここで止める（これ以上は捨てるだけ）
+          if (vidsSeen.size >= JOURNEY_TARGET_VIDS) { stoppedEarly = true; break; }
+          if (rows.length >= JOURNEY_LOG_LIMIT) { stoppedEarly = true; break; }
           cursor = snap.docs[snap.docs.length - 1];
         }
         if (cancelled) return;
-        // 総上限に達した場合のみ「欠けている」。通常は全件取れている
-        setJourneyTruncated(reachedCap);
+        // 打ち切った＝期間の先頭まで届いていない。「どこから取れているか」を画面に出す
+        setJourneyTruncated(stoppedEarly);
+        setJourneyVidCount(vidsSeen.size);
         setJourneyOldest(rows.length ? String(rows[rows.length - 1]?.createdAt || "") : "");
         setJourneyLogs(rows);
       } catch (e: any) {
@@ -842,6 +865,63 @@ export default function AnalyticsPage() {
 
     return () => { cancelled = true; };
   }, [siteId, effectiveFrom, effectiveTo, needsJourneyLogs]);
+
+  // ---- 購入者・CV者の訪問ログを個別に補う ----
+  // 上の一括取得は「表示する人数ぶん」で打ち切るため、期間の古い側で購入した人の
+  // 訪問ログが入らないことがある。その人は購入ログだけから訪問者リストに載るので、
+  // PVも流入元も分からず「0 PV / 流入元: 直接流入」と表示され、不具合に見えていた。
+  // 購入者・CV者は数十〜数百人なので、足りない人だけ vid 指定で取り直す（in句は30件まで）。
+  const VID_IN_CHUNK = 30;
+  const EXTRA_VID_CAP = 600; // これを超える購入者がいる期間は諦める（クエリ数が増えすぎる）
+
+  const missingVidsKey = useMemo(() => {
+    if (!needsJourneyLogs || journeyLoading) return "";
+    const have = new Set<string>();
+    for (const l of journeyLogs) if (l.vid) have.add(String(l.vid));
+    const want = new Set<string>();
+    for (const p of purchaseLogs) if (p.vid && !have.has(String(p.vid))) want.add(String(p.vid));
+    for (const vid of convVids.keys()) if (!have.has(vid)) want.add(vid);
+    return [...want].sort().slice(0, EXTRA_VID_CAP).join(",");
+  }, [needsJourneyLogs, journeyLoading, journeyLogs, purchaseLogs, convVids]);
+
+  useEffect(() => {
+    setExtraJourneyLogs([]);
+    if (!siteId || !missingVidsKey) return;
+    const vids = missingVidsKey.split(",");
+    const since = effectiveFrom.toISOString();
+    const to    = effectiveTo.toISOString();
+    let cancelled = false;
+
+    (async () => {
+      const rows: any[] = [];
+      for (let i = 0; i < vids.length; i += VID_IN_CHUNK) {
+        const chunk = vids.slice(i, i + VID_IN_CHUNK);
+        try {
+          const snap = await getDocs(query(
+            collection(db, "logs"),
+            where("site_id", "==", siteId),
+            where("vid", "in", chunk),
+            where("createdAt", ">=", since),
+            where("createdAt", "<=", to)
+          ));
+          if (cancelled) return;
+          snap.docs.forEach((d) => rows.push({ id: d.id, ...(d.data() as any) }));
+        } catch (e) {
+          // 1チャンク失敗しても他は活かす（インデックス不足などは握りつぶさずログに残す）
+          console.error("[extraJourneyLogs] 取得失敗:", e);
+        }
+      }
+      if (!cancelled) setExtraJourneyLogs(rows);
+    })();
+
+    return () => { cancelled = true; };
+  }, [siteId, effectiveFrom, effectiveTo, missingVidsKey]);
+
+  // 訪問者リストと購入の帰属に使うログ（一括取得＋購入者の補完）
+  const journeyLogsAll = useMemo(
+    () => (extraJourneyLogs.length ? [...journeyLogs, ...extraJourneyLogs] : journeyLogs),
+    [journeyLogs, extraJourneyLogs]
+  );
 
   // ---- CV(コンバージョン)の vid を専用クエリで取得（CVフィルターを上限から外す）----
   useEffect(() => {
@@ -1099,7 +1179,7 @@ export default function AnalyticsPage() {
 
   // シナリオ別売上
   // ① purchase ログに scenario_id が直接保存されていれば確定帰属（Web Pixel 更新後の購入）
-  // ② なければ journeyLogs のラストタッチで推定帰属（旧データの best-effort）
+  // ② なければ訪問ログのラストタッチで推定帰属（旧データの best-effort）
   //    - シナリオの CV計測タイミングが "click" → click/click_link イベントで帰属
   //    - "view"（デフォルト）→ impression イベントで帰属
   // ※ 購入日が施策の稼働期間（スケジュール±猶予）外なら帰属を外す（施策なし扱い）。
@@ -1118,10 +1198,10 @@ export default function AnalyticsPage() {
       return dayMs >= startMs && dayMs <= endMs;
     };
 
-    // journeyLogs から vid → ラストタッチ施策（旧データ補完用）
+    // 訪問ログから vid → ラストタッチ施策（旧データ補完用）
     const vidToImpScenario = new Map<string, string>();
     const vidToClickScenario = new Map<string, string>();
-    for (const l of journeyLogs) {
+    for (const l of journeyLogsAll) {
       if (l.event === "impression" && l.scenario_id && l.vid) vidToImpScenario.set(l.vid, l.scenario_id);
       if ((l.event === "click" || l.event === "click_link") && l.scenario_id && l.vid) vidToClickScenario.set(l.vid, l.scenario_id);
     }
@@ -1189,13 +1269,13 @@ export default function AnalyticsPage() {
       entry.count++;
     }
     return Array.from(map.values()).sort((a, b) => b.revenue - a.revenue);
-  }, [purchaseLogs, journeyLogs, scenarios]);
+  }, [purchaseLogs, journeyLogsAll, scenarios]);
 
   // ---- computed: 商品別売上（施策帰属付き） ----
   const revenueByProduct = useMemo(() => {
     // 表示ベース: vid → 最後に impression したシナリオ
     const vidToImpScenario = new Map<string, string>();
-    const sortedImp = [...journeyLogs]
+    const sortedImp = [...journeyLogsAll]
       .filter((l) => l.event === "impression" && l.scenario_id)
       .sort((a, b) => (a.createdAt || "") < (b.createdAt || "") ? -1 : 1);
     for (const l of sortedImp) {
@@ -1203,7 +1283,7 @@ export default function AnalyticsPage() {
     }
     // クリックベース: vid → 最後に click/click_link したシナリオ
     const vidToClickScenario = new Map<string, string>();
-    const sortedClick = [...journeyLogs]
+    const sortedClick = [...journeyLogsAll]
       .filter((l) => (l.event === "click" || l.event === "click_link") && l.scenario_id)
       .sort((a, b) => (a.createdAt || "") < (b.createdAt || "") ? -1 : 1);
     for (const l of sortedClick) {
@@ -1252,7 +1332,7 @@ export default function AnalyticsPage() {
           .sort((a, b) => b.revenue - a.revenue),
       }))
       .sort((a, b) => b.revenue - a.revenue);
-  }, [purchaseLogs, journeyLogs, scenarios, isScenarioInPeriod]);
+  }, [purchaseLogs, journeyLogsAll, scenarios, isScenarioInPeriod]);
 
   // ---- computed: UTM campaign ----
   const campaignData = useMemo(() => {
@@ -1517,7 +1597,7 @@ export default function AnalyticsPage() {
     // 上部の期間指定（effectiveFrom/To）でログを絞り込む
     const jFromMs = effectiveFrom.getTime();
     const jToMs   = effectiveTo.getTime();
-    const sourceLogs = journeyLogs.filter((l) => { const t = toMs(l.createdAt); return t >= jFromMs && t <= jToMs; });
+    const sourceLogs = journeyLogsAll.filter((l) => { const t = toMs(l.createdAt); return t >= jFromMs && t <= jToMs; });
 
     const sorted = [...sourceLogs].sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
     const nowMs = Date.now();
@@ -1608,7 +1688,7 @@ export default function AnalyticsPage() {
     for (const v of byRecent.slice(0, 1000)) keep.set(v.vid, v);
     for (const v of allVisitors) if (v.hasPurchase || v.hasConversion) keep.set(v.vid, v);
     return Array.from(keep.values()).sort((a, b) => b.lastSeen.localeCompare(a.lastSeen));
-  }, [journeyLogs, purchaseLogs, convVids, effectiveFrom, effectiveTo]);
+  }, [journeyLogsAll, purchaseLogs, convVids, effectiveFrom, effectiveTo]);
 
   // ---- computed: 流入元（utm_source or ref）× 売上 ----
   const referrerData = useMemo(() => {
@@ -1631,20 +1711,39 @@ export default function AnalyticsPage() {
         sessionMap.set(src, (sessionMap.get(src) || 0) + 1);
       }
     }
-    // 訪問者の流入元: utm_source優先、なければ最初のpageviewの参照元、なければアプリ内判定
-    const vidSourceMap = new Map<string, string>();
-    for (const v of visitorList) {
-      vidSourceMap.set(v.vid, resolveSource(v.utmSource, v.firstRef, v.firstReferrerApp));
-    }
-    const revenueMap = new Map<string, { revenue: number; count: number; vids: Set<string> }>();
-    for (const p of purchaseLogs) {
-      if (!p.vid) continue;
-      const src = vidSourceMap.get(p.vid) || "直接流入";
-      if (!revenueMap.has(src)) revenueMap.set(src, { revenue: 0, count: 0, vids: new Set() });
-      const entry = revenueMap.get(src)!;
-      entry.revenue += typeof p.revenue === "number" ? p.revenue : 0;
-      entry.count++;
-      entry.vids.add(p.vid);
+    // 流入元ごとの売上。
+    // ★購入ログは utm_source / ref を持たない（サンクスページで参照元が失われる）ため、
+    //   同じ vid の pageview から引く必要がある。これをブラウザでやると期間の生ログが必要で、
+    //   Firestoreの limit 10,000 に阻まれて静かに欠損し「売上が全部 直接流入」になっていた。
+    //   → サーバー集計(pv_daily)が持つ値を使う。生ログは一切要らない。
+    const revenueMap = new Map<string, { revenue: number; count: number; buyers: number }>();
+    // ★「売上0」と「まだ集計していない」を区別する。
+    //   読み取り側は常に revenue:0 を返すので値の有無では判定できない。
+    //   サーバーが対象期間すべてを v2 で集計済みと言ったときだけ採用する。
+    const serverHasRevenue = serverPv?.revenueBySourceReady === true;
+    if (serverHasRevenue) {
+      for (const sv of serverPv.sources) {
+        if (!sv.revenue && !sv.purchases) continue;
+        revenueMap.set(String(sv.name), { revenue: sv.revenue || 0, count: sv.purchases || 0, buyers: sv.buyers || 0 });
+      }
+    } else {
+      // サーバー集計が未反映の期間だけ、訪問ログから推定する（旧データ互換）
+      const vidSourceMap = new Map<string, string>();
+      for (const v of visitorList) {
+        vidSourceMap.set(v.vid, resolveSource(v.utmSource, v.firstRef, v.firstReferrerApp));
+      }
+      const vids = new Map<string, Set<string>>();
+      for (const p of purchaseLogs) {
+        if (!p.vid) continue;
+        // 「分からない」を「直接流入」に混ぜない
+        const src = vidSourceMap.get(p.vid) || "(流入元不明)";
+        if (!revenueMap.has(src)) { revenueMap.set(src, { revenue: 0, count: 0, buyers: 0 }); vids.set(src, new Set()); }
+        const entry = revenueMap.get(src)!;
+        entry.revenue += typeof p.revenue === "number" ? p.revenue : 0;
+        entry.count++;
+        vids.get(src)!.add(p.vid);
+      }
+      revenueMap.forEach((v, k) => { v.buyers = vids.get(k)?.size || 0; });
     }
     const allSrcs = new Set([...sessionMap.keys(), ...revenueMap.keys()]);
     return Array.from(allSrcs)
@@ -1653,7 +1752,7 @@ export default function AnalyticsPage() {
         sessions: sessionMap.get(src) || 0,
         revenue: revenueMap.get(src)?.revenue || 0,
         purchaseCount: revenueMap.get(src)?.count || 0,
-        buyers: revenueMap.get(src)?.vids.size || 0,
+        buyers: revenueMap.get(src)?.buyers || 0,
       }))
       .sort((a, b) => b.revenue - a.revenue || b.sessions - a.sessions)
       .slice(0, 10);
@@ -1937,12 +2036,12 @@ export default function AnalyticsPage() {
     const vids = new Set<string>();
     if (!purchaseLogs.length) return vids;
     const vidToImpScenario = new Map<string, string>();
-    const sortedImp = [...journeyLogs]
+    const sortedImp = [...journeyLogsAll]
       .filter((l) => l.event === "impression" && l.scenario_id)
       .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
     for (const l of sortedImp) { if (l.vid) vidToImpScenario.set(l.vid, l.scenario_id); }
     const vidToClickScenario = new Map<string, string>();
-    const sortedClick = [...journeyLogs]
+    const sortedClick = [...journeyLogsAll]
       .filter((l) => (l.event === "click" || l.event === "click_link") && l.scenario_id)
       .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
     for (const l of sortedClick) { if (l.vid) vidToClickScenario.set(l.vid, l.scenario_id); }
@@ -1964,7 +2063,7 @@ export default function AnalyticsPage() {
       if (scenarioId && isScenarioInPeriod(scenarioId)) vids.add(purchase.vid);
     }
     return vids;
-  }, [purchaseLogs, journeyLogs, scenarios, isScenarioInPeriod]);
+  }, [purchaseLogs, journeyLogsAll, scenarios, isScenarioInPeriod]);
 
   // ---- computed: フィルター済み訪問者リスト ----
   // visitorList は既にジャーニーフィルター範囲で集計されているため、
@@ -2036,7 +2135,7 @@ export default function AnalyticsPage() {
     const fromMs = effectiveFrom.getTime();
     const toMs2  = effectiveTo.getTime();
     const map = new Map<string, { pvCount: number; lastSeen: string; hasPurchase: boolean; purchaseRevenue: number; purchaseCount: number }>();
-    for (const l of journeyLogs) {
+    for (const l of journeyLogsAll) {
       const t = toMs(l.createdAt); if (t < fromMs || t > toMs2) continue;
       const vid = l.vid; if (!vid) continue;
       if (!map.has(vid)) map.set(vid, { pvCount: 0, lastSeen: "", hasPurchase: false, purchaseRevenue: 0, purchaseCount: 0 });
@@ -2055,17 +2154,17 @@ export default function AnalyticsPage() {
       if (!s.lastSeen || p.createdAt > s.lastSeen) s.lastSeen = p.createdAt || "";
     }
     return map;
-  }, [journeyLogs, purchaseLogs, effectiveFrom, effectiveTo]);
+  }, [journeyLogsAll, purchaseLogs, effectiveFrom, effectiveTo]);
 
   // ---- computed: vid → 直前のシナリオID（購入時の施策特定用） ----
   const vidToLastScenario = useMemo(() => {
     const map = new Map<string, string>();
-    const sorted = [...journeyLogs].sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+    const sorted = [...journeyLogsAll].sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
     for (const l of sorted) {
       if (l.vid && l.scenario_id) map.set(l.vid, l.scenario_id);
     }
     return map;
-  }, [journeyLogs]);
+  }, [journeyLogsAll]);
 
   const selectedSiteName = useMemo(() => {
     const s = sites.find((s) => s.id === siteId);
@@ -2153,22 +2252,26 @@ export default function AnalyticsPage() {
           className="small"
           style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 10, background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", lineHeight: 1.8 }}
         >
-          ⚠️ 訪問ログの取得に失敗しました。<b>PV・流入元・ページ分析・訪問者リストが0件で表示されています</b>
-          （購入・売上は別集計のため正しく表示されています）。期間を短くすると改善する場合があります。
+          ⚠️ 訪問ログの取得に失敗しました。<b>訪問者リストが0件で表示されています</b>
+          （PV・流入元・ページ分析・売上はサーバー集計のため正しく表示されています）。
+          期間を短くすると改善する場合があります。
           <br /><span style={{ opacity: 0.8, fontSize: 11 }}>{journeyError}</span>
         </div>
       )}
-      {journeyTruncated && (
+      {journeyTruncated && !journeyLoading && (
         <div
           className="small"
-          style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 10, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", lineHeight: 1.8 }}
+          style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 10, background: "#f0f9ff", border: "1px solid #bae6fd", color: "#075985", lineHeight: 1.8 }}
         >
-          ⚠️ この期間の訪問ログが上限（{JOURNEY_LOG_LIMIT.toLocaleString()}件）に達しました。
-          {journeyOldest ? <> 読み込めているのは <b>{String(journeyOldest).slice(0, 10)}</b> 以降の分のみです。</> : null}
+          ℹ️ 訪問者リストは<b>直近{journeyVidCount.toLocaleString()}人</b>
+          {journeyOldest ? <>（<b>{String(journeyOldest).slice(0, 10)}</b> 以降に訪問した方）</> : null}
+          を表示しています。アクセスの多いサイトでは期間すべての訪問者を読み込むと数十秒かかるため、
+          表示する人数ぶんで読み込みを止めています。
           <br />
-          <b>訪問者リスト</b>と<b>施策の帰属</b>は、それより古い日のデータが欠けた状態で計算されています。
-          期間を短くすると正確に表示されます。
-          <span style={{ opacity: 0.85 }}>（PV・直帰率・離脱率・ページ分析・流入元・地域・売上はサーバー集計のため、この影響を受けません）</span>
+          <span style={{ opacity: 0.85 }}>
+            期間全体の集計（PV・セッション・直帰率・ページ分析・流入元・地域・売上・新規/リピート）は
+            サーバー集計のため、この影響を受けません。期間を短くすると全員が表示されます。
+          </span>
         </div>
       )}
       {purchaseTruncated && (
@@ -2467,14 +2570,18 @@ export default function AnalyticsPage() {
               </div>
             )}
 
-            {/* ③ 新規 / リピート訪問者 */}
-            {!journeyLoading && (
+            {/* ③ 新規 / リピート訪問者
+                （中身は stats_daily ベース。生ログを待つ必要はない） */}
+            {dailyTrend.length > 0 && (
               <div className="card" style={{ padding: "20px 20px 8px", background: "#fff", marginBottom: 16 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: "#374151" }}>👤 新規 / リピート訪問者</div>
                   {nrMode === "count" ? (() => {
-                    const totalNew = visitorList.filter((v) => v.isNew === true).length;
-                    const totalRepeat = visitorList.filter((v) => v.isNew === false).length;
+                    // ★グラフと同じ newRepeatTrend を合算する。
+                    //   以前は visitorList（生ログ）から数えており、生ログを読まないタブでは
+                    //   グラフに棒が立っているのに見出しだけ0人になっていた。
+                    const totalNew = newRepeatTrend.reduce((a, d) => a + (d.newCount || 0), 0);
+                    const totalRepeat = newRepeatTrend.reduce((a, d) => a + (d.repeatCount || 0), 0);
                     const total = totalNew + totalRepeat;
                     return total > 0 ? (
                       <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -2566,8 +2673,11 @@ export default function AnalyticsPage() {
               </div>
             )}
 
-            {/* ④ 訪問頻度分布 ＋ リターンスパン分布 */}
-            {!journeyLoading && visitorList.length > 0 && (
+            {/* ④ 訪問頻度分布 ＋ リターンスパン分布
+                visitorList（訪問ログ）依存のため訪問者タブ専用。
+                以前は全タブ共通エリアにあり、生ログを読まないタブでは
+                理由の表示なく丸ごと消えていた。 */}
+            {tab === "visitor" && !journeyLoading && visitorList.length > 0 && (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14, marginBottom: 16 }}>
 
                 {/* 訪問頻度分布 */}
@@ -2650,8 +2760,11 @@ export default function AnalyticsPage() {
               </div>
             )}
 
-            {/* 施策別CVトレンド（期間内に稼働していたシナリオのみ） */}
-            {!journeyLoading && inPeriodScenarios.length > 0 && (
+            {/* 施策別CVトレンド（期間内に稼働していたシナリオのみ）
+                ★施策タブ専用。売上(revenueByScenario)は scenario_id の無い旧購入を
+                  訪問ログのラストタッチで補完するため、訪問ログを読むタブでしか
+                  同じ数字にならない。全タブ共通に置くとタブごとに売上が変わってしまう。 */}
+            {tab === "campaign" && inPeriodScenarios.length > 0 && (
               <>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
                 {inPeriodScenarios.slice(0, 4).map((sc) => {
@@ -3700,7 +3813,22 @@ export default function AnalyticsPage() {
               </div>
             </div>
 
-            {visitorList.length === 0 && !journeyLoading ? (
+            {/* ★読み込み中に確定値として描画しないこと。
+                以前はここで journeyLogs 未取得のまま描画し、購入ログだけで組まれた
+                訪問者が「0 PV / 流入元: 直接流入」と表示され、不具合に見えていた。 */}
+            {journeyLoading ? (
+              <div className="card" style={{ padding: 20 }}>
+                <div className="small" style={{ fontWeight: 700, marginBottom: 4 }}>
+                  訪問ログを読み込み中…{journeyProgress > 0 ? ` ${journeyProgress.toLocaleString()} 件` : ""}
+                </div>
+                <div className="small" style={{ opacity: 0.6, marginBottom: 14 }}>
+                  PV・流入元が揃ってから表示します
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {[0, 1, 2, 3, 4, 5].map((i) => <SkeletonBar key={i} width={`${100 - i * 6}%`} height={16} />)}
+                </div>
+              </div>
+            ) : visitorList.length === 0 ? (
               <div className="card" style={{ padding: 20, opacity: 0.7 }}>
                 <div className="small">期間内の訪問データがありません</div>
               </div>

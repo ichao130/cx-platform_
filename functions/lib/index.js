@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.processScheduledPush = exports.autoExpireScenarios = exports.syncRmsDailyAll = exports.deleteMedia = exports.processBackupRun = exports.enqueueDailyBackups = exports.sendMonthlyMisocaInvoices = exports.cleanupExpiredFreeAccounts = exports.api = void 0;
+exports.rollupPvDailyAll = exports.sendWeeklyReports = exports.processScheduledPush = exports.autoExpireScenarios = exports.syncRmsDailyAll = exports.deleteMedia = exports.processBackupRun = exports.enqueueDailyBackups = exports.sendMonthlyMisocaInvoices = exports.cleanupExpiredFreeAccounts = exports.api = void 0;
 // functions/src/index.ts
 const v2_1 = require("firebase-functions/v2");
 const https_1 = require("firebase-functions/v2/https");
@@ -531,4 +531,156 @@ exports.processScheduledPush = (0, scheduler_1.onSchedule)({
             await campaignDoc.ref.update({ status: "scheduled" }); // エラー時は元に戻す
         }
     }
+});
+/* ==========================
+ * 週次レポートのメール配信
+ * - 毎週月曜 JST 9:00（= UTC 日曜 0:00）
+ * - 対象は sites/{siteId}.weeklyReport.enabled が true のサイト
+ * - 集計対象は「確定した先週（月〜日）」。集計途中の日は含まない
+ * - 1サイト失敗しても他サイトの配信は続行する
+ * ==========================
+ */
+exports.sendWeeklyReports = (0, scheduler_1.onSchedule)({
+    region: "asia-northeast1",
+    // 毎時実行し、サイトごとに設定された曜日・時刻（JST）に一致するものだけ送る。
+    // 固定cronだと全サイトが同じ時刻に固定されてしまうため。
+    schedule: "0 * * * *",
+    timeZone: "UTC",
+    timeoutSeconds: 540,
+    memory: "512MiB",
+    secrets: [OPENAI_API_KEY, POSTMARK_SERVER_TOKEN],
+}, async () => {
+    const db = (0, admin_1.adminDb)();
+    const { composeWeeklyReportEmail } = await Promise.resolve().then(() => __importStar(require("./services/weeklyReport")));
+    const { callOpenAIJson } = await Promise.resolve().then(() => __importStar(require("./services/openaiJson")));
+    const { z } = await Promise.resolve().then(() => __importStar(require("zod")));
+    // 現在のJST曜日・時刻
+    const nowJst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+    const curWeekday = nowJst.getUTCDay(); // 0=日 … 6=土
+    const curHour = nowJst.getUTCHours();
+    const sitesSnap = await db.collection("sites").where("weeklyReport.enabled", "==", true).get();
+    console.log(`[sendWeeklyReports] JST 曜日=${curWeekday} 時=${curHour} / 有効サイト: ${sitesSnap.size}件`);
+    let sent = 0, failed = 0, skipped = 0, notNow = 0;
+    for (const doc of sitesSnap.docs) {
+        const site = doc.data();
+        const w = site?.weeklyReport || {};
+        const recipients = Array.isArray(w.recipients) ? w.recipients : [];
+        if (!recipients.length) {
+            skipped++;
+            continue;
+        }
+        // 配信タイミング（未設定は 月曜9時）
+        const wd = Number.isInteger(w.weekday) ? Number(w.weekday) : 1;
+        const hh = Number.isInteger(w.hour) ? Number(w.hour) : 9;
+        if (wd !== curWeekday || hh !== curHour) {
+            notNow++;
+            continue;
+        }
+        try {
+            // 同じ週を二重送信しない（関数のリトライや重複起動に備える）
+            const { lastCompleteWeek } = await Promise.resolve().then(() => __importStar(require("./services/weeklyReport")));
+            const wk = lastCompleteWeek();
+            const periodKey = `${wk.from}〜${wk.to}`;
+            if (w.lastPeriod === periodKey) {
+                console.log(`[sendWeeklyReports] ${doc.id} は ${periodKey} を送信済みのためスキップ`);
+                skipped++;
+                continue;
+            }
+            const { subject, html, data, aiProblems } = await composeWeeklyReportEmail({
+                db,
+                siteId: doc.id,
+                withAi: site?.weeklyReport?.withAi !== false,
+                callOpenAIJson,
+                z,
+                dashboardUrl: "https://app.mokkeda.com/analytics",
+            });
+            if (aiProblems.length) {
+                // AIコメントは諦めたがレポート自体は送る（誤ったコメントを載せるよりよい）
+                console.warn(`[sendWeeklyReports] ${doc.id} AIコメント省略: ${aiProblems.join(" / ")}`);
+            }
+            for (const to of recipients) {
+                await sendReportEmail(to, subject, html);
+            }
+            // 送信履歴（重複送信の調査用）
+            await doc.ref.set({
+                weeklyReport: {
+                    lastSentAt: new Date().toISOString(),
+                    lastPeriod: `${data.period.from}〜${data.period.to}`,
+                },
+            }, { merge: true });
+            sent += recipients.length;
+            console.log(`[sendWeeklyReports] ${doc.id} → ${recipients.length}件送信`);
+        }
+        catch (e) {
+            // 1サイトのエラーで全体を止めない
+            failed++;
+            console.error(`[sendWeeklyReports] ${doc.id} 失敗:`, e?.message || e);
+        }
+    }
+    console.log(`[sendWeeklyReports] 完了: 送信${sent}通 / 失敗${failed} / スキップ${skipped} / 時刻外${notNow}`);
+});
+/** レポートメール送信（Postmark） */
+async function sendReportEmail(to, subject, html) {
+    const token = String(POSTMARK_SERVER_TOKEN.value() || "").trim();
+    if (!token)
+        throw new Error("missing_postmark_server_token");
+    const resp = await fetch("https://api.postmarkapp.com/email", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "X-Postmark-Server-Token": token,
+        },
+        body: JSON.stringify({
+            From: "no-reply@mokkeda.com",
+            To: to,
+            Subject: subject,
+            HtmlBody: html,
+            MessageStream: "outbound",
+        }),
+    });
+    if (!resp.ok) {
+        const j = await resp.json().catch(() => ({}));
+        throw new Error(`postmark_send_failed:${resp.status}:${j?.Message || resp.statusText}`);
+    }
+}
+/* ==========================
+ * pageview集計の日次ロールアップ
+ * - 毎日 JST 4:00（UTC 19:00）に前日分を集計して pv_daily に保存
+ * - 画面はログを直接読まず、この日次ドキュメントを合算する
+ *   （American Needleは30日で98,000件あり、毎回走査すると37秒かかるため）
+ * ==========================
+ */
+exports.rollupPvDailyAll = (0, scheduler_1.onSchedule)({
+    region: "asia-northeast1",
+    schedule: "0 19 * * *", // UTC 19:00 = JST 翌4:00
+    timeZone: "UTC",
+    timeoutSeconds: 540,
+    memory: "1GiB",
+}, async () => {
+    const db = (0, admin_1.adminDb)();
+    const { rollupPvDaily } = await Promise.resolve().then(() => __importStar(require("./services/pvAggregates")));
+    // 前日(JST)
+    const jst = new Date(Date.now() + 9 * 3600 * 1000);
+    jst.setUTCDate(jst.getUTCDate() - 1);
+    const p = new Intl.DateTimeFormat("en-CA", { timeZone: "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(jst);
+    const g = (t) => p.find((x) => x.type === t).value;
+    const day = `${g("year")}-${g("month")}-${g("day")}`;
+    const sites = await db.collection("sites").get();
+    let ok = 0, failed = 0;
+    for (const doc of sites.docs) {
+        if (doc.data()?.status === "deleted")
+            continue;
+        try {
+            const r = await rollupPvDaily(db, doc.id, day);
+            if (r.pv > 0)
+                ok++;
+        }
+        catch (e) {
+            // 1サイト失敗しても他は続行する
+            failed++;
+            console.error(`[rollupPvDailyAll] ${doc.id} (${day}) 失敗:`, e?.message || e);
+        }
+    }
+    console.log(`[rollupPvDailyAll] ${day} 完了: 集計${ok}サイト / 失敗${failed}`);
 });

@@ -46,6 +46,9 @@ const site_1 = require("../services/site");
 const openaiCopy_1 = require("../services/openaiCopy");
 const experiment_1 = require("../services/experiment");
 const openaiJson_1 = require("../services/openaiJson");
+const platformTemplatePresets_1 = require("../data/platformTemplatePresets");
+const weeklyReport_1 = require("../services/weeklyReport");
+const emailTemplate_1 = require("../services/emailTemplate");
 const params_1 = require("firebase-functions/params");
 const stripe_1 = __importDefault(require("stripe"));
 const misoca_1 = require("../services/misoca");
@@ -858,15 +861,48 @@ function buildBillingResponse(billing, planDoc, overrideDoc, accessOverride) {
 function getRequestUserEmail(req) {
     return String(req?.auth?.email || req?.user?.email || req?.token?.email || "").trim().toLowerCase();
 }
-async function requirePlatformAdmin(req) {
-    // Bearer トークンを検証してメールを取得
+/**
+ * スーパー管理者（プラットフォームの最終権限）。
+ * ops_admins コレクションが空・壊れていてもロックアウトされないよう、常に許可する。
+ */
+const PLATFORM_SUPER_ADMIN_EMAIL = "iwatanabe@branberyheag.com";
+/** Bearerトークンを検証してメールを取り出す（小文字化） */
+async function verifiedEmailFromReq(req) {
     const { extractBearerToken, verifyIdToken } = await Promise.resolve().then(() => __importStar(require("../services/admin")));
     const token = extractBearerToken(req);
     const decoded = await verifyIdToken(token);
-    const email = String(decoded?.email || "").trim().toLowerCase();
-    if (email !== "iwatanabe@branberyheag.com") {
+    return String(decoded?.email || "").trim().toLowerCase();
+}
+/**
+ * 一般のバックヤード操作を許可する。
+ *   スーパー管理者 or ops_admins に登録されたメール。
+ * ★ops_admins は firestore.rules でスーパー管理者しか書き込めないため、権限の根拠として信頼できる。
+ *   （以前はメール直書きで1人しか通らず、ops_admins に追加しても全APIが403になっていた）
+ */
+async function requirePlatformAdmin(req) {
+    const email = await verifiedEmailFromReq(req);
+    if (!email)
         throw new Error("platform_admin_only");
+    if (email === PLATFORM_SUPER_ADMIN_EMAIL)
+        return email;
+    try {
+        const snap = await (0, admin_1.adminDb)().collection("ops_admins").doc(email).get();
+        if (snap.exists)
+            return email;
     }
+    catch (e) {
+        console.warn("[requirePlatformAdmin] ops_admins lookup failed", e);
+    }
+    throw new Error("platform_admin_only");
+}
+/**
+ * スーパー管理者のみ許可する。
+ * 料金・請求・バックアップなど、影響が大きい操作に使う（バックヤードのUI側の出し分けと揃える）。
+ */
+async function requireSuperAdmin(req) {
+    const email = await verifiedEmailFromReq(req);
+    if (email !== PLATFORM_SUPER_ADMIN_EMAIL)
+        throw new Error("platform_admin_only");
     return email;
 }
 async function requireWorkspaceRoleBySiteId(req, siteId, allowedRoles = ["owner", "admin"]) {
@@ -1099,6 +1135,34 @@ function getInviteMessageStream() {
     const raw = String(INVITE_MESSAGE_STREAM.value() || "").trim();
     return raw || "outbound";
 }
+/**
+ * 汎用のHTMLメール送信（Postmark）。
+ * 招待メールの実装と同じ経路を使うが、本文を自由に渡せるようにしたもの。
+ */
+async function sendHtmlEmail(args) {
+    const token = String(POSTMARK_SERVER_TOKEN.value() || "").trim();
+    if (!token)
+        throw new Error("missing_postmark_server_token");
+    const resp = await fetch("https://api.postmarkapp.com/email", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "X-Postmark-Server-Token": token,
+        },
+        body: JSON.stringify({
+            From: args.from || getInviteFromEmail(),
+            To: args.to,
+            Subject: args.subject,
+            HtmlBody: args.html,
+            MessageStream: args.messageStream || getInviteMessageStream(),
+        }),
+    });
+    const json = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+        throw new Error(`postmark_send_failed:${resp.status}:${json?.Message || resp.statusText || "unknown"}`);
+    }
+}
 async function sendWorkspaceInviteEmail(args) {
     const token = String(POSTMARK_SERVER_TOKEN.value() || "").trim();
     if (!token) {
@@ -1109,24 +1173,42 @@ async function sendWorkspaceInviteEmail(args) {
     const from = getInviteFromEmail();
     const templateAlias = getInviteTemplateAlias();
     const messageStream = getInviteMessageStream();
-    const subject = `MOKKEDAへの招待: ${args.workspaceName}`;
+    const subject = `【MOKKEDA】${args.workspaceName} に招待されました`;
+    // 権限コードと有効期限は、そのまま出すと「owner」「2026-10-09T12:34:56.789Z」になって
+    // 受け取った人に伝わらないため、日本語・JST表記に変換する
+    const roleJa = (0, emailTemplate_1.roleLabelJa)(args.role);
+    const expiresJa = (0, emailTemplate_1.formatJstDateTime)(expiresAtIso) || "送信から7日間";
     const textBody = [
         `${args.workspaceName} に招待されました。`,
         "",
-        `権限: ${args.role}`,
-        `有効期限: ${expiresAtIso || "7日以内"}`,
+        `権限: ${roleJa}`,
+        `有効期限: ${expiresJa}`,
         "",
-        "参加する:",
+        "下のURLから参加してください:",
         inviteUrl,
     ].join("\n");
-    const htmlBody = `
-    <div style="font-family:Arial,Helvetica,sans-serif;line-height:1.6;color:#111827;">
-      <p><strong>${args.workspaceName}</strong> に招待されました。</p>
-      <p>権限: <strong>${args.role}</strong><br/>有効期限: <strong>${expiresAtIso || "7日以内"}</strong></p>
-      <p><a href="${inviteUrl}" style="display:inline-block;padding:10px 16px;border-radius:8px;background:#111827;color:#ffffff;text-decoration:none;">参加する</a></p>
-      <p style="word-break:break-all;">${inviteUrl}</p>
-    </div>
-  `.trim();
+    const htmlBody = (0, emailTemplate_1.wrapEmail)({
+        title: "ワークスペースへの招待",
+        preheader: `${args.workspaceName} に招待されました（有効期限 ${expiresJa}）`,
+        footerNote: "お心当たりのない場合は、このメールを破棄してください。",
+        bodyHtml: `
+      <div style="font-size:15px;color:${emailTemplate_1.MAIL_BRAND.ink};line-height:1.9;">
+        <b>${(0, emailTemplate_1.escapeHtml)(args.workspaceName)}</b> に招待されました。
+      </div>
+      <div style="font-size:13px;color:${emailTemplate_1.MAIL_BRAND.inkSoft};line-height:1.9;margin-top:6px;">
+        下のボタンから参加すると、サイトの分析や接客施策の管理ができるようになります。
+      </div>
+      ${(0, emailTemplate_1.mailInfoBox)([
+            { label: "ワークスペース", value: args.workspaceName },
+            { label: "あなたの権限", value: roleJa },
+            { label: "有効期限", value: expiresJa },
+        ])}
+      ${(0, emailTemplate_1.mailButton)(inviteUrl, "招待を受けて参加する")}
+      <div style="font-size:11px;color:#9fb0c0;line-height:1.8;">
+        ボタンが使えない場合は、次のURLをブラウザに貼り付けてください。<br/>
+        <span style="word-break:break-all;color:${emailTemplate_1.MAIL_BRAND.teal};">${(0, emailTemplate_1.escapeHtml)(inviteUrl)}</span>
+      </div>`,
+    });
     const endpoint = templateAlias
         ? "https://api.postmarkapp.com/email/withTemplate"
         : "https://api.postmarkapp.com/email";
@@ -3354,6 +3436,10 @@ function registerV1Routes(app) {
                     if (!aSnap.exists)
                         continue;
                     const a = aSnap.data();
+                    // アーカイブ済みアクションは配信しない（アーカイブ＝退役。
+                    // シナリオの actionRefs に参照が残っていても訪問者には出さない）
+                    if (a.archived)
+                        continue;
                     // siteId が異なるアクションは配信しない（他サイトのアクションの誤配信を防ぐ）
                     if (a.siteId && a.siteId !== site_id)
                         continue;
@@ -3535,6 +3621,45 @@ function registerV1Routes(app) {
                     console.warn("[/v1/log] attribution guard failed", e);
                 }
             }
+            // ── クーポン帰属（最優先） ─────────────────────────────────────────
+            // 購入で使われた割引コードがシナリオの couponCode と一致したら、そのシナリオに帰属する。
+            // 「その施策のコードを実際に使った」という明示的な証拠なので、
+            //   ・body.scenario_id（カート属性由来）より優先する
+            //   ・稼働期間ガードも掛けない（後日利用も本人の意思なので有効とみなす）
+            // ※ 管理画面(AnalyticsPage)のクーポン帰属と同じ判定（大文字化して比較）に揃えている。
+            // ※ 失敗しても購入ログ自体は必ず残すため、全体を try/catch で保護する。
+            if (event === "purchase") {
+                try {
+                    const codes = Array.isArray(body.discount_codes) ? body.discount_codes : [];
+                    const normCodes = codes.map((c) => String(c || "").trim().toUpperCase()).filter(Boolean);
+                    if (normCodes.length) {
+                        // 対象サイトのシナリオは十分少ないのでまとめて取得し、メモリ上で大小文字を無視して突合する
+                        // （Firestoreのクエリは大小文字を区別するため、in句では取りこぼす）
+                        const scSnap = await db.collection("scenarios").where("siteId", "==", siteId).get();
+                        const couponToScenario = new Map();
+                        for (const d of scSnap.docs) {
+                            const code = String(d.data()?.couponCode || "").trim().toUpperCase();
+                            if (code && !couponToScenario.has(code))
+                                couponToScenario.set(code, d.id);
+                        }
+                        // 割引コードの順に走査して最初の一致を採用（AnalyticsPageのクーポン帰属と同じ順序）
+                        for (const c of normCodes) {
+                            const hit = couponToScenario.get(c);
+                            if (hit) {
+                                if (attributedScenarioId !== hit) {
+                                    console.log("[/v1/log] coupon attribution", { from: attributedScenarioId, to: hit, code: c });
+                                }
+                                attributedScenarioId = hit;
+                                attrDropped = false; // ガードで外れていてもクーポン一致なら復活させる
+                                break;
+                            }
+                        }
+                    }
+                }
+                catch (e) {
+                    console.warn("[/v1/log] coupon attribution failed", e);
+                }
+            }
             const scenarioId = String(attributedScenarioId ?? "all");
             // ── 地域(GeoIP) ────────────────────────────────────────────────────
             // 集計対象の pageview / purchase だけ解決（IPは保存せず地域のみ）。
@@ -3712,6 +3837,133 @@ function registerV1Routes(app) {
             return res.status(400).json({ error: "log_failed", message: e?.message || String(e) });
         }
     });
+    /* ============================================================
+       /v1/stats/new-repeat-revenue  ★管理画面専用
+       新規/リピート別の日別売上。
+       ------------------------------------------------------------
+       ブラウザ側で logs を読んで集計すると、取得上限(5000件)に阻まれて
+       購入者の is_new を拾えず「判定不明」だらけになる。かといって
+       上限を上げると読み取りコストと待ち時間が跳ね上がる。
+       → Firestoreに近いサーバー側で集計し、1リクエストで返す。
+       ============================================================ */
+    app.post("/v1/stats/new-repeat-revenue", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            if (req.method === "OPTIONS")
+                return res.status(204).send("");
+            const body = req.body || {};
+            const siteId = String(body.site_id || "").trim();
+            const dayFrom = String(body.day_from || "").trim(); // ISO日時（UTC）
+            const dayTo = String(body.day_to || "").trim();
+            if (!siteId || !dayFrom || !dayTo) {
+                return res.status(400).json({ error: "site_id, day_from, day_to required" });
+            }
+            await requireWorkspaceAccessBySiteId(req, siteId, "dashboard", ["owner", "admin", "member"]);
+            const db = (0, admin_1.adminDb)();
+            // 1) 期間内の購入（order_idで重複排除）
+            const pSnap = await db.collection("logs")
+                .where("site_id", "==", siteId).where("event", "==", "purchase")
+                .where("createdAt", ">=", dayFrom).where("createdAt", "<=", dayTo)
+                .get();
+            const seenOrder = new Set();
+            const purchases = [];
+            pSnap.forEach((d) => {
+                const x = d.data();
+                const oid = x.order_id ? String(x.order_id) : "";
+                if (oid) {
+                    if (seenOrder.has(oid))
+                        return;
+                    seenOrder.add(oid);
+                }
+                purchases.push({
+                    vid: x.vid || null,
+                    at: String(x.createdAt || ""),
+                    rev: typeof x.revenue === "number" ? x.revenue : 0,
+                });
+            });
+            // 2) 購入者vidの「期間内で最初のpageviewの is_new」を引く
+            const vids = [...new Set(purchases.map((p) => p.vid).filter(Boolean))];
+            const isNewByVid = new Map();
+            const CHUNK = 10; // Firestore の in 上限
+            const PARALLEL = 12;
+            const chunks = [];
+            for (let i = 0; i < vids.length; i += CHUNK)
+                chunks.push(vids.slice(i, i + CHUNK));
+            const earliest = new Map(); // vid -> createdAt
+            const runChunk = async (chunk) => {
+                const snap = await db.collection("logs")
+                    .where("site_id", "==", siteId).where("event", "==", "pageview")
+                    .where("vid", "in", chunk)
+                    .get();
+                snap.forEach((d) => {
+                    const x = d.data();
+                    if (!x.vid || typeof x.is_new !== "boolean")
+                        return;
+                    const at = String(x.createdAt || "");
+                    if (!at || at < dayFrom || at > dayTo)
+                        return;
+                    const cur = earliest.get(x.vid);
+                    if (!cur || at < cur) {
+                        earliest.set(x.vid, at);
+                        isNewByVid.set(x.vid, x.is_new);
+                    }
+                });
+            };
+            for (let i = 0; i < chunks.length; i += PARALLEL) {
+                await Promise.all(chunks.slice(i, i + PARALLEL).map(runChunk));
+            }
+            // 3) 日別（JST）に集計
+            const byDay = new Map();
+            let tn = 0, tr = 0, tu = 0;
+            for (const p of purchases) {
+                const day = p.at ? yyyyMmDdJST(new Date(p.at)) : "";
+                if (!day)
+                    continue;
+                let e = byDay.get(day);
+                if (!e) {
+                    e = { n: 0, r: 0, u: 0 };
+                    byDay.set(day, e);
+                }
+                const isNew = p.vid ? isNewByVid.get(p.vid) : undefined;
+                if (isNew === true) {
+                    e.n += p.rev;
+                    tn += p.rev;
+                }
+                else if (isNew === false) {
+                    e.r += p.rev;
+                    tr += p.rev;
+                }
+                else {
+                    e.u += p.rev;
+                    tu += p.rev;
+                }
+            }
+            const days = [...byDay.entries()]
+                .map(([day, e]) => ({
+                day,
+                newRevenue: Math.round(e.n),
+                repeatRevenue: Math.round(e.r),
+                unknownRevenue: Math.round(e.u),
+            }))
+                .sort((a, b) => a.day.localeCompare(b.day));
+            return res.json({
+                ok: true,
+                days,
+                totals: { newRevenue: Math.round(tn), repeatRevenue: Math.round(tr), unknownRevenue: Math.round(tu) },
+                meta: { purchases: purchases.length, purchasers: vids.length, judged: isNewByVid.size },
+            });
+        }
+        catch (e) {
+            console.error("[/v1/stats/new-repeat-revenue] error:", e);
+            // 認証・権限エラーは 401/403 で返す（既存の /v1/stats/summary と揃える）
+            const msg = String(e?.message || "");
+            const status = msg === "missing_authorization" || msg === "invalid_token" ? 401
+                : msg.includes("forbidden") || msg.includes("denied") || msg.includes("not_allowed") ? 403
+                    : 400;
+            return res.status(status).json({ error: msg || "failed" });
+        }
+    });
+    app.options("/v1/stats/new-repeat-revenue", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
     /* -----------------------------
        /v1/stats/summary  ★管理画面専用（ADMIN_ORIGINS）
        - stats_daily を集計してダッシュボード用の数字を返す
@@ -3923,6 +4175,8 @@ function registerV1Routes(app) {
                     .where("event", "==", "purchase")
                     .where("createdAt", "<=", toIso)
                     .orderBy("createdAt", "asc")
+                    // ※Admin SDKには limit 10000 の制約が無い（クライアントSDKのみ）。
+                    //   ここはサーバー実行なので20000でよい。
                     .limit(20000)
                     .get();
                 for (const d of pSnap.docs) {
@@ -5436,7 +5690,7 @@ function registerV1Routes(app) {
     app.post("/v1/ops/workspaces/delete", async (req, res) => {
         try {
             corsByAdminOrigins(req, res);
-            await requirePlatformAdmin(req);
+            await requireSuperAdmin(req);
             const { workspace_id } = req.body;
             if (!workspace_id)
                 throw new Error("workspace_id required");
@@ -5542,7 +5796,7 @@ function registerV1Routes(app) {
     app.post("/v1/ops/plans/upsert", async (req, res) => {
         try {
             corsByAdminOrigins(req, res);
-            await requirePlatformAdmin(req);
+            await requireSuperAdmin(req);
             const body = OpsPlanUpsertSchema.parse(req.body);
             const db = (0, admin_1.adminDb)();
             const ref = db.collection("plans").doc(body.plan_id);
@@ -5633,7 +5887,7 @@ function registerV1Routes(app) {
     app.post("/v1/ops/users/delete", async (req, res) => {
         try {
             corsByAdminOrigins(req, res);
-            await requirePlatformAdmin(req);
+            await requireSuperAdmin(req);
             const { uid } = req.body;
             if (!uid)
                 return res.status(400).json({ error: "uid required" });
@@ -5662,7 +5916,7 @@ function registerV1Routes(app) {
     app.post("/v1/ops/backups/settings/get", async (req, res) => {
         try {
             corsByAdminOrigins(req, res);
-            await requirePlatformAdmin(req);
+            await requireSuperAdmin(req);
             const settings = await (0, backup_1.getBackupSettings)();
             return res.json({
                 ok: true,
@@ -5689,7 +5943,7 @@ function registerV1Routes(app) {
     app.post("/v1/ops/backups/settings/upsert", async (req, res) => {
         try {
             corsByAdminOrigins(req, res);
-            const updatedBy = await requirePlatformAdmin(req);
+            const updatedBy = await requireSuperAdmin(req);
             const body = BackupSettingsUpsertReqSchema.parse(req.body || {});
             const settings = await (0, backup_1.upsertBackupSettings)({
                 enabled: body.enabled,
@@ -5717,7 +5971,7 @@ function registerV1Routes(app) {
     app.post("/v1/ops/backups/list", async (req, res) => {
         try {
             corsByAdminOrigins(req, res);
-            await requirePlatformAdmin(req);
+            await requireSuperAdmin(req);
             const body = BackupListReqSchema.parse(req.body || {});
             const runs = await (0, backup_1.listBackupRuns)(body.limit);
             return res.json({ ok: true, runs });
@@ -5732,7 +5986,7 @@ function registerV1Routes(app) {
     app.post("/v1/ops/backups/run", async (req, res) => {
         try {
             corsByAdminOrigins(req, res);
-            const createdBy = await requirePlatformAdmin(req);
+            const createdBy = await requireSuperAdmin(req);
             const body = BackupRunReqSchema.parse(req.body || {});
             if (body.scope === "workspace") {
                 if (!body.workspace_id) {
@@ -5761,7 +6015,7 @@ function registerV1Routes(app) {
     app.post("/v1/ops/backups/download-url", async (req, res) => {
         try {
             corsByAdminOrigins(req, res);
-            await requirePlatformAdmin(req);
+            await requireSuperAdmin(req);
             const body = BackupDownloadReqSchema.parse(req.body || {});
             const result = await (0, backup_1.createBackupDownloadUrl)(body.run_id);
             return res.json({ ok: true, ...result });
@@ -5784,7 +6038,7 @@ function registerV1Routes(app) {
             corsByAdminOrigins(req, res);
             if (req.method === "OPTIONS")
                 return res.status(204).send("");
-            await (0, admin_1.requireAuthUid)(req);
+            await requireSuperAdmin(req); // 全ワークスペース共通の雛形を書き換えるため最上位権限に限定
             const db = (0, admin_1.adminDb)();
             const snap = await db.collection("system_config").doc("platform_templates").get();
             const data = snap.exists ? snap.data() || {} : {};
@@ -5802,11 +6056,11 @@ function registerV1Routes(app) {
             corsByAdminOrigins(req, res);
             if (req.method === "OPTIONS")
                 return res.status(204).send("");
-            await (0, admin_1.requireAuthUid)(req);
+            await requireSuperAdmin(req); // 全ワークスペース共通の雛形を書き換えるため最上位権限に限定
             const body = req.body;
-            // body: { type: "modal"|"banner"|"toast"|"launcher", html: string, css: string }
+            // body: { type: "modal"|"banner"|"toast"|"launcher"|"push", html: string, css: string }
             const type = String(body.type || "");
-            if (!["modal", "banner", "toast", "launcher"].includes(type)) {
+            if (!["modal", "banner", "toast", "launcher", "push"].includes(type)) {
                 return res.status(400).json({ error: "invalid_type" });
             }
             const html = String(body.html || "");
@@ -5821,6 +6075,821 @@ function registerV1Routes(app) {
         }
     });
     app.options("/v1/ops/platform-templates/upsert", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /* ============================================================
+       標準テンプレートライブラリ（platform_templates コレクション）
+       ------------------------------------------------------------
+       従来は system_config/platform_templates に「タイプごと1個」だけ
+       持てたが、複数の名前付きテンプレートを持てるライブラリに拡張した。
+  
+       ★後方互換の要: /v1/serve は今も system_config/platform_templates を
+         読んでフォールバックしている（configTpls）。配信ロジックを触ると
+         リスクが高いので、「既定」に指定されたテンプレのhtml/cssを
+         レガシードキュメントへ**ミラー**することで serve は無改修のまま動く。
+       ============================================================ */
+    /** 既定テンプレをレガシー system_config/platform_templates にミラーする */
+    async function mirrorDefaultToLegacy(type) {
+        const db = (0, admin_1.adminDb)();
+        const snap = await db
+            .collection("platform_templates")
+            .where("type", "==", type)
+            .where("isDefault", "==", true)
+            .limit(1)
+            .get();
+        if (snap.empty)
+            return;
+        const d = snap.docs[0].data();
+        await db.collection("system_config").doc("platform_templates").set({ [type]: { html: d.html || "", css: d.css || "" }, updatedAt: firestore_1.FieldValue.serverTimestamp() }, { merge: true });
+    }
+    /** POST /v1/ops/platform-templates/library/list — ライブラリ全件 */
+    app.post("/v1/ops/platform-templates/library/list", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            if (req.method === "OPTIONS")
+                return res.status(204).send("");
+            await requireSuperAdmin(req); // 全ワークスペース共通の雛形を書き換えるため最上位権限に限定
+            const db = (0, admin_1.adminDb)();
+            const snap = await db.collection("platform_templates").get();
+            const items = snap.docs
+                .map((d) => ({ id: d.id, ...d.data() }))
+                .sort((a, b) => String(a.type).localeCompare(String(b.type)) || String(a.name).localeCompare(String(b.name)));
+            return res.json({ ok: true, items });
+        }
+        catch (e) {
+            console.error("[/v1/ops/platform-templates/library/list] error:", e);
+            return res.status(opsErrStatus(e)).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/ops/platform-templates/library/list", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /** POST /v1/ops/platform-templates/library/save — 新規作成/更新 */
+    app.post("/v1/ops/platform-templates/library/save", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            if (req.method === "OPTIONS")
+                return res.status(204).send("");
+            await requireSuperAdmin(req); // 全ワークスペース共通の雛形を書き換えるため最上位権限に限定
+            const body = req.body;
+            const type = String(body.type || "");
+            if (!["modal", "banner", "toast", "launcher", "push"].includes(type)) {
+                return res.status(400).json({ error: "invalid_type" });
+            }
+            const name = String(body.name || "").trim() || "無題テンプレート";
+            const db = (0, admin_1.adminDb)();
+            const id = String(body.id || "").trim() || `std_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
+            const ref = db.collection("platform_templates").doc(id);
+            const exists = (await ref.get()).exists;
+            const payload = {
+                name,
+                type,
+                html: String(body.html || ""),
+                css: String(body.css || ""),
+                updatedAt: firestore_1.FieldValue.serverTimestamp(),
+            };
+            if (body.js !== undefined)
+                payload.js = String(body.js || "");
+            if (Array.isArray(body.fields))
+                payload.fields = body.fields;
+            if (!exists) {
+                payload.createdAt = firestore_1.FieldValue.serverTimestamp();
+                payload.isDefault = false;
+            }
+            await ref.set(payload, { merge: true });
+            // 既定テンプレを編集した場合はレガシー側のミラーも更新する
+            const after = (await ref.get()).data();
+            if (after?.isDefault)
+                await mirrorDefaultToLegacy(type);
+            return res.json({ ok: true, id });
+        }
+        catch (e) {
+            console.error("[/v1/ops/platform-templates/library/save] error:", e);
+            return res.status(opsErrStatus(e)).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/ops/platform-templates/library/save", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /** POST /v1/ops/platform-templates/library/set-default — タイプの既定に指定 */
+    app.post("/v1/ops/platform-templates/library/set-default", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            if (req.method === "OPTIONS")
+                return res.status(204).send("");
+            await requireSuperAdmin(req); // 全ワークスペース共通の雛形を書き換えるため最上位権限に限定
+            const id = String(req.body?.id || "").trim();
+            if (!id)
+                return res.status(400).json({ error: "id_required" });
+            const db = (0, admin_1.adminDb)();
+            const ref = db.collection("platform_templates").doc(id);
+            const snap = await ref.get();
+            if (!snap.exists)
+                return res.status(404).json({ error: "not_found" });
+            const type = String(snap.data()?.type || "");
+            // 同タイプの既定を一旦すべて外し、対象のみtrueにする
+            const sameType = await db.collection("platform_templates").where("type", "==", type).get();
+            const batch = db.batch();
+            sameType.docs.forEach((d) => batch.set(d.ref, { isDefault: d.id === id }, { merge: true }));
+            await batch.commit();
+            await mirrorDefaultToLegacy(type);
+            return res.json({ ok: true });
+        }
+        catch (e) {
+            console.error("[/v1/ops/platform-templates/library/set-default] error:", e);
+            return res.status(opsErrStatus(e)).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/ops/platform-templates/library/set-default", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /** POST /v1/ops/platform-templates/library/delete — 削除（既定は削除不可） */
+    app.post("/v1/ops/platform-templates/library/delete", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            if (req.method === "OPTIONS")
+                return res.status(204).send("");
+            await requireSuperAdmin(req); // 全ワークスペース共通の雛形を書き換えるため最上位権限に限定
+            const id = String(req.body?.id || "").trim();
+            if (!id)
+                return res.status(400).json({ error: "id_required" });
+            const db = (0, admin_1.adminDb)();
+            const ref = db.collection("platform_templates").doc(id);
+            const snap = await ref.get();
+            if (!snap.exists)
+                return res.json({ ok: true });
+            if (snap.data()?.isDefault) {
+                // 既定を消すと serve のフォールバックが失われるため拒否する
+                return res.status(400).json({ error: "cannot_delete_default" });
+            }
+            await ref.delete();
+            return res.json({ ok: true });
+        }
+        catch (e) {
+            console.error("[/v1/ops/platform-templates/library/delete] error:", e);
+            return res.status(opsErrStatus(e)).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/ops/platform-templates/library/delete", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /** POST /v1/ops/platform-templates/library/seed — プリセットを冪等投入 */
+    app.post("/v1/ops/platform-templates/library/seed", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            if (req.method === "OPTIONS")
+                return res.status(204).send("");
+            await requireSuperAdmin(req); // 全ワークスペース共通の雛形を書き換えるため最上位権限に限定
+            const overwrite = req.body?.overwrite === true;
+            const db = (0, admin_1.adminDb)();
+            let created = 0, skipped = 0, updated = 0, migrated = 0;
+            // ★移行の安全策: 旧UI(system_config/platform_templates)でカスタムされた内容が
+            //   あれば、それを「現行の標準（移行）」としてライブラリに取り込み既定にする。
+            //   これをやらないと後段の mirrorDefaultToLegacy がプリセットで上書きしてしまい、
+            //   カスタム内容が失われる＋配信の見た目が勝手に変わる。
+            const legacySnap = await db.collection("system_config").doc("platform_templates").get();
+            const legacyData = legacySnap.exists ? (legacySnap.data() || {}) : {};
+            for (const type of ["modal", "banner", "toast", "launcher", "push"]) {
+                const lv = legacyData[type];
+                const lHtml = String(lv?.html || "").trim();
+                const lCss = String(lv?.css || "").trim();
+                if (!lHtml && !lCss)
+                    continue;
+                const preset = platformTemplatePresets_1.PLATFORM_TEMPLATE_PRESETS.find((p) => p.type === type && p.isDefault);
+                const sameAsPreset = !!preset && preset.html.trim() === lHtml && preset.css.trim() === lCss;
+                if (sameAsPreset)
+                    continue; // プリセットと同一なら移行不要
+                const migRef = db.collection("platform_templates").doc(`std_legacy_${type}`);
+                if ((await migRef.get()).exists)
+                    continue; // 既に移行済み
+                await migRef.set({
+                    name: `現行の標準（移行）— ${type}`,
+                    type,
+                    html: lv?.html || "",
+                    css: lv?.css || "",
+                    isDefault: true, // 現在配信中の内容をそのまま既定として維持
+                    createdAt: firestore_1.FieldValue.serverTimestamp(),
+                    updatedAt: firestore_1.FieldValue.serverTimestamp(),
+                }, { merge: true });
+                migrated++;
+            }
+            // 既に既定を持つタイプを把握しておく（移行分・既存分）。
+            // これをしないとプリセットの isDefault と二重になり、
+            // mirrorDefaultToLegacy の limit(1) がどちらを拾うか不定になる。
+            const typesWithDefault = new Set();
+            const defSnap = await db.collection("platform_templates").where("isDefault", "==", true).get();
+            defSnap.docs.forEach((d) => typesWithDefault.add(String(d.data()?.type || "")));
+            for (const p of platformTemplatePresets_1.PLATFORM_TEMPLATE_PRESETS) {
+                const ref = db.collection("platform_templates").doc(p.id);
+                const snap = await ref.get();
+                if (snap.exists && !overwrite) {
+                    skipped++;
+                    continue;
+                }
+                const payload = {
+                    name: p.name,
+                    type: p.type,
+                    html: p.html,
+                    css: p.css,
+                    updatedAt: firestore_1.FieldValue.serverTimestamp(),
+                    ...(p.js ? { js: p.js } : {}),
+                    ...(p.fields ? { fields: p.fields } : {}),
+                };
+                if (!snap.exists) {
+                    payload.createdAt = firestore_1.FieldValue.serverTimestamp();
+                    // そのタイプに既定が未設定のときだけ既定にする（既存の既定を奪わない）
+                    const takeDefault = !!p.isDefault && !typesWithDefault.has(p.type);
+                    payload.isDefault = takeDefault;
+                    if (takeDefault)
+                        typesWithDefault.add(p.type);
+                    created++;
+                }
+                else {
+                    updated++;
+                }
+                await ref.set(payload, { merge: true });
+            }
+            // 各タイプに既定が1つも無ければプリセットの既定を採用し、レガシーへミラー
+            for (const type of ["modal", "banner", "toast", "launcher", "push"]) {
+                const hasDefault = await db
+                    .collection("platform_templates")
+                    .where("type", "==", type)
+                    .where("isDefault", "==", true)
+                    .limit(1)
+                    .get();
+                if (hasDefault.empty) {
+                    const preset = platformTemplatePresets_1.PLATFORM_TEMPLATE_PRESETS.find((x) => x.type === type && x.isDefault);
+                    if (preset) {
+                        await db.collection("platform_templates").doc(preset.id).set({ isDefault: true }, { merge: true });
+                    }
+                }
+                await mirrorDefaultToLegacy(type);
+            }
+            return res.json({ ok: true, created, updated, skipped, migrated });
+        }
+        catch (e) {
+            console.error("[/v1/ops/platform-templates/library/seed] error:", e);
+            return res.status(opsErrStatus(e)).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/ops/platform-templates/library/seed", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /** POST /v1/platform-templates/list — ワークスペース管理画面用（標準テンプレから複製するため） */
+    app.post("/v1/platform-templates/list", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            if (req.method === "OPTIONS")
+                return res.status(204).send("");
+            await (0, admin_1.requireAuthUid)(req); // 認証済みユーザーなら誰でも閲覧可（内容は共通の雛形）
+            const db = (0, admin_1.adminDb)();
+            const snap = await db.collection("platform_templates").get();
+            const items = snap.docs
+                .map((d) => {
+                const x = d.data();
+                return {
+                    id: d.id,
+                    name: x.name || d.id,
+                    type: x.type || "modal",
+                    html: x.html || "",
+                    css: x.css || "",
+                    ...(x.js ? { js: x.js } : {}),
+                    ...(Array.isArray(x.fields) ? { fields: x.fields } : {}),
+                    isDefault: !!x.isDefault,
+                };
+            })
+                .sort((a, b) => String(a.type).localeCompare(String(b.type)) || String(a.name).localeCompare(String(b.name)));
+            return res.json({ ok: true, items });
+        }
+        catch (e) {
+            console.error("[/v1/platform-templates/list] error:", e);
+            return res.status(400).json({ error: e?.message || "failed" });
+        }
+    });
+    app.options("/v1/platform-templates/list", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /** POST /v1/stats/pv-aggregates — PV系の集計（日次ロールアップを合算） */
+    app.post("/v1/stats/pv-aggregates", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            if (req.method === "OPTIONS")
+                return res.status(204).send("");
+            const body = req.body || {};
+            const siteId = String(body.site_id || "").trim();
+            const dayFrom = String(body.day_from || "").trim(); // "YYYY-MM-DD" (JST)
+            const dayTo = String(body.day_to || "").trim();
+            if (!siteId || !dayFrom || !dayTo)
+                return res.status(400).json({ error: "site_id, day_from, day_to required" });
+            await requireWorkspaceAccessBySiteId(req, siteId, "dashboard", ["owner", "admin", "member"]);
+            const { readPvAggregatesFromDaily, rollupPvDaily } = await Promise.resolve().then(() => __importStar(require("../services/pvAggregates")));
+            let agg = await readPvAggregatesFromDaily((0, admin_1.adminDb)(), siteId, dayFrom, dayTo);
+            // 未集計の日があれば、その場で集計して埋める（当日分やロールアップ前の日）。
+            // 走査が重いので最大3日までに留め、それ以上は未集計として画面に知らせる。
+            if (agg.missingDays.length) {
+                const fill = agg.missingDays.slice(-3); // 新しい側から
+                for (const d of fill) {
+                    try {
+                        await rollupPvDaily((0, admin_1.adminDb)(), siteId, d);
+                    }
+                    catch (e) { /* 失敗しても他を返す */ }
+                }
+                agg = await readPvAggregatesFromDaily((0, admin_1.adminDb)(), siteId, dayFrom, dayTo);
+            }
+            return res.json({ ok: true, ...agg });
+        }
+        catch (e) {
+            console.error("[/v1/stats/pv-aggregates] error:", e);
+            return res.status(reportErrStatus(e)).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/stats/pv-aggregates", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /* ============================================================
+       週次レポートのメール配信
+       ------------------------------------------------------------
+       設定は sites/{siteId}.weeklyReport に保存する。
+         { enabled, recipients: string[], withAi, updatedAt }
+       実際の送信は index.ts の sendWeeklyReports（毎週月曜 JST 9:00）。
+       ============================================================ */
+    const reportErrStatus = (e) => {
+        const m = String(e?.message || "");
+        if (m === "missing_authorization" || m === "invalid_token")
+            return 401;
+        if (m.includes("forbidden") || m.includes("denied") || m.includes("not_allowed"))
+            return 403;
+        return 400;
+    };
+    /** レポートメールを組み立てる（AIはフラグで切替） */
+    async function buildWeeklyReportEmail(siteId, withAi) {
+        return (0, weeklyReport_1.composeWeeklyReportEmail)({
+            db: (0, admin_1.adminDb)(),
+            siteId,
+            withAi,
+            callOpenAIJson: openaiJson_1.callOpenAIJson,
+            z: zod_1.z,
+            dashboardUrl: "https://app.mokkeda.com/analytics",
+        });
+    }
+    /** メールアドレスの素朴な検証（表記ゆれを弾きすぎない程度） */
+    function normalizeRecipients(raw) {
+        const arr = Array.isArray(raw)
+            ? raw
+            : String(raw || "").split(/[\s,、]+/);
+        const out = [];
+        for (const v of arr) {
+            const e = String(v || "").trim().toLowerCase();
+            if (!e)
+                continue;
+            if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e))
+                throw new Error(`invalid_email:${e}`);
+            if (!out.includes(e))
+                out.push(e);
+        }
+        if (out.length > 20)
+            throw new Error("too_many_recipients");
+        return out;
+    }
+    /** POST /v1/reports/weekly/settings/get */
+    app.post("/v1/reports/weekly/settings/get", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            if (req.method === "OPTIONS")
+                return res.status(204).send("");
+            const siteId = String(req.body?.site_id || "").trim();
+            if (!siteId)
+                return res.status(400).json({ error: "site_id required" });
+            await requireWorkspaceAccessBySiteId(req, siteId, "dashboard", ["owner", "admin", "member"]);
+            const snap = await (0, admin_1.adminDb)().collection("sites").doc(siteId).get();
+            const w = (snap.data()?.weeklyReport || {});
+            return res.json({
+                ok: true,
+                settings: {
+                    enabled: !!w.enabled,
+                    recipients: Array.isArray(w.recipients) ? w.recipients : [],
+                    withAi: w.withAi !== false, // 既定ON
+                    weekday: Number.isInteger(w.weekday) ? w.weekday : 1, // 既定: 月曜
+                    hour: Number.isInteger(w.hour) ? w.hour : 9, // 既定: 9時(JST)
+                    lastSentAt: w.lastSentAt || null,
+                    lastPeriod: w.lastPeriod || null,
+                },
+            });
+        }
+        catch (e) {
+            console.error("[/v1/reports/weekly/settings/get] error:", e);
+            return res.status(reportErrStatus(e)).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/reports/weekly/settings/get", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /** POST /v1/reports/weekly/settings/save */
+    app.post("/v1/reports/weekly/settings/save", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            if (req.method === "OPTIONS")
+                return res.status(204).send("");
+            const body = req.body || {};
+            const siteId = String(body.site_id || "").trim();
+            if (!siteId)
+                return res.status(400).json({ error: "site_id required" });
+            // 設定変更は owner/admin のみ（宛先にメールを送る操作のため）
+            await requireWorkspaceAccessBySiteId(req, siteId, "dashboard", ["owner", "admin"]);
+            const recipients = normalizeRecipients(body.recipients);
+            const enabled = !!body.enabled;
+            if (enabled && recipients.length === 0) {
+                return res.status(400).json({ error: "recipients_required", message: "配信をONにするには宛先が必要です。" });
+            }
+            // 配信タイミング（JST）。曜日 0=日〜6=土、時刻 0〜23
+            const weekday = Number(body.weekday);
+            const hour = Number(body.hour);
+            if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6)
+                return res.status(400).json({ error: "invalid_weekday" });
+            if (!Number.isInteger(hour) || hour < 0 || hour > 23)
+                return res.status(400).json({ error: "invalid_hour" });
+            await (0, admin_1.adminDb)().collection("sites").doc(siteId).set({
+                weeklyReport: {
+                    enabled,
+                    recipients,
+                    withAi: body.with_ai !== false,
+                    weekday,
+                    hour,
+                    updatedAt: firestore_1.FieldValue.serverTimestamp(),
+                },
+            }, { merge: true });
+            return res.json({ ok: true, settings: { enabled, recipients, withAi: body.with_ai !== false, weekday, hour } });
+        }
+        catch (e) {
+            console.error("[/v1/reports/weekly/settings/save] error:", e);
+            return res.status(reportErrStatus(e)).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/reports/weekly/settings/save", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /** POST /v1/reports/weekly/preview — 送信せずHTMLを返す */
+    app.post("/v1/reports/weekly/preview", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            if (req.method === "OPTIONS")
+                return res.status(204).send("");
+            const body = req.body || {};
+            const siteId = String(body.site_id || "").trim();
+            if (!siteId)
+                return res.status(400).json({ error: "site_id required" });
+            await requireWorkspaceAccessBySiteId(req, siteId, "dashboard", ["owner", "admin", "member"]);
+            const { html, aiProblems } = await buildWeeklyReportEmail(siteId, body.with_ai !== false);
+            return res.json({ ok: true, html, aiProblems });
+        }
+        catch (e) {
+            console.error("[/v1/reports/weekly/preview] error:", e);
+            return res.status(reportErrStatus(e)).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/reports/weekly/preview", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /** POST /v1/reports/weekly/send-test — 自分宛にテスト送信 */
+    app.post("/v1/reports/weekly/send-test", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            if (req.method === "OPTIONS")
+                return res.status(204).send("");
+            const body = req.body || {};
+            const siteId = String(body.site_id || "").trim();
+            if (!siteId)
+                return res.status(400).json({ error: "site_id required" });
+            await requireWorkspaceAccessBySiteId(req, siteId, "dashboard", ["owner", "admin"]);
+            const to = normalizeRecipients(body.to);
+            if (!to.length)
+                return res.status(400).json({ error: "to_required" });
+            if (to.length > 3)
+                return res.status(400).json({ error: "too_many_test_recipients" });
+            const { html, subject } = await buildWeeklyReportEmail(siteId, body.with_ai !== false);
+            for (const addr of to) {
+                await sendHtmlEmail({ to: addr, subject: `[テスト] ${subject}`, html });
+            }
+            return res.json({ ok: true, sent: to.length });
+        }
+        catch (e) {
+            console.error("[/v1/reports/weekly/send-test] error:", e);
+            return res.status(reportErrStatus(e)).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/reports/weekly/send-test", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /** リクエスト元がその代理店のメンバーであることを検証する */
+    async function requireAgencyMember(req, agencyId, allowed = ["owner", "member"]) {
+        const uid = await (0, admin_1.requireAuthUid)(req);
+        const db = (0, admin_1.adminDb)();
+        const snap = await db.collection("agencies").doc(agencyId).get();
+        if (!snap.exists)
+            throw new Error("agency_not_found");
+        const data = snap.data();
+        const role = (data?.members || {})[uid];
+        if (!role || allowed.indexOf(role) < 0)
+            throw new Error("agency_forbidden");
+        return { uid, role, data };
+    }
+    const agencyErrStatus = (e) => e?.message === "agency_forbidden" ? 403
+        : e?.message === "agency_not_found" ? 404
+            : e?.message === "missing_authorization" || e?.message === "invalid_token" ? 401
+                : 500;
+    /** POST /v1/agency/me — ログイン中ユーザーが所属する代理店 */
+    app.post("/v1/agency/me", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            if (req.method === "OPTIONS")
+                return res.status(204).send("");
+            const uid = await (0, admin_1.requireAuthUid)(req);
+            const db = (0, admin_1.adminDb)();
+            const snap = await db.collection("agencies").where("memberUids", "array-contains", uid).get();
+            const agencies = snap.docs.map((d) => {
+                const x = d.data();
+                return { id: d.id, name: x.name || d.id, role: (x.members || {})[uid] || "member" };
+            });
+            return res.json({ ok: true, agencies });
+        }
+        catch (e) {
+            console.error("[/v1/agency/me] error:", e);
+            return res.status(agencyErrStatus(e)).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/agency/me", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /** POST /v1/agency/clients — 担当クライアントの一覧＋期間集計 */
+    app.post("/v1/agency/clients", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            if (req.method === "OPTIONS")
+                return res.status(204).send("");
+            const body = req.body || {};
+            const agencyId = String(body.agency_id || "").trim();
+            if (!agencyId)
+                return res.status(400).json({ error: "agency_id required" });
+            // ★agencyIdはクライアントから来るので必ずメンバーシップを検証する
+            const { uid } = await requireAgencyMember(req, agencyId);
+            const dayFrom = String(body.day_from || "").trim();
+            const dayTo = String(body.day_to || "").trim();
+            const db = (0, admin_1.adminDb)();
+            const wsSnap = await db.collection("workspaces").where("agencyId", "==", agencyId).get();
+            const workspaces = wsSnap.docs.map((d) => ({ id: d.id, data: d.data() }));
+            if (!workspaces.length)
+                return res.json({ ok: true, clients: [] });
+            // 各ワークスペースのサイトを取得
+            const wsIds = workspaces.map((w) => w.id);
+            const siteChunks = [];
+            for (let i = 0; i < wsIds.length; i += 10)
+                siteChunks.push(wsIds.slice(i, i + 10));
+            const sitesByWs = new Map();
+            for (const chunk of siteChunks) {
+                const sSnap = await db.collection("sites").where("workspaceId", "in", chunk).get();
+                sSnap.docs.forEach((d) => {
+                    const x = d.data();
+                    if (x.status === "deleted")
+                        return;
+                    const arr = sitesByWs.get(x.workspaceId) || [];
+                    arr.push({ id: d.id, name: x.name || d.id });
+                    sitesByWs.set(x.workspaceId, arr);
+                });
+            }
+            // 期間指定があれば stats_daily を集計
+            const statsBySite = new Map();
+            if (dayFrom && dayTo) {
+                const allSiteIds = [];
+                sitesByWs.forEach((arr) => arr.forEach((s) => allSiteIds.push(s.id)));
+                for (const sid of allSiteIds) {
+                    const st = await db.collection("stats_daily")
+                        .where("siteId", "==", sid)
+                        .where("day", ">=", dayFrom).where("day", "<=", dayTo)
+                        .get();
+                    const acc = { pv: 0, impressions: 0, clicks: 0, conversions: 0, purchases: 0, revenue: 0 };
+                    st.docs.forEach((d) => {
+                        const x = d.data();
+                        const c = Number(x.count || 0);
+                        if (x.event === "pageview")
+                            acc.pv += c;
+                        else if (x.event === "impression")
+                            acc.impressions += c;
+                        else if (x.event === "click" || x.event === "click_link")
+                            acc.clicks += c;
+                        else if (x.event === "conversion")
+                            acc.conversions += c;
+                        else if (x.event === "purchase") {
+                            acc.purchases += c;
+                            acc.revenue += Number(x.revenue_total || 0);
+                        }
+                    });
+                    statsBySite.set(sid, acc);
+                }
+            }
+            const clients = workspaces.map((w) => {
+                const sites = sitesByWs.get(w.id) || [];
+                const total = { pv: 0, impressions: 0, clicks: 0, conversions: 0, purchases: 0, revenue: 0 };
+                sites.forEach((s) => {
+                    const a = statsBySite.get(s.id);
+                    if (!a)
+                        return;
+                    total.pv += a.pv;
+                    total.impressions += a.impressions;
+                    total.clicks += a.clicks;
+                    total.conversions += a.conversions;
+                    total.purchases += a.purchases;
+                    total.revenue += a.revenue;
+                });
+                const billing = w.data.billing || {};
+                // ★このユーザーがそのワークスペースで持つロール。代理店ポータルから
+                //   「管理画面を開く」を出すかどうかの判定に使う（権限は既存機構のまま）
+                const myRole = (w.data.members || {})[uid]?.role || (w.data.members || {})[uid] || null;
+                return {
+                    workspaceId: w.id,
+                    name: w.data.name || w.id,
+                    plan: billing.plan || "free",
+                    status: billing.status || "inactive",
+                    sites,
+                    myRole,
+                    stats: total,
+                };
+            }).sort((a, b) => b.stats.revenue - a.stats.revenue || a.name.localeCompare(b.name));
+            return res.json({ ok: true, clients });
+        }
+        catch (e) {
+            console.error("[/v1/agency/clients] error:", e);
+            return res.status(agencyErrStatus(e)).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/agency/clients", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /* ===== ops: 代理店の管理（プラットフォーム管理者のみ） ===== */
+    /** POST /v1/ops/agencies/list */
+    app.post("/v1/ops/agencies/list", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            if (req.method === "OPTIONS")
+                return res.status(204).send("");
+            await requireSuperAdmin(req);
+            const db = (0, admin_1.adminDb)();
+            const [agSnap, wsSnap] = await Promise.all([
+                db.collection("agencies").get(),
+                db.collection("workspaces").get(),
+            ]);
+            // 代理店への請求は「課金対象アカウント数 × 単価」で算出する。
+            // 課金対象 = 契約中(active/trialing)のワークスペース。停止中や無料は数えない。
+            const billableStatuses = ["active", "trialing", "past_due"];
+            const clientCount = new Map();
+            const billableCount = new Map();
+            const clientNames = new Map();
+            wsSnap.docs.forEach((d) => {
+                const x = d.data();
+                if (!x.agencyId)
+                    return;
+                const billing = x.billing || {};
+                const status = String(billing.status || "inactive");
+                const plan = String(billing.plan || "free");
+                const billable = billableStatuses.indexOf(status) >= 0;
+                clientCount.set(x.agencyId, (clientCount.get(x.agencyId) || 0) + 1);
+                if (billable)
+                    billableCount.set(x.agencyId, (billableCount.get(x.agencyId) || 0) + 1);
+                const arr = clientNames.get(x.agencyId) || [];
+                arr.push({ id: d.id, name: x.name || d.id, plan, status, billable });
+                clientNames.set(x.agencyId, arr);
+            });
+            const agencies = agSnap.docs.map((d) => {
+                const x = d.data();
+                const unitPrice = Number(x.unitPrice || 0);
+                const billable = billableCount.get(d.id) || 0;
+                return {
+                    id: d.id,
+                    name: x.name || d.id,
+                    note: x.note || "",
+                    members: x.members || {},
+                    memberEmails: x.memberEmails || {},
+                    clientCount: clientCount.get(d.id) || 0,
+                    billableCount: billable,
+                    unitPrice,
+                    billingAmount: billable * unitPrice, // 当月の請求見込み
+                    clients: (clientNames.get(d.id) || []).sort((a, b) => a.name.localeCompare(b.name)),
+                };
+            }).sort((a, b) => a.name.localeCompare(b.name));
+            // 未紐付けのワークスペース（紐付けUI用）
+            const unassigned = wsSnap.docs
+                .filter((d) => !d.data().agencyId)
+                .map((d) => ({ id: d.id, name: d.data().name || d.id }))
+                .sort((a, b) => a.name.localeCompare(b.name));
+            return res.json({ ok: true, agencies, unassigned });
+        }
+        catch (e) {
+            console.error("[/v1/ops/agencies/list] error:", e);
+            return res.status(opsErrStatus(e)).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/ops/agencies/list", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /** POST /v1/ops/agencies/save — 代理店の作成／名称変更 */
+    app.post("/v1/ops/agencies/save", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            if (req.method === "OPTIONS")
+                return res.status(204).send("");
+            await requireSuperAdmin(req);
+            const body = req.body || {};
+            const name = String(body.name || "").trim();
+            if (!name)
+                return res.status(400).json({ error: "name required" });
+            const db = (0, admin_1.adminDb)();
+            const id = String(body.id || "").trim() || `agc_${Math.random().toString(36).slice(2, 10)}`;
+            const ref = db.collection("agencies").doc(id);
+            const exists = (await ref.get()).exists;
+            const payload = { name, updatedAt: firestore_1.FieldValue.serverTimestamp() };
+            // 代理店への請求単価（1アカウントあたり月額）。請求額 = 課金対象アカウント数 × 単価
+            if (body.unit_price !== undefined)
+                payload.unitPrice = Math.max(0, Number(body.unit_price) || 0);
+            if (body.note !== undefined)
+                payload.note = String(body.note || "");
+            if (!exists) {
+                payload.createdAt = firestore_1.FieldValue.serverTimestamp();
+                payload.members = {};
+                payload.memberUids = [];
+                payload.memberEmails = {};
+            }
+            await ref.set(payload, { merge: true });
+            return res.json({ ok: true, id });
+        }
+        catch (e) {
+            console.error("[/v1/ops/agencies/save] error:", e);
+            return res.status(opsErrStatus(e)).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/ops/agencies/save", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /** POST /v1/ops/agencies/members/add — メール指定で代理店メンバーを追加 */
+    app.post("/v1/ops/agencies/members/add", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            if (req.method === "OPTIONS")
+                return res.status(204).send("");
+            await requireSuperAdmin(req);
+            const body = req.body || {};
+            const agencyId = String(body.agency_id || "").trim();
+            const email = String(body.email || "").trim().toLowerCase();
+            const role = String(body.role || "member") === "owner" ? "owner" : "member";
+            if (!agencyId || !email)
+                return res.status(400).json({ error: "agency_id and email required" });
+            let user = null;
+            try {
+                const { getAuth: getAdminAuthFn } = await Promise.resolve().then(() => __importStar(require("firebase-admin/auth")));
+                user = await getAdminAuthFn().getUserByEmail(email);
+            }
+            catch (e) {
+                // Firebase Auth に未登録＝まだサインアップしていない
+                return res.status(404).json({ error: "user_not_found", message: "このメールのユーザーが見つかりません。先に本人にサインアップしてもらってください。" });
+            }
+            const db = (0, admin_1.adminDb)();
+            await db.collection("agencies").doc(agencyId).set({
+                [`members.${user.uid}`]: role,
+                [`memberEmails.${user.uid}`]: email,
+                memberUids: firestore_1.FieldValue.arrayUnion(user.uid),
+                updatedAt: firestore_1.FieldValue.serverTimestamp(),
+            }, { merge: true });
+            return res.json({ ok: true, uid: user.uid });
+        }
+        catch (e) {
+            console.error("[/v1/ops/agencies/members/add] error:", e);
+            return res.status(opsErrStatus(e)).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/ops/agencies/members/add", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /** POST /v1/ops/agencies/members/remove */
+    app.post("/v1/ops/agencies/members/remove", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            if (req.method === "OPTIONS")
+                return res.status(204).send("");
+            await requireSuperAdmin(req);
+            const body = req.body || {};
+            const agencyId = String(body.agency_id || "").trim();
+            const uid = String(body.uid || "").trim();
+            if (!agencyId || !uid)
+                return res.status(400).json({ error: "agency_id and uid required" });
+            const db = (0, admin_1.adminDb)();
+            await db.collection("agencies").doc(agencyId).update({
+                [`members.${uid}`]: firestore_1.FieldValue.delete(),
+                [`memberEmails.${uid}`]: firestore_1.FieldValue.delete(),
+                memberUids: firestore_1.FieldValue.arrayRemove(uid),
+                updatedAt: firestore_1.FieldValue.serverTimestamp(),
+            });
+            return res.json({ ok: true });
+        }
+        catch (e) {
+            console.error("[/v1/ops/agencies/members/remove] error:", e);
+            return res.status(opsErrStatus(e)).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/ops/agencies/members/remove", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
+    /** POST /v1/ops/agencies/link — ワークスペースを代理店に紐付け／解除 */
+    app.post("/v1/ops/agencies/link", async (req, res) => {
+        try {
+            corsByAdminOrigins(req, res);
+            if (req.method === "OPTIONS")
+                return res.status(204).send("");
+            await requireSuperAdmin(req);
+            const body = req.body || {};
+            const workspaceId = String(body.workspace_id || "").trim();
+            const agencyId = String(body.agency_id || "").trim(); // 空なら解除
+            if (!workspaceId)
+                return res.status(400).json({ error: "workspace_id required" });
+            const db = (0, admin_1.adminDb)();
+            if (agencyId) {
+                await db.collection("workspaces").doc(workspaceId).set({ agencyId, updatedAt: firestore_1.FieldValue.serverTimestamp() }, { merge: true });
+            }
+            else {
+                await db.collection("workspaces").doc(workspaceId).update({
+                    agencyId: firestore_1.FieldValue.delete(),
+                    updatedAt: firestore_1.FieldValue.serverTimestamp(),
+                });
+            }
+            return res.json({ ok: true });
+        }
+        catch (e) {
+            console.error("[/v1/ops/agencies/link] error:", e);
+            return res.status(opsErrStatus(e)).json({ error: e?.message });
+        }
+    });
+    app.options("/v1/ops/agencies/link", (req, res) => { corsByAdminOrigins(req, res); res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization"); res.status(204).send(""); });
     /* ============================================================
        ウェルカムメール送信（認証済みユーザーが初回登録完了時に呼ぶ）
        ============================================================ */
@@ -5846,35 +6915,54 @@ function registerV1Routes(app) {
             const from = getInviteFromEmail();
             const messageStream = getInviteMessageStream();
             const loginUrl = "https://app.mokkeda.com";
-            const subject = "MOKKEDAへようこそ！🎉";
-            const htmlBody = `
-        <div style="font-family:Arial,Helvetica,sans-serif;line-height:1.7;color:#111827;max-width:560px;margin:0 auto;">
-          <div style="background:linear-gradient(135deg,#d1f0ee,#b2e4e1);padding:32px;text-align:center;border-radius:12px 12px 0 0;">
-            <img src="https://cx-platform-v1.web.app/logo_mokkeda_v1.svg" alt="MOKKEDA" style="width:180px;" />
+            const subject = "【MOKKEDA】ご登録ありがとうございます";
+            // 以前はロゴにSVGを指定していたが、GmailもOutlookもSVGを表示できないため
+            // 共通テンプレート（PNGロゴ＋画像ブロック対策）に統一した
+            const htmlBody = (0, emailTemplate_1.wrapEmail)({
+                title: "ようこそ MOKKEDA へ",
+                preheader: `${name} さん、${wsName} のワークスペースを作成しました`,
+                bodyHtml: `
+          <div style="font-size:16px;font-weight:700;color:${emailTemplate_1.MAIL_BRAND.ink};line-height:1.7;">
+            ${(0, emailTemplate_1.escapeHtml)(name)} さん、ようこそ
           </div>
-          <div style="background:#fff;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;">
-            <p style="font-size:18px;font-weight:700;margin:0 0 16px;">${name} さん、ようこそ！🎉</p>
-            <p>MOKKEDAへご登録いただきありがとうございます。<br/>
-            <strong>${wsName}</strong> のワークスペースが作成されました。</p>
-            <p>まずはサイトを登録して、シナリオを設定してみましょう。</p>
-            <p style="margin:24px 0;">
-              <a href="${loginUrl}" style="display:inline-block;padding:12px 28px;background:#49b1b8;color:#fff;text-decoration:none;border-radius:8px;font-weight:700;font-size:15px;">
-                管理画面を開く →
-              </a>
-            </p>
-            <hr style="border:none;border-top:1px solid #f3f4f6;margin:24px 0;" />
-            <p style="font-size:12px;color:#9ca3af;">
-              ご不明な点はサポートまでお気軽にご連絡ください。<br/>
-              このメールはMOKKEDAよりお送りしています。
-            </p>
+          <div style="font-size:13px;color:${emailTemplate_1.MAIL_BRAND.inkSoft};line-height:1.9;margin-top:8px;">
+            MOKKEDAへご登録いただきありがとうございます。<br/>
+            <b style="color:${emailTemplate_1.MAIL_BRAND.ink};">${(0, emailTemplate_1.escapeHtml)(wsName)}</b> のワークスペースを作成しました。
           </div>
-        </div>
-      `.trim();
+
+          <div style="margin-top:18px;font-size:13px;font-weight:700;color:${emailTemplate_1.MAIL_BRAND.ink};">はじめの3ステップ</div>
+          <table role="presentation" width="100%" style="border-collapse:collapse;background:${emailTemplate_1.MAIL_BRAND.panel2};border-radius:12px;margin-top:8px;">
+            ${[
+                    ["1", "サイトを登録する", "計測したいサイトのURLを登録します"],
+                    ["2", "タグを設置する", "発行されたタグをサイトに貼ると計測が始まります"],
+                    ["3", "接客をつくる", "テンプレートから選んで、配信する条件を決めます"],
+                ].map(([n, t, d]) => `
+              <tr>
+                <td style="padding:12px 10px 12px 14px;width:28px;vertical-align:top;">
+                  <div style="width:22px;height:22px;border-radius:50%;background:${emailTemplate_1.MAIL_BRAND.mark};color:#fff;font-size:12px;font-weight:700;text-align:center;line-height:22px;">${n}</div>
+                </td>
+                <td style="padding:12px 14px 12px 0;">
+                  <div style="font-size:13px;font-weight:700;color:${emailTemplate_1.MAIL_BRAND.ink};">${t}</div>
+                  <div style="font-size:12px;color:${emailTemplate_1.MAIL_BRAND.inkSoft};line-height:1.7;margin-top:2px;">${d}</div>
+                </td>
+              </tr>`).join("")}
+          </table>
+
+          ${(0, emailTemplate_1.mailButton)(loginUrl, "管理画面を開く")}
+          <div style="font-size:12px;color:${emailTemplate_1.MAIL_BRAND.inkSoft};line-height:1.8;">
+            ご不明な点はサポートまでお気軽にご連絡ください。
+          </div>`,
+            });
             const textBody = [
-                `${name} さん、ようこそ！`,
+                `${name} さん、ようこそ`,
                 "",
-                `MOKKEDAへご登録いただきありがとうございます。`,
-                `「${wsName}」のワークスペースが作成されました。`,
+                "MOKKEDAへご登録いただきありがとうございます。",
+                `「${wsName}」のワークスペースを作成しました。`,
+                "",
+                "はじめの3ステップ:",
+                "  1. サイトを登録する",
+                "  2. タグを設置する",
+                "  3. 接客をつくる",
                 "",
                 `管理画面: ${loginUrl}`,
             ].join("\n");
@@ -6246,7 +7334,7 @@ function registerV1Routes(app) {
     app.post("/v1/ops/misoca/authorize", async (req, res) => {
         try {
             corsByAdminOrigins(req, res);
-            await requirePlatformAdmin(req);
+            await requireSuperAdmin(req);
             const clientId = MISOCA_CLIENT_ID.value().trim();
             if (!clientId)
                 return res.status(500).json({ error: "MISOCA_CLIENT_ID が未設定です" });
@@ -6331,7 +7419,7 @@ function registerV1Routes(app) {
     app.post("/v1/ops/misoca/status", async (req, res) => {
         try {
             corsByAdminOrigins(req, res);
-            await requirePlatformAdmin(req);
+            await requireSuperAdmin(req);
             const status = await (0, misoca_1.getMisocaStatus)();
             // 最新の発行ログ5件も返す
             const logsSnap = await (0, admin_1.adminDb)().collection("invoice_logs")
@@ -6348,7 +7436,7 @@ function registerV1Routes(app) {
     app.post("/v1/ops/misoca/disconnect", async (req, res) => {
         try {
             corsByAdminOrigins(req, res);
-            await requirePlatformAdmin(req);
+            await requireSuperAdmin(req);
             await (0, admin_1.adminDb)().collection("system_config").doc("misoca").delete();
             return res.json({ ok: true });
         }
@@ -6361,7 +7449,7 @@ function registerV1Routes(app) {
     app.post("/v1/ops/misoca/trigger", async (req, res) => {
         try {
             corsByAdminOrigins(req, res);
-            await requirePlatformAdmin(req);
+            await requireSuperAdmin(req);
             const clientId = MISOCA_CLIENT_ID.value().trim();
             const clientSecret = MISOCA_CLIENT_SECRET.value().trim();
             if (!clientId || !clientSecret)
@@ -6385,7 +7473,7 @@ function registerV1Routes(app) {
     app.post("/v1/ops/backfill-purchase-attribution", async (req, res) => {
         try {
             corsByAdminOrigins(req, res);
-            await requirePlatformAdmin(req);
+            await requireSuperAdmin(req);
             const db = (0, admin_1.adminDb)();
             const targetSiteId = String(req.body.siteId || "").trim();
             // 1. 対象サイト一覧を取得
