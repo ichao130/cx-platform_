@@ -1730,6 +1730,11 @@ export default function AnalyticsPage() {
       // サーバー集計が未反映の期間だけ、訪問ログから推定する（旧データ互換）
       const vidSourceMap = new Map<string, string>();
       for (const v of visitorList) {
+        // ★pageview が1件も無い訪問者（購入ログだけから作られた人）を入れてはいけない。
+        //   その人は utmSource/firstRef/firstReferrerApp がすべて空文字で、
+        //   resolveSource("","","") は既定値の "直接流入" を返してしまう。
+        //   結果、下の `|| "(流入元不明)"` が効かず売上が全部「直接流入」に寄る。
+        if (v.pvCount === 0) continue;
         vidSourceMap.set(v.vid, resolveSource(v.utmSource, v.firstRef, v.firstReferrerApp));
       }
       const vids = new Map<string, Set<string>>();
