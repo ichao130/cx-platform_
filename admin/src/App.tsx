@@ -28,6 +28,12 @@ const API_BASE =
   (import.meta as any).env?.VITE_API_BASE ||
   "https://asia-northeast1-cx-platform-v1.cloudfunctions.net/api";
 
+/** 操作ガイド（サイドバーの「ヘルプ」から開く）。
+ *  差し替えたいときは VITE_MANUAL_URL で上書きできる。 */
+const MANUAL_URL =
+  (import.meta as any).env?.VITE_MANUAL_URL ||
+  "https://claude.ai/artifact/NQtiNmj61D3DyjWFhr4mfD";
+
 type RoleKey = "owner" | "admin" | "member" | "viewer";
 type AccessKey =
   | "dashboard"
@@ -267,6 +273,46 @@ function SidebarLink({
     >
       {children}
     </NavLink>
+  );
+}
+
+/** 外部サイトへ開くサイドバー項目。見た目は SidebarLink と揃え、別タブで開く。 */
+function SidebarExternalLink({
+  href,
+  children,
+}: {
+  href: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        textDecoration: "none",
+        padding: "9px 12px",
+        borderRadius: 9,
+        fontWeight: 500,
+        fontSize: 13,
+        color: "rgba(255,255,255,.72)",
+        transition: "background .15s, color .15s",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = "rgba(89,183,198,.12)";
+        e.currentTarget.style.color = "#59cfe0";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "transparent";
+        e.currentTarget.style.color = "rgba(255,255,255,.72)";
+      }}
+    >
+      {children}
+      <span aria-hidden="true" style={{ marginLeft: "auto", fontSize: 10, opacity: 0.45 }}>↗</span>
+    </a>
   );
 }
 
@@ -949,7 +995,15 @@ function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
 
-
+        {/* ヘルプ: 操作ガイド（外部ページ）。全ロールに出す。 */}
+        <div style={{ marginTop: 18 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "rgba(255,255,255,.38)", marginBottom: 8, paddingLeft: 12 }}>
+            ヘルプ
+          </div>
+          <div style={{ display: "grid", gap: 4 }}>
+            <SidebarExternalLink href={MANUAL_URL}>操作ガイド</SidebarExternalLink>
+          </div>
+        </div>
 
         <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid rgba(15,23,42,.08)" }}>
           <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "rgba(255,255,255,.38)", marginBottom: 8, paddingLeft: 12 }}>

@@ -22,6 +22,11 @@ const s: Record<string, React.CSSProperties> = {
   card: { background: "#1e293b", border: "1px solid rgba(255,255,255,.1)", borderRadius: 16, padding: 40, textAlign: "center", maxWidth: 380, width: "90vw" },
 };
 
+/** 運用ハンドブック（ナビ右の「ハンドブック」から開く）。社内限定。 */
+const OPS_MANUAL_URL =
+  (import.meta as any).env?.VITE_OPS_MANUAL_URL ||
+  "https://claude.ai/artifact/79BovE1QU1R4wmM4XbaEu6";
+
 type Page = "workspaces" | "trials" | "announcements" | "plans" | "admins" | "users" | "misoca" | "backups" | "platform_templates" | "agencies";
 
 async function loadOpsAdmins(): Promise<string[]> {
@@ -120,6 +125,21 @@ export default function App() {
         <NavBtn id="users" label="ユーザー管理" />
         {isSuperAdmin && <NavBtn id="admins" label="管理者" />}
         <div style={{ flex: 1 }} />
+        {/* 運用ハンドブック（社内限定の外部ページ）。ナビ右側の空きに置く。 */}
+        <a
+          href={OPS_MANUAL_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="運用ハンドブック（社内限定）"
+          style={{
+            fontSize: 12, padding: "5px 11px", marginRight: 12,
+            background: "rgba(255,255,255,.06)", border: "1px solid rgba(255,255,255,.12)",
+            borderRadius: 6, color: "rgba(255,255,255,.6)", textDecoration: "none",
+            display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap",
+          }}
+        >
+          📖 ハンドブック<span aria-hidden="true" style={{ opacity: 0.5, fontSize: 10 }}>↗</span>
+        </a>
         <span style={{ fontSize: 12, opacity: 0.45, marginRight: 12 }}>{email}</span>
         <button onClick={signOutNow} style={{ fontSize: 12, padding: "5px 12px", background: "rgba(255,255,255,.06)", border: "1px solid rgba(255,255,255,.12)", borderRadius: 6, color: "rgba(255,255,255,.6)", cursor: "pointer" }}>
           ログアウト
