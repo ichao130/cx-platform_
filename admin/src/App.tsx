@@ -29,10 +29,15 @@ const API_BASE =
   "https://asia-northeast1-cx-platform-v1.cloudfunctions.net/api";
 
 /** 操作ガイド（サイドバーの「ヘルプ」から開く）。
+ *  実体は help/index.html。Firebase Hosting のマルチサイト構成で
+ *  mokkeda-help サイトに配信している（firebase deploy --only hosting:help）。
  *  差し替えたいときは VITE_MANUAL_URL で上書きできる。 */
 const MANUAL_URL =
   (import.meta as any).env?.VITE_MANUAL_URL ||
-  "https://claude.ai/artifact/NQtiNmj61D3DyjWFhr4mfD";
+  // TODO: help.mokkeda.com のカスタムドメインが有効になったら切り替える。
+  //   現在 *.mokkeda.com はワイルドカードで別IPを指しており、help 固有の
+  //   レコードを足すまで help.mokkeda.com は Firebase に届かない。
+  "https://mokkeda-help.web.app/";
 
 type RoleKey = "owner" | "admin" | "member" | "viewer";
 type AccessKey =

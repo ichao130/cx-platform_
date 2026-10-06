@@ -1,0 +1,925 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>MOKKEDA 操作ガイド</title>
+<meta name="description" content="MOKKEDA管理画面の操作ガイド。SDK設置から接客シナリオの作成、成果の確認まで。" />
+<meta name="robots" content="noindex" />
+<meta property="og:title" content="MOKKEDA 操作ガイド" />
+<meta property="og:description" content="MOKKEDA管理画面の操作ガイド。SDK設置から接客シナリオの作成、成果の確認まで。" />
+<meta property="og:type" content="article" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231f7a8c'/%3E%3Ccircle cx='16' cy='16' r='5.5' fill='%2359b7c6'/%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Artifact の publish 時に付く最小リセットと同等のもの（単独配信用） */
+:root {
+  color-scheme: light;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+body { margin: 0; }
+img { max-width: 100%; }
+[hidden] { display: none !important; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+</style>
+</head>
+<body>
+<style>
+/* レイアウト: 左に固定目次、右に1カラムの本文。狭い幅では目次を折りたたみ式にして上に出す。
+   配色は管理画面 admin/src/styles/global.scss のトークンをそのまま使う。 */
+:root {
+  --bg: #f3f7fb;
+  --panel: #ffffff;
+  --panel2: #f8fafd;
+  --panel3: #eef4fa;
+  --text: #172b3f;
+  --muted: #5c6f82;
+  --brand: #1f7a8c;
+  --brand-2: #59b7c6;
+  --brand-bg: rgba(89,183,198,.12);
+  --border: rgba(20,44,68,.10);
+  --border-strong: rgba(20,44,68,.18);
+  --danger: #d0352e;
+  --danger-bg: rgba(208,53,46,.07);
+  --success: #1a8c54;
+  --success-bg: rgba(26,140,84,.07);
+  --warning: #b2731a;
+  --warning-bg: rgba(224,150,34,.11);
+  --code-bg: #10212f;
+  --code-fg: #d6e6f2;
+
+  --font-ui: "Zen Kaku Gothic New", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1a24;
+    --panel: #15242f;
+    --panel2: #1a2c38;
+    --panel3: #1f3341;
+    --text: #e4eef5;
+    --muted: #93a8b8;
+    --brand: #6fc4d2;
+    --brand-2: #8ad6e2;
+    --brand-bg: rgba(111,196,210,.13);
+    --border: rgba(255,255,255,.10);
+    --border-strong: rgba(255,255,255,.20);
+    --danger: #ff8f88;
+    --danger-bg: rgba(255,143,136,.10);
+    --success: #6ddba0;
+    --success-bg: rgba(109,219,160,.10);
+    --warning: #f0bc64;
+    --warning-bg: rgba(240,188,100,.12);
+    --code-bg: #0a151e;
+    --code-fg: #cfe2f0;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1a24;
+  --panel: #15242f;
+  --panel2: #1a2c38;
+  --panel3: #1f3341;
+  --text: #e4eef5;
+  --muted: #93a8b8;
+  --brand: #6fc4d2;
+  --brand-2: #8ad6e2;
+  --brand-bg: rgba(111,196,210,.13);
+  --border: rgba(255,255,255,.10);
+  --border-strong: rgba(255,255,255,.20);
+  --danger: #ff8f88;
+  --danger-bg: rgba(255,143,136,.10);
+  --success: #6ddba0;
+  --success-bg: rgba(109,219,160,.10);
+  --warning: #f0bc64;
+  --warning-bg: rgba(240,188,100,.12);
+  --code-bg: #0a151e;
+  --code-fg: #cfe2f0;
+  color-scheme: dark;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.85;
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+* { box-sizing: border-box; }
+
+/* ---- ヘッダー ---- */
+.masthead {
+  background: linear-gradient(104deg, #1f7a8c 0%, #49b1b8 56%, #59b7c6 100%);
+  color: #fff;
+  padding-block: 40px 34px;
+  padding-inline: 16px;
+}
+.masthead__in { max-width: 1180px; margin: 0 auto; }
+.logo { display: flex; align-items: baseline; gap: 10px; }
+.logo b { font-size: 26px; font-weight: 900; letter-spacing: .055em; }
+.logo span { font-size: 9.5px; letter-spacing: .24em; opacity: .82; font-weight: 500; }
+.masthead h1 {
+  font-size: clamp(27px, 5.2vw, 40px);
+  font-weight: 900;
+  line-height: 1.26;
+  margin: 18px 0 10px;
+  text-wrap: balance;
+  letter-spacing: -.01em;
+}
+.masthead p { margin: 0; max-width: 60ch; opacity: .93; font-size: 14.5px; line-height: 1.8; }
+.masthead__meta {
+  margin-top: 20px; display: flex; flex-wrap: wrap; gap: 8px;
+}
+.masthead__meta em {
+  font-style: normal; font-size: 11.5px; font-weight: 700;
+  background: rgba(255,255,255,.17); border: 1px solid rgba(255,255,255,.26);
+  padding: 4px 11px; border-radius: 999px; letter-spacing: .02em;
+}
+
+/* ---- 全体の骨格 ---- */
+.shell {
+  max-width: 1180px; margin: 0 auto;
+  padding-inline: 16px; padding-block: 0 72px;
+  display: grid; grid-template-columns: 236px minmax(0, 1fr); gap: 40px;
+  align-items: start;
+}
+@media (max-width: 900px) { .shell { grid-template-columns: 1fr; gap: 0; } }
+
+/* ---- 目次 ---- */
+.toc {
+  position: sticky; top: calc(env(safe-area-inset-top, 0px) + 18px);
+  margin-top: 30px; min-width: 0;
+}
+.toc__title {
+  font-size: 10px; font-weight: 700; letter-spacing: .15em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 11px; padding-left: 11px;
+}
+.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
+.toc a {
+  display: flex; gap: 9px; align-items: baseline;
+  padding: 5px 11px; border-radius: 7px;
+  color: var(--muted); text-decoration: none; font-size: 13px; line-height: 1.5;
+  border-left: 2px solid transparent;
+}
+.toc a:hover { background: var(--brand-bg); color: var(--brand); }
+.toc a i {
+  font-style: normal; font-family: var(--font-mono); font-size: 10.5px;
+  opacity: .55; min-width: 15px; font-variant-numeric: tabular-nums;
+}
+.toc details { display: none; }
+@media (max-width: 900px) {
+  .toc { position: static; margin-top: 18px; }
+  .toc__title { display: none; }
+  .toc details {
+    display: block; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 11px; padding: 4px 6px;
+  }
+  .toc summary {
+    cursor: pointer; padding: 10px 10px; font-weight: 700; font-size: 13.5px;
+    list-style: none; display: flex; justify-content: space-between; align-items: center;
+  }
+  .toc summary::-webkit-details-marker { display: none; }
+  .toc summary::after { content: "▾"; color: var(--brand); font-size: 11px; }
+  .toc details[open] summary::after { content: "▴"; }
+  .toc > ol { display: none; }
+  .toc details ol { padding: 2px 0 8px; }
+}
+
+/* ---- 本文 ---- */
+main { min-width: 0; padding-top: 30px; }
+section { scroll-margin-top: 20px; margin-bottom: 44px; }
+section > h2 {
+  font-size: 21px; font-weight: 900; letter-spacing: -.005em;
+  margin: 0 0 4px; padding-bottom: 11px; border-bottom: 2px solid var(--brand);
+  display: flex; align-items: baseline; gap: 11px; text-wrap: balance;
+}
+section > h2 i {
+  font-style: normal; font-family: var(--font-mono); font-size: 12px;
+  color: var(--brand); font-weight: 500; font-variant-numeric: tabular-nums;
+}
+.lede { color: var(--muted); font-size: 14px; margin: 14px 0 20px; max-width: 66ch; }
+h3 {
+  font-size: 15.5px; font-weight: 700; margin: 30px 0 9px;
+  padding-left: 11px; border-left: 3px solid var(--brand-2); line-height: 1.5;
+  text-wrap: balance;
+}
+h4 { font-size: 14px; font-weight: 700; margin: 20px 0 6px; color: var(--brand); }
+p { margin: 0 0 13px; max-width: 70ch; }
+ul, ol.steps { margin: 0 0 15px; padding-left: 1.35em; max-width: 70ch; }
+li { margin-bottom: 6px; }
+code {
+  font-family: var(--font-mono); font-size: .855em;
+  background: var(--panel3); border: 1px solid var(--border);
+  padding: 1px 5px; border-radius: 4px; word-break: break-word;
+}
+strong { font-weight: 700; }
+a { color: var(--brand); }
+
+/* ---- 表 ---- */
+.tw { overflow-x: auto; margin: 0 0 18px; border: 1px solid var(--border); border-radius: 11px; background: var(--panel); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 430px; }
+th, td { text-align: left; padding: 9px 13px; border-bottom: 1px solid var(--border); vertical-align: top; line-height: 1.68; }
+thead th { background: var(--panel2); font-size: 11.5px; letter-spacing: .035em; color: var(--muted); font-weight: 700; white-space: nowrap; }
+tbody tr:last-child td { border-bottom: none; }
+td code { white-space: nowrap; }
+.num { font-variant-numeric: tabular-nums; text-align: right; }
+
+/* ---- コード ---- */
+pre {
+  background: var(--code-bg); color: var(--code-fg);
+  padding: 14px 16px; border-radius: 11px; overflow-x: auto;
+  font-family: var(--font-mono); font-size: 12.5px; line-height: 1.72;
+  margin: 0 0 16px; border: 1px solid rgba(255,255,255,.07);
+}
+pre code { background: none; border: none; padding: 0; color: inherit; font-size: inherit; }
+
+/* ---- 注意書き ---- */
+.note {
+  border-radius: 11px; padding: 13px 16px; margin: 0 0 18px;
+  border: 1px solid var(--border-strong); background: var(--panel2);
+  font-size: 13.5px; line-height: 1.8;
+}
+.note > b { display: block; margin-bottom: 3px; font-size: 13px; letter-spacing: .01em; }
+.note > :last-child { margin-bottom: 0; }
+.note p { max-width: none; }
+.note--warn { background: var(--warning-bg); border-color: rgba(224,150,34,.45); }
+.note--warn > b { color: var(--warning); }
+.note--stop { background: var(--danger-bg); border-color: rgba(208,53,46,.38); }
+.note--stop > b { color: var(--danger); }
+.note--ok { background: var(--success-bg); border-color: rgba(26,140,84,.34); }
+.note--ok > b { color: var(--success); }
+.note--tip { background: var(--brand-bg); border-color: rgba(89,183,198,.45); }
+.note--tip > b { color: var(--brand); }
+
+/* ---- 手順 ---- */
+ol.steps { counter-reset: s; list-style: none; padding-left: 0; }
+ol.steps > li {
+  counter-increment: s; position: relative; padding-left: 34px; margin-bottom: 13px;
+}
+ol.steps > li::before {
+  content: counter(s); position: absolute; left: 0; top: 2px;
+  width: 23px; height: 23px; border-radius: 50%;
+  background: var(--brand); color: #fff;
+  font-size: 11.5px; font-weight: 700; font-family: var(--font-mono);
+  display: flex; align-items: center; justify-content: center;
+}
+
+/* ---- 3層モデル図 ---- */
+.stack { display: grid; gap: 9px; margin: 0 0 18px; }
+.stack__row {
+  display: grid; grid-template-columns: 112px minmax(0,1fr); gap: 14px; align-items: center;
+  background: var(--panel); border: 1px solid var(--border);
+  border-left: 4px solid var(--brand-2); border-radius: 10px; padding: 12px 15px;
+}
+.stack__row b { font-size: 14px; }
+.stack__row span { font-size: 13.5px; color: var(--muted); line-height: 1.72; }
+@media (max-width: 560px) {
+  .stack__row { grid-template-columns: 1fr; gap: 3px; }
+}
+
+/* ---- 用語カード ---- */
+.terms { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 11px; margin: 0 0 18px; }
+.term { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 13px 15px; min-width: 0; }
+.term b { display: block; font-size: 13.5px; margin-bottom: 3px; }
+.term span { font-size: 13px; color: var(--muted); line-height: 1.7; }
+
+footer {
+  border-top: 1px solid var(--border); margin-top: 8px;
+  padding-block: 24px 0; font-size: 12.5px; color: var(--muted);
+}
+footer p { max-width: none; }
+:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 4px; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<header class="masthead">
+  <div class="masthead__in">
+    <div class="logo"><b>MOKKEDA</b><span>MAKE CX THANKABLE</span></div>
+    <h1>管理画面 操作ガイド</h1>
+    <p>サイトの計測をはじめるところから、接客シナリオの作成、成果の確認までをひととおり。はじめての方は「最初の設定」から順に進めてください。</p>
+    <div class="masthead__meta">
+      <em>管理画面 app.mokkeda.com</em>
+      <em>全17章</em>
+    </div>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="toc" aria-label="目次">
+    <div class="toc__title">目次</div>
+    <ol id="toclist">
+      <li><a href="#intro"><i>1</i>MOKKEDAの考え方</a></li>
+      <li><a href="#setup"><i>2</i>最初の設定とSDK設置</a></li>
+      <li><a href="#flow"><i>3</i>接客をつくる3層</a></li>
+      <li><a href="#templates"><i>4</i>テンプレート</a></li>
+      <li><a href="#actions"><i>5</i>アクション</a></li>
+      <li><a href="#scenarios"><i>6</i>シナリオ</a></li>
+      <li><a href="#questions"><i>7</i>質問接客</a></li>
+      <li><a href="#dashboard"><i>8</i>ダッシュボード</a></li>
+      <li><a href="#analytics"><i>9</i>流入計測</a></li>
+      <li><a href="#report"><i>10</i>週次レポートメール</a></li>
+      <li><a href="#ai"><i>11</i>AIインサイト</a></li>
+      <li><a href="#push"><i>12</i>Webプッシュ</a></li>
+      <li><a href="#media"><i>13</i>メディア</a></li>
+      <li><a href="#shopify"><i>14</i>Shopify連携</a></li>
+      <li><a href="#rms"><i>15</i>楽天RMS</a></li>
+      <li><a href="#members"><i>16</i>メンバーと権限</a></li>
+      <li><a href="#trouble"><i>17</i>困ったとき</a></li>
+    </ol>
+    <details>
+      <summary>目次を開く</summary>
+      <ol id="toclist2"></ol>
+    </details>
+  </nav>
+
+  <main>
+
+    <!-- 1 -->
+    <section id="intro">
+      <h2><i>01</i>MOKKEDAの考え方</h2>
+      <p class="lede">MOKKEDAは、サイトに来た人の状況に合わせて「出すもの」を切り替えるツールです。タグを1本入れると計測がはじまり、そのうえで接客（モーダル・バナーなど）を配信します。</p>
+
+      <h3>まず覚える5つの言葉</h3>
+      <div class="terms">
+        <div class="term"><b>ワークスペース</b><span>契約の単位。会社・事業の箱。この中に複数のサイトとメンバーが入ります。</span></div>
+        <div class="term"><b>サイト</b><span>計測・配信する対象のドメイン。サイトごとにタグと公開キーが発行されます。</span></div>
+        <div class="term"><b>テンプレート</b><span>見た目の型。モーダルやバナーのHTML・CSSを持ちます。使い回す前提のパーツです。</span></div>
+        <div class="term"><b>アクション</b><span>テンプレートに文言・画像・クーポンを入れた「中身」。1つの出し物にあたります。</span></div>
+        <div class="term"><b>シナリオ</b><span>どのページで、いつ、誰に、どのアクションを出すかの設定。実際に配信を決めるのはここです。</span></div>
+      </div>
+
+      <div class="note note--tip">
+        <b>迷ったらこの順番</b>
+        <p>テンプレート（型）→ アクション（中身）→ シナリオ（配信条件）。テンプレートは最初に用意されているものを使えばよいので、ふだんの運用は「アクションを作る → シナリオで出す」の2ステップで回ります。</p>
+      </div>
+    </section>
+
+    <!-- 2 -->
+    <section id="setup">
+      <h2><i>02</i>最初の設定とSDK設置</h2>
+      <p class="lede">サイトを登録してタグを貼ると計測がはじまります。ここが終わらないと、他のどの機能も動きません。</p>
+
+      <h3>サイトを登録する</h3>
+      <ol class="steps">
+        <li>サイドメニューの <strong>設定 › サイト</strong> を開きます。</li>
+        <li>サイト名と、計測するドメインを登録します。</li>
+        <li>保存すると <strong>サイトID</strong> と <strong>公開キー</strong> が発行されます。</li>
+      </ol>
+      <p>公開キーはタグに書く値で、ページのHTMLに出るため秘密情報ではありません。ただし他人のサイトに貼られると計測が混ざるので、むやみに配らないでください。</p>
+
+      <h3>埋め込みタグを貼る</h3>
+      <p>サイト詳細の「埋め込みタグ」から、環境に合わせて3種類を切り替えられます。<code>SITE_ID</code> と <code>PUBLIC_KEY</code> は画面に表示される実際の値に置き換わります。</p>
+
+      <h4>通常のサイト（direct）</h4>
+      <pre><code>&lt;script
+  src="https://app.mokkeda.com/sdk.js"
+  data-site-id="SITE_ID"
+  data-site-key="PUBLIC_KEY"
+  defer
+&gt;&lt;/script&gt;</code></pre>
+
+      <h4>Shopify（テーマに貼る場合）</h4>
+      <pre><code>{% comment %}Mokkeda{% endcomment %}
+&lt;script
+  src="https://app.mokkeda.com/sdk.js"
+  data-site-id="SITE_ID"
+  data-site-key="PUBLIC_KEY"
+  defer
+&gt;&lt;/script&gt;</code></pre>
+
+      <h4>GTM・タグマネージャ経由（gtm）</h4>
+      <pre><code>&lt;script&gt;
+(function() {
+  var s = document.createElement('script');
+  s.src = 'https://app.mokkeda.com/sdk.js';
+  s.setAttribute('data-site-id', 'SITE_ID');
+  s.setAttribute('data-site-key', 'PUBLIC_KEY');
+  document.head.appendChild(s);
+})();
+&lt;/script&gt;</code></pre>
+
+      <div class="note note--tip">
+        <b>貼る場所</b>
+        <p>全ページの <code>&lt;head&gt;</code> 内が基本です。サンクスページ（購入完了）にも必ず入れてください。ここが抜けると購入と売上が計測されません。</p>
+      </div>
+
+      <h3>計測できているか確認する</h3>
+      <p>タグを貼ったら自分でサイトを開いてみて、<strong>流入計測</strong> の「訪問者」タブに自分の訪問が出るかを見てください。数分で反映されます。出ない場合は <a href="#trouble">困ったとき</a> を確認してください。</p>
+    </section>
+
+    <!-- 3 -->
+    <section id="flow">
+      <h2><i>03</i>接客をつくる3層</h2>
+      <p class="lede">MOKKEDAは「見た目」「中身」「配信条件」を分けて持ちます。分かれているぶん最初は遠回りに見えますが、同じ型を何度も使えるので運用が速くなります。</p>
+
+      <div class="stack">
+        <div class="stack__row"><b>テンプレート</b><span>見た目の型。HTML・CSS・JSを持つ。モーダル／バナー／トースト／ランチャー／質問接客／プッシュ通知の6タイプ。</span></div>
+        <div class="stack__row"><b>アクション</b><span>テンプレートを選んで、タイトル・本文・画像・リンク・クーポンコードを入れたもの。実際にお客様が見る1つの出し物。</span></div>
+        <div class="stack__row"><b>シナリオ</b><span>アクションを「どのページで・いつ・誰に」出すか。A/Bテスト、CV条件、優先度もここ。複数アクションをまとめて持てる。</span></div>
+      </div>
+
+      <div class="note">
+        <b>よくある勘違い</b>
+        <p>アクションを作っただけでは配信されません。<strong>シナリオに追加して、シナリオを稼働状態にする</strong>まで、お客様の画面には出ません。</p>
+      </div>
+    </section>
+
+    <!-- 4 -->
+    <section id="templates">
+      <h2><i>04</i>テンプレート</h2>
+      <p class="lede">見た目の型を管理する画面です。ふだんは一覧を見るだけで足りますが、独自デザインを入れたいときにここを編集します。</p>
+
+      <h3>6つのタイプ</h3>
+      <div class="tw"><table>
+        <thead><tr><th>タイプ</th><th>出かた</th><th>向いている用途</th></tr></thead>
+        <tbody>
+          <tr><td><strong>モーダル</strong></td><td>画面中央のポップアップ。オーバーレイで全体を覆う</td><td>クーポン訴求、初回訪問者への案内、アンケート。インパクト大</td></tr>
+          <tr><td><strong>バナー</strong></td><td>画面下に固定される帯。スクロールしても消えない</td><td>セール告知、送料無料ライン、常時出しておきたい情報</td></tr>
+          <tr><td><strong>トースト</strong></td><td>画面隅に出る小さい通知</td><td>「残り3点」「クーポンあります」など、邪魔せず伝えたいこと</td></tr>
+          <tr><td><strong>ランチャー</strong></td><td>画面隅に常駐するボタン。押すとモーダルが開く</td><td>いつでも開ける相談窓口、クーポン置き場</td></tr>
+          <tr><td><strong>質問接客</strong></td><td>選択肢付きの質問カード</td><td>お客様の好みを聞いて次の接客に使う（<a href="#questions">7章</a>）</td></tr>
+          <tr><td><strong>プッシュ通知</strong></td><td>画面表示なし。通知の購読を促すダイアログだけ</td><td>Webプッシュのオプトイン取得（<a href="#push">12章</a>）</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>標準テンプレートから作る</h3>
+      <p>一覧の「<strong>標準テンプレートから作成</strong>」から、MOKKEDAが用意した型を自分のワークスペースに複製できます。複製したものは自由に編集できます。元の標準テンプレートは変わりません。</p>
+
+      <h3>差し込み変数</h3>
+      <p>テンプレートのHTML・CSS・JSには <code>{{キー}}</code> の形で差し込み口を書けます。アクション編集画面に、そのキーの入力欄が自動で出ます。</p>
+      <div class="tw"><table>
+        <thead><tr><th>書きかた</th><th>意味</th></tr></thead>
+        <tbody>
+          <tr><td><code>{{title}}</code> <code>{{body}}</code></td><td>タイトル・本文など、アクションの基本項目</td></tr>
+          <tr><td><code>{{coupon_code}}</code></td><td>クーポンコード</td></tr>
+          <tr><td><code>{{任意のキー}}</code></td><td>独自の追加フィールド。アクション側に入力欄ができる</td></tr>
+          <tr><td><code>{{#if キー}}…{{/if}}</code></td><td>値があるときだけ出す</td></tr>
+        </tbody>
+      </table></div>
+
+      <h4>特別な属性</h4>
+      <div class="tw"><table>
+        <thead><tr><th>属性</th><th>はたらき</th></tr></thead>
+        <tbody>
+          <tr><td><code>data-cx-close</code></td><td>押すと閉じる。×ボタンに付けます</td></tr>
+          <tr><td><code>data-cx-copy</code></td><td>押すと値をコピーする。クーポンのコピーボタンに</td></tr>
+          <tr><td><code>data-cx-launcher-open</code></td><td>押すとランチャーのモーダルを開く</td></tr>
+          <tr><td><code>data-cx-choices</code></td><td>質問接客で、選択肢が差し込まれる位置</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="note note--tip">
+        <b>編集中のプレビュー</b>
+        <p>HTMLエディタの右側にリアルタイムでプレビューが出ます。コピーボタンや閉じるボタンの動きもプレビュー上で再現されるので、保存前に押して確かめてください。</p>
+      </div>
+    </section>
+
+    <!-- 5 -->
+    <section id="actions">
+      <h2><i>05</i>アクション</h2>
+      <p class="lede">お客様が実際に見る1つの出し物です。テンプレートを選び、文言と画像を入れて作ります。</p>
+
+      <h3>作るときに決めること</h3>
+      <div class="tw"><table>
+        <thead><tr><th>項目</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr><td>アクション名</td><td>管理用の名前。お客様には見えません。後から探せる名前にしてください</td></tr>
+          <tr><td>サイト</td><td>どのサイト向けか</td></tr>
+          <tr><td>表示タイプ</td><td>モーダル／バナー／トースト／ランチャー／インライン</td></tr>
+          <tr><td>テンプレート</td><td>見た目の型。未選択なら既定の見た目になります</td></tr>
+          <tr><td>タイトル・本文</td><td>表示される文言</td></tr>
+          <tr><td>リンクURL・ボタン文言</td><td>CTAボタンの行き先と文字</td></tr>
+          <tr><td>クーポンコード</td><td>入れると売上の帰属に使われます（下記）</td></tr>
+          <tr><td>閉じるボタン文言</td><td>「閉じる」「あとで」など</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>インライン表示（ページに埋め込む）</h3>
+      <p>ポップアップではなく、ページの中に差し込みたいときに使います。</p>
+      <div class="tw"><table>
+        <thead><tr><th>項目</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr><td>表示位置セレクタ</td><td>差し込む場所のCSSセレクタ（例 <code>.product-form</code>）</td></tr>
+          <tr><td>挿入位置</td><td>その要素の前・後・中の先頭・中の末尾</td></tr>
+          <tr><td>スタイル適用方法</td><td>サイト側のCSSとぶつかるときに切り替えます</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="note note--ok">
+        <b>クーポンコードは入れておく価値があります</b>
+        <p>アクションにクーポンコードを入れておくと、購入時にそのコードが使われていれば<strong>確実にその施策の売上として計上</strong>されます。クリックの取りこぼしに関係なく紐づくので、売上貢献を正確に見たい施策では必ず入れてください。</p>
+      </div>
+
+      <h3>アーカイブ</h3>
+      <p>使わなくなったアクションはアーカイブします。アーカイブしたアクションは配信されなくなり、シナリオの選択肢にも出なくなります。過去の実績は残ります。</p>
+    </section>
+
+    <!-- 6 -->
+    <section id="scenarios">
+      <h2><i>06</i>シナリオ</h2>
+      <p class="lede">配信を決める中心の画面です。「① 基本」「② いつ表示？」「③ 誰に表示？」の3ステップで設定します。</p>
+
+      <h3>① 基本 — 何を表示するか</h3>
+      <p>シナリオ名と、表示するアクションを選びます。アクションは複数追加できます（A/Bテストは③で設定します）。質問接客を使う場合は、ここで質問を選びます。</p>
+
+      <h3>② いつ表示？</h3>
+
+      <h4>発動タイミング</h4>
+      <div class="tw"><table>
+        <thead><tr><th>種類</th><th>いつ出るか</th></tr></thead>
+        <tbody>
+          <tr><td>⚡ 即時</td><td>ページ表示直後</td></tr>
+          <tr><td>⏱ 滞在時間</td><td>指定した秒数が経ってから</td></tr>
+          <tr><td>📜 スクロール</td><td>指定した％までスクロールしたら。滞在秒数と組み合わせると「◯秒後かつ◯％スクロール」になります</td></tr>
+          <tr><td>🛒 カート追加</td><td>カートに入れたとき。別途スニペットの設置が必要です（画面に表示されます）</td></tr>
+        </tbody>
+      </table></div>
+
+      <h4>URL条件</h4>
+      <p>条件を入れなければ全ページで配信されます。複数の条件を追加できます。</p>
+      <div class="tw"><table>
+        <thead><tr><th>モード</th><th>意味</th><th>例</th></tr></thead>
+        <tbody>
+          <tr><td>このページだけ（完全一致）</td><td>そのURLと完全に一致するページのみ</td><td><code>/</code> ならトップページだけ</td></tr>
+          <tr><td>このページ以下すべて（前方一致）</td><td>そのパスで始まるすべてのページ</td><td><code>/products</code> で商品ページ全部</td></tr>
+          <tr><td>URLのどこかに含む</td><td>指定した文字列を含むページ</td><td><code>sale</code> を含むURL全部</td></tr>
+        </tbody>
+      </table></div>
+      <div class="note note--tip">
+        <b>トップページだけに出したいとき</b>
+        <p>完全一致で <code>/</code> を指定してください。前方一致の <code>/</code> はすべてのページに一致してしまいます。</p>
+      </div>
+
+      <h4>配信スケジュール・繰り返し・時間帯</h4>
+      <div class="tw"><table>
+        <thead><tr><th>設定</th><th>できること</th></tr></thead>
+        <tbody>
+          <tr><td>配信スケジュール</td><td>開始日時・終了日時。期間外は配信されません</td></tr>
+          <tr><td>繰り返し：毎日</td><td>既定。曜日・日にちの制限なし</td></tr>
+          <tr><td>繰り返し：毎週</td><td>曜日を複数選択（例 土・日だけ）</td></tr>
+          <tr><td>繰り返し：毎月</td><td>日にちを複数選択。<strong>月末</strong>も選べます</td></tr>
+          <tr><td>時間帯</td><td>1日のうちの時間を限定。タイムセールに使います</td></tr>
+        </tbody>
+      </table></div>
+      <div class="note note--warn">
+        <b>毎月29〜31日の指定に注意</b>
+        <p>2月など、その日が無い月があります。毎月確実に出したい場合は「<strong>月末</strong>」を選んでください。曜日・日にちを1つも選ばないと「毎日」として保存されます。</p>
+      </div>
+
+      <h4>表示頻度</h4>
+      <p>同じ人に何度出すかを決めます。既定は「ページを開くたび」です。</p>
+      <div class="tw"><table>
+        <thead><tr><th>単位</th><th>選べる間隔</th></tr></thead>
+        <tbody>
+          <tr><td>ページビュー</td><td>毎回 / 3ページビューごとに1回 / 5ページビューごとに1回</td></tr>
+          <tr><td>セッション</td><td>毎セッション / 3セッションに1回 / 5セッションに1回。「同じセッション内では1回だけ」も選べます</td></tr>
+          <tr><td>ユーザー</td><td>一生1回だけ / 最大3回 / 最大5回</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>③ 誰に表示？</h3>
+
+      <h4>訪問者条件・ターゲット設定</h4>
+      <div class="tw"><table>
+        <thead><tr><th>条件</th><th>選択肢</th></tr></thead>
+        <tbody>
+          <tr><td>訪問回数</td><td>N回以上。集計期間も指定できます</td></tr>
+          <tr><td>流入元フィルター</td><td>特定の流入元から来た人だけに絞る（任意）</td></tr>
+          <tr><td>訪問種別</td><td>すべて / 新規 / リピート</td></tr>
+          <tr><td>デバイス</td><td>すべて / PC / スマホ</td></tr>
+          <tr><td>ログイン状態</td><td>すべて / ゲスト / 会員</td></tr>
+          <tr><td>カート状態</td><td>すべて / 空 / 商品が入っている</td></tr>
+          <tr><td>UTM条件</td><td><code>utm_source</code> などをカンマ区切りで指定</td></tr>
+          <tr><td>属性条件</td><td>質問接客の回答で絞る（<a href="#questions">7章</a>）</td></tr>
+          <tr><td>天気・気温条件</td><td>アクセス地点の天気・気温で絞る</td></tr>
+          <tr><td>除外条件</td><td>この条件に当てはまる人には出さない</td></tr>
+        </tbody>
+      </table></div>
+
+      <h4>A/Bテスト</h4>
+      <p>パターンを複数作り、それぞれに別のアクションを割り当てます。どのパターンを出すかはサーバー側で決まり、同じ人には同じパターンが出ます。成果はダッシュボードの「バリアント別集計」で比較できます。</p>
+      <div class="note note--tip">
+        <b>確認するときはシークレットウィンドウで</b>
+        <p>同じ人には同じパターンが出るため、通常のウィンドウで何度開いても別パターンは見られません。シークレットウィンドウを使ってください。</p>
+      </div>
+
+      <h4>コンバージョン条件</h4>
+      <div class="tw"><table>
+        <thead><tr><th>条件</th><th>何をCVと数えるか</th></tr></thead>
+        <tbody>
+          <tr><td>🛒 購入完了</td><td>購入をCVとして数えます</td></tr>
+          <tr><td>🖱️ クリックCV</td><td>CTAのクリックをCVとして数えます</td></tr>
+          <tr><td>URL前方一致</td><td><code>/thanks</code> などで始まるページに到達したらCV</td></tr>
+          <tr><td>URLパス完全一致</td><td>指定したパスと完全一致で到達したらCV</td></tr>
+          <tr><td>URL部分一致</td><td>URLに文字列を含むページに到達したらCV</td></tr>
+        </tbody>
+      </table></div>
+      <p>あわせて「見た後にCVページへ遷移でCV計上」「クリックした後にCVページへ遷移でCV計上」を選べます。</p>
+      <div class="note note--warn">
+        <b>CV数は条件によって意味が変わります</b>
+        <p>クリックCVのシナリオでは、CV数は<strong>クリック数</strong>です。購入数ではありません。施策ごとにCV条件が違うと数字の意味も変わるので、比べるときは条件をそろえてください。</p>
+      </div>
+
+      <h4>優先度</h4>
+      <div class="note note--stop">
+        <b>数字が大きいほうが優先されます</b>
+        <p>「1」がいちばん強いのではありません。優先度 <code>10</code> と <code>1</code> なら <strong>10 が勝ちます</strong>。</p>
+        <p>そして優先度が効くのは<strong>同じ表示場所を使うシナリオが競合したとき</strong>だけです。表示場所が違えば、複数のシナリオが同時に出ます。つまり「同じページで2つの施策が両方出る」のは正常な動きです。重ねたくない場合は、同じ表示場所を使うようにしてください。</p>
+      </div>
+
+      <h4>メモ</h4>
+      <p>施策の意図を書いておく欄です。「Topで初回訪問者にクーポン訴求 / Aは画像あり、Bは画像なし」のように残しておくと、数か月後に見返したときに助かります。</p>
+    </section>
+
+    <!-- 7 -->
+    <section id="questions">
+      <h2><i>07</i>質問接客</h2>
+      <p class="lede">お客様に質問して、その回答を属性としてためていく機能です。ためた属性は、次の接客の条件に使えます。</p>
+
+      <h3>設定する項目</h3>
+      <div class="tw"><table>
+        <thead><tr><th>項目</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr><td>質問文</td><td>お客様に見せる文言</td></tr>
+          <tr><td>回答形式</td><td>単一選択 / 複数選択</td></tr>
+          <tr><td>保存する属性キー</td><td>回答をどの名前で保存するか。シナリオの属性条件でこのキーを指定します</td></tr>
+          <tr><td>選択肢</td><td>表示名と保存値をペアで登録します</td></tr>
+          <tr><td>お礼</td><td>回答後に出すメッセージ</td></tr>
+          <tr><td>再表示</td><td>回答済みの人への扱い。「再表示しない（1回のみ）」か「一定期間後に再質問」</td></tr>
+          <tr><td>デザイン・クリエイティブ</td><td>見た目の型とトンマナ</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>使いかたの流れ</h3>
+      <ol class="steps">
+        <li>質問接客で質問を作り、保存する属性キーを決めます（例 <code>taste</code>）。</li>
+        <li>シナリオの「① 基本」でその質問を選び、配信します。</li>
+        <li>回答がたまったら、別のシナリオの「③ 誰に表示？ › 属性条件」でそのキーの値で絞り、回答に合わせた接客を出します。</li>
+      </ol>
+    </section>
+
+    <!-- 8 -->
+    <section id="dashboard">
+      <h2><i>08</i>ダッシュボード</h2>
+      <p class="lede">施策の成果をまとめて見る画面です。最初に見る数値だけを上に出しています。</p>
+      <div class="tw"><table>
+        <thead><tr><th>ブロック</th><th>見られること</th></tr></thead>
+        <tbody>
+          <tr><td>今日見るべき3指標</td><td>まずここだけ見れば状況がわかる数値</td></tr>
+          <tr><td>施策比較：シナリオ別 CVR / CTR</td><td>施策どうしの比較</td></tr>
+          <tr><td>日別トレンド：表示回数 × CVR%</td><td>日ごとの推移</td></tr>
+          <tr><td>施策別の詳細（表）</td><td>表示・クリック・CV・売上の内訳</td></tr>
+          <tr><td>バリアント別集計</td><td>A/Bテストのパターン別成績</td></tr>
+        </tbody>
+      </table></div>
+      <div class="note">
+        <b>流入計測と数字が違って見えるとき</b>
+        <p>ダッシュボードのCVは、購入時にサーバーが確定した帰属だけを数えます。流入計測の一部の表には、参考値として「接触ベース」の数字も出ます。どちらも間違いではなく、数え方が違います。</p>
+      </div>
+    </section>
+
+    <!-- 9 -->
+    <section id="analytics">
+      <h2><i>09</i>流入計測</h2>
+      <p class="lede">サイト全体のアクセスと売上を見る画面です。6つのタブに分かれています。期間は画面上部で切り替えます。</p>
+
+      <div class="tw"><table>
+        <thead><tr><th>タブ</th><th>見られること</th></tr></thead>
+        <tbody>
+          <tr><td>概要</td><td>PV・セッション・ユニーク訪問者の推移、新規/リピート、売上</td></tr>
+          <tr><td>流入</td><td>流入元ごとのセッションと<strong>売上</strong>、直帰率、離脱ページ</td></tr>
+          <tr><td>ページ</td><td>ページ別のPVと離脱率、経由ページの売上貢献</td></tr>
+          <tr><td>施策</td><td>施策ごとのCVトレンド、クーポン経由の実績</td></tr>
+          <tr><td>訪問者</td><td>匿名IDごとの行動履歴。1人を選ぶと行動タイムラインが出ます</td></tr>
+          <tr><td>環境</td><td>デバイス・地域・天気などの内訳</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>訪問者タブの見かた</h3>
+      <p>訪問者カードを選ぶと、その人のPV・クリック・購入が時系列で並びます。タグとメモを付けられるので、気になる訪問者を追いかけられます。</p>
+      <div class="note">
+        <b>「直近◯人」と出ている場合</b>
+        <p>アクセスの多いサイトでは、期間中の全員を読み込むと時間がかかりすぎるため、表示する人数ぶんで読み込みを止めています。画面に「直近◯人（◯月◯日以降）」と出ます。期間を短くすると全員が表示されます。PV・売上・流入元などの集計値はこの影響を受けません。</p>
+      </div>
+
+      <h3>数字を読むときの注意</h3>
+      <div class="tw"><table>
+        <thead><tr><th>見ている数字</th><th>知っておくこと</th></tr></thead>
+        <tbody>
+          <tr><td>当日の数値</td><td>集計途中です。グラフでは中抜きの点で示されます</td></tr>
+          <tr><td>ユニーク訪問者（期間合計）</td><td>日ごとのユニークの足し算です。期間全体での重複は除かれていません</td></tr>
+          <tr><td>流入元の売上に出る「(流入元不明)」</td><td>購入した日に閲覧ログが無かった購入です。別の日に見て後日買った場合などに入ります</td></tr>
+          <tr><td>流入元が <code>google</code> と <code>www.google.com</code> で分かれる</td><td>UTMパラメータ由来と参照元ドメイン由来で別枠になります。合算は手元で行ってください</td></tr>
+          <tr><td>新規/リピートの内訳</td><td>合計（＝ユニーク訪問者）は正確です。内訳の絶対数は多めに出ることがあります</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <!-- 10 -->
+    <section id="report">
+      <h2><i>10</i>週次レポートメール</h2>
+      <p class="lede">先週の成果をまとめたメールを、決めた曜日・時刻に自動で送ります。AIによる要約コメントも付けられます。</p>
+      <ol class="steps">
+        <li>流入計測の画面からレポート設定を開きます。</li>
+        <li>配信をONにして、<strong>曜日</strong>と<strong>時刻</strong>を選びます。</li>
+        <li>宛先メールアドレスを登録します（複数可）。</li>
+        <li>AIコメントを使うかを選びます。</li>
+        <li>プレビューで中身を確認し、テスト送信で実際のメールを見てから保存します。</li>
+      </ol>
+      <p>レポートに入るのは、主要指標の前週比、売上の内訳、施策別の成績、流入元の上位です。AIコメントは数字の事実から書かれ、根拠のない予測や煽りは入らないようにしています。</p>
+    </section>
+
+    <!-- 11 -->
+    <section id="ai">
+      <h2><i>11</i>AIインサイト</h2>
+      <p class="lede">施策の結果をAIが読んで、気づきと次の打ち手を出します。</p>
+      <div class="tw"><table>
+        <thead><tr><th>機能</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr><td>運用アシスタント</td><td>成果データから気づきと改善案を出します。「AI分析を実行」を押すと生成されます</td></tr>
+          <tr><td>バリエーション</td><td>文言の言い換え案を出します。A/Bテストのネタ出しに</td></tr>
+          <tr><td>実画面レビュー</td><td>実際の表示を見て、改善点を画面上のピンで指摘します</td></tr>
+        </tbody>
+      </table></div>
+      <p>出てきた内容は提案です。そのまま配信されることはないので、採用するかはご自身で判断してください。</p>
+    </section>
+
+    <!-- 12 -->
+    <section id="push">
+      <h2><i>12</i>Webプッシュ <span style="font-size:11px;font-weight:700;background:var(--warning-bg);color:var(--warning);padding:3px 8px;border-radius:5px;letter-spacing:.05em;vertical-align:middle;">BETA</span></h2>
+      <p class="lede">ブラウザのプッシュ通知を送る機能です。まず購読を集めてから、通知を送ります。</p>
+
+      <h3>購読を集める</h3>
+      <ol class="steps">
+        <li>テンプレートで「プッシュ通知」タイプのものを用意します（標準テンプレートにあります）。</li>
+        <li>そのテンプレートでアクションを作ります。</li>
+        <li>シナリオで配信します。お客様の画面に購読を確認するダイアログが出て、許可すると購読されます。</li>
+      </ol>
+
+      <h3>通知を送る</h3>
+      <p>サイドメニューの <strong>Webプッシュ</strong> から、購読者数を確認して送信します。タイトル・本文・クリック先URLを入れ、すぐ送るか日時を予約します。</p>
+
+      <div class="note note--warn">
+        <b>ベータ機能です。先に制約を確認してください</b>
+        <ul style="margin-bottom:0">
+          <li><strong>iPhone・iPadはほぼ届きません。</strong> iOSはホーム画面に追加したPWAでしか受信できません。Safariのタブで開いているだけでは購読できません。</li>
+          <li><strong>Shopifyでは通知の送信元がMOKKEDAのドメインになります。</strong> Shopifyの仕様上、お店のドメインで通知を出せないためです。</li>
+          <li>Android・PCでは問題なく購読・受信できます。まずはこの2つを対象に考えてください。</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 13 -->
+    <section id="media">
+      <h2><i>13</i>メディア</h2>
+      <p class="lede">接客で使う画像を置いておく場所です。</p>
+      <p>「メディアを追加」からアップロードすると、ダウンロードURLが発行されます。このURLをアクションの画像欄やテンプレートに貼って使います。各メディアには<strong>使用箇所（アクション）</strong>が表示されるので、どこで使われているか分からないまま削除してしまう事故を防げます。</p>
+      <div class="note">
+        <b>削除する前に</b>
+        <p>使用箇所に名前が出ているメディアを削除すると、そのアクションの画像が表示されなくなります。先に使用箇所を確認してください。</p>
+      </div>
+    </section>
+
+    <!-- 14 -->
+    <section id="shopify">
+      <h2><i>14</i>Shopify連携</h2>
+      <p class="lede">MOKKEDA CONNECT アプリを使うと、テーマを編集せずにSDKを設置できます。</p>
+      <ol class="steps">
+        <li>Shopify管理画面からMOKKEDA CONNECTアプリを開きます。</li>
+        <li>アプリが自動でストアを認証し、MOKKEDAと接続します。</li>
+        <li>SDKがストアに自動登録されます。テーマへのタグ貼り付けは不要です。</li>
+      </ol>
+      <div class="note note--ok">
+        <b>アプリを開かなくても計測は止まりません</b>
+        <p>接続トークンは24時間で期限が切れますが、SDKはすでにストアに登録されているため、<strong>計測と接客はそのまま動き続けます</strong>。トークンが必要になるのはSDKを再登録するときだけです。期限切れの表示が出ていても、慌ててアプリを開く必要はありません。</p>
+      </div>
+      <p>テーマに直接貼りたい場合は、<a href="#setup">2章</a>のShopify用タグを使ってください。アプリと両方入れると二重に計測されるので、どちらか一方にしてください。</p>
+    </section>
+
+    <!-- 15 -->
+    <section id="rms">
+      <h2><i>15</i>楽天RMS</h2>
+      <p class="lede">楽天市場店の売上データを取り込む機能です。この機能が有効なワークスペースだけメニューに出ます。</p>
+      <ol class="steps">
+        <li>RMSを設定するサイトを選びます。</li>
+        <li>設定タブでRMSの認証情報とショップURLを登録します。</li>
+        <li>同期を実行します。以降は自動で同期されます。</li>
+      </ol>
+      <p>取り込むと、商品データ（最大200件）と直近30日の商品別売上TOPが見られます。「データがありません。同期を実行してください」と出る場合は、まだ一度も同期されていません。</p>
+    </section>
+
+    <!-- 16 -->
+    <section id="members">
+      <h2><i>16</i>メンバーと権限</h2>
+      <p class="lede">ワークスペースに人を招いて、見える範囲を分けられます。</p>
+
+      <h3>招待する</h3>
+      <ol class="steps">
+        <li><strong>設定 › メンバー</strong> を開きます。</li>
+        <li>メールアドレスとロールを指定して招待します。招待メールが届きます。</li>
+        <li>相手がメールのリンクから承認すると、メンバーになります。</li>
+      </ol>
+
+      <h3>4つのロール</h3>
+      <div class="tw"><table>
+        <thead><tr><th>ロール</th><th>できること</th></tr></thead>
+        <tbody>
+          <tr><td><strong>オーナー</strong></td><td>すべての操作。契約・Billingの変更もできます</td></tr>
+          <tr><td><strong>管理者</strong></td><td>ワークスペース削除とBillingを除く、ほぼすべての操作</td></tr>
+          <tr><td><strong>メンバー</strong></td><td>担当サイトの閲覧・編集。シナリオとアクションは作れますが、テンプレートとメディアは触れません</td></tr>
+          <tr><td><strong>閲覧者</strong></td><td>担当サイトの閲覧のみ。設定は変更できません</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>画面ごとの権限</h3>
+      <div class="tw"><table>
+        <thead><tr><th>画面</th><th class="num">オーナー</th><th class="num">管理者</th><th class="num">メンバー</th><th class="num">閲覧者</th></tr></thead>
+        <tbody>
+          <tr><td>ダッシュボード</td><td class="num">✓</td><td class="num">✓</td><td class="num">✓</td><td class="num">✓</td></tr>
+          <tr><td>流入計測</td><td class="num">✓</td><td class="num">✓</td><td class="num">✓</td><td class="num">✓</td></tr>
+          <tr><td>シナリオ</td><td class="num">✓</td><td class="num">✓</td><td class="num">✓</td><td class="num">✓</td></tr>
+          <tr><td>アクション・質問接客</td><td class="num">✓</td><td class="num">✓</td><td class="num">✓</td><td class="num">—</td></tr>
+          <tr><td>テンプレート</td><td class="num">✓</td><td class="num">✓</td><td class="num">—</td><td class="num">—</td></tr>
+          <tr><td>メディア</td><td class="num">✓</td><td class="num">✓</td><td class="num">—</td><td class="num">—</td></tr>
+          <tr><td>AIインサイト</td><td class="num">✓</td><td class="num">✓</td><td class="num">✓</td><td class="num">✓</td></tr>
+          <tr><td>サイト</td><td class="num">✓</td><td class="num">✓</td><td class="num">✓</td><td class="num">✓</td></tr>
+          <tr><td>メンバー</td><td class="num">✓</td><td class="num">✓</td><td class="num">—</td><td class="num">—</td></tr>
+          <tr><td>ワークスペース</td><td class="num">✓</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>
+          <tr><td>契約 / Billing</td><td class="num">✓</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>サイト単位の担当わけ</h3>
+      <p>オーナーと管理者は、ワークスペース内のすべてのサイトを見られます。メンバーと閲覧者は、<strong>担当として追加されたサイトだけ</strong>が見えます。担当の追加はサイト詳細の「メンバー管理」から行います。</p>
+
+      <h3>契約 / Billing</h3>
+      <p>オーナーだけがアクセスできます。現在のプランの確認、プラン変更、請求先メールと住所の登録、支払い方法の変更ができます。</p>
+    </section>
+
+    <!-- 17 -->
+    <section id="trouble">
+      <h2><i>17</i>困ったとき</h2>
+
+      <h3>接客が表示されない</h3>
+      <p>上から順に確認してください。多いのは2と4です。</p>
+      <ol class="steps">
+        <li><strong>タグが入っているか。</strong> 表示したいページのソースに <code>sdk.js</code> があるか見てください。</li>
+        <li><strong>シナリオが稼働状態か。</strong> 下書き・停止中では配信されません。</li>
+        <li><strong>アクションがシナリオに追加されているか。</strong> アクションを作っただけでは出ません。</li>
+        <li><strong>表示頻度で止まっていないか。</strong> 「一生1回だけ」などにしていると、自分はすでに見たことになっています。シークレットウィンドウで確認してください。</li>
+        <li><strong>URL条件が合っているか。</strong> トップだけに出したいなら完全一致の <code>/</code> です。</li>
+        <li><strong>スケジュール・繰り返し・時間帯の範囲内か。</strong> 曜日や時間帯を設定していると範囲外では出ません。</li>
+        <li><strong>アクションをアーカイブしていないか。</strong> アーカイブ済みは配信されません。</li>
+        <li><strong>同じ表示場所で優先度の高いシナリオに負けていないか。</strong> 数字が大きいほうが勝ちます。</li>
+      </ol>
+
+      <h3>同じページで2つの施策が両方出てしまう</h3>
+      <p>仕様です。表示場所が違えば複数のシナリオが同時に出ます。重ねたくない場合は、同じ表示場所を使うようにして、優先度で勝ち負けを決めてください。</p>
+
+      <h3>売上が計測されない</h3>
+      <p><strong>サンクスページ（購入完了ページ）にタグが入っているか</strong>を確認してください。ここが抜けていると購入と売上が記録されません。Shopifyでアプリ連携している場合は自動で入ります。</p>
+
+      <h3>クーポン経由の売上が出ない</h3>
+      <p>アクションにクーポンコードを登録しているか確認してください。登録がないと、クーポン一致による売上の紐づけができません。</p>
+
+      <h3>A/Bテストで片方のパターンしか見られない</h3>
+      <p>同じ人には同じパターンが出る仕様です。シークレットウィンドウを使ってください。</p>
+
+      <h3>流入計測の数字がダッシュボードと合わない</h3>
+      <p>数え方の違いです。<a href="#dashboard">8章</a>と<a href="#analytics">9章</a>を確認してください。CV条件が施策ごとに違う場合も、数字の意味が変わります。</p>
+
+      <h3>プッシュ通知が届かない</h3>
+      <p>相手がiPhone・iPadの場合、ホーム画面に追加したPWAでなければ受信できません。Android・PCで試してください。</p>
+    </section>
+
+    <footer>
+      <p>このガイドは管理画面の実装に合わせて作成しています。画面の表示と記述が食い違う場合は、画面のほうが新しい可能性があります。お気づきの点はご連絡ください。</p>
+    </footer>
+  </main>
+</div>
+
+<script>
+// 狭い幅用の折りたたみ目次は、固定目次の内容をそのまま複製して二重管理を避ける
+(function () {
+  var src = document.getElementById('toclist');
+  var dst = document.getElementById('toclist2');
+  if (!src || !dst) return;
+  dst.innerHTML = src.innerHTML;
+  // 項目を選んだら閉じる（モバイルで本文がすぐ読めるように）
+  dst.addEventListener('click', function (e) {
+    if (e.target.closest('a')) {
+      var d = dst.closest('details');
+      if (d) d.open = false;
+    }
+  });
+})();
+</script>
+
+</body>
+</html>

@@ -3,6 +3,17 @@
     "prod": "cx-platform-v1",
     "default": "cx-platform-v1"
   },
-  "targets": {},
+  "targets": {
+    "cx-platform-v1": {
+      "hosting": {
+        "app": [
+          "cx-platform-v1"
+        ],
+        "help": [
+          "mokkeda-help"
+        ]
+      }
+    }
+  },
   "etags": {}
 }
