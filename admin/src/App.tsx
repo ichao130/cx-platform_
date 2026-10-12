@@ -34,10 +34,7 @@ const API_BASE =
  *  差し替えたいときは VITE_MANUAL_URL で上書きできる。 */
 const MANUAL_URL =
   (import.meta as any).env?.VITE_MANUAL_URL ||
-  // TODO: help.mokkeda.com のカスタムドメインが有効になったら切り替える。
-  //   現在 *.mokkeda.com はワイルドカードで別IPを指しており、help 固有の
-  //   レコードを足すまで help.mokkeda.com は Firebase に届かない。
-  "https://mokkeda-help.web.app/";
+  "https://help.mokkeda.com/";
 
 type RoleKey = "owner" | "admin" | "member" | "viewer";
 type AccessKey =
