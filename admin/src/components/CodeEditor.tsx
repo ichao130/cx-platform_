@@ -6,6 +6,7 @@ import {
   filterSuggestions,
   cssValueContext,
   inCssValuePosition,
+  htmlStyleAttrContext,
   valueSuggestionsFor,
   type CodeLang,
   type Suggestion,
@@ -107,9 +108,15 @@ export function CodeEditor({ value, onChange, minHeight = 220, placeholder, lang
 
     // ★CSSで「プロパティ: 値」の値側にいるときは、値だけを出す。
     //   ここでプロパティ名の候補を出すと必ず誤爆する（display: dis… など）。
+    // CSSとして扱う範囲を決める。
+    //   CSSタブ            → カーソルのある行
+    //   HTMLの style="…"   → その属性値（中身はCSSなので同じ扱いにする）
     const lineBefore = before.slice(before.lastIndexOf('\n') + 1);
-    if (language === 'css' && inCssValuePosition(lineBefore)) {
-      const vctx = cssValueContext(lineBefore);
+    const styleAttr = language === 'html' ? htmlStyleAttrContext(before) : null;
+    const cssScope = language === 'css' ? lineBefore : styleAttr;
+
+    if (cssScope != null && inCssValuePosition(cssScope)) {
+      const vctx = cssValueContext(cssScope);
       // 複数値や関数の途中。語の候補に落とすと的外れなものが並ぶので黙る
       if (!vctx) return close();
       const [prop, partial] = vctx;
@@ -119,6 +126,13 @@ export function CodeEditor({ value, onChange, minHeight = 220, placeholder, lang
       if (vals.length === 1 && vals[0].label.toLowerCase() === partial.toLowerCase()) return close();
       tk = partial;
       found = vals;
+    } else if (styleAttr != null) {
+      // style属性の中でプロパティ名を書いている。HTMLのタグ候補を出しても邪魔なのでCSSの候補にする
+      tk = tokenBeforeCaret(before);
+      if (tk.length < 2) return close();
+      found = filterSuggestions(suggestionsFor('css'), tk);
+      if (!found.length) return close();
+      if (found.length === 1 && found[0].label.toLowerCase() === tk.toLowerCase()) return close();
     } else {
       tk = tokenBeforeCaret(before);
       // 1文字だと候補が多すぎて邪魔になる。ただし {{ と - を含む語は即出す

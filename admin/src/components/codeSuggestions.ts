@@ -291,6 +291,22 @@ export function suggestionsFor(lang: CodeLang): Suggestion[] {
 }
 
 /**
+ * HTMLの style 属性の中にいるか。
+ *
+ * いるなら、その属性値のうちカーソルより前の部分を返す（例: "display: fl"）。
+ * 呼び出し側はこれを1行のCSSとみなして、プロパティ・値の候補を出す。
+ *
+ * 判定は「最後の style=" 以降に閉じ引用符が無い」こと。
+ * 長い本文を毎回なめないよう、直前の2,000文字だけを見る
+ * （style属性がこれより長いことは実際上ない）。
+ */
+export function htmlStyleAttrContext(textBeforeCaret: string): string | null {
+  const tail = textBeforeCaret.slice(-2000);
+  const m = /style\s*=\s*(["'])((?:(?!\1)[\s\S])*)$/i.exec(tail);
+  return m ? m[2] : null;
+}
+
+/**
  * CSSの「値を書く位置」にいるか。`:` のうしろ、`;` の手前。
  *
  * ★cssValueContext が null でも、値の位置なら語の候補に落とさないこと。
