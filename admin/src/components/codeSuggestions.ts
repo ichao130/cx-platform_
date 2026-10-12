@@ -9,7 +9,7 @@
 //   差し込み変数は normalizeCreative()、属性は querySelector("[data-cx-...]") を参照。
 //   SDK側を変えたらここも直すこと。
 
-export type SuggestKind = 'var' | 'attr' | 'tag' | 'prop' | 'value' | 'snippet' | 'fn';
+export type SuggestKind = 'var' | 'attr' | 'tag' | 'prop' | 'value' | 'state' | 'snippet' | 'fn';
 
 export type Suggestion = {
   /** 候補リストに出る文字列。入力中の語とはこれで突き合わせる */
@@ -74,9 +74,9 @@ export const CX_ATTRS: Suggestion[] = [
 
 /** ② SDKが実行時に付ける。CSSセレクタとして使う（HTMLには書かない） */
 export const CX_STATE_SELECTORS: Suggestion[] = [
-  { label: '[data-cx-copied]', kind: 'value', detail: 'コピー直後に付く（約2秒）' },
-  { label: '[data-cx-choice]', kind: 'value', detail: '選択肢ボタンに付く' },
-  { label: '[data-selected]', kind: 'value', detail: '選択中の選択肢に付く' },
+  { label: '[data-cx-copied]', kind: 'state', detail: 'コピー直後に付く（約2秒）' },
+  { label: '[data-cx-choice]', kind: 'state', detail: '選択肢ボタンに付く' },
+  { label: '[data-selected]', kind: 'state', detail: '選択中の選択肢に付く' },
 ];
 
 /* ============================================================
@@ -132,15 +132,84 @@ const HTML_SNIPPETS: Suggestion[] = [
    ============================================================ */
 
 const CSS_PROPS = [
-  'align-items', 'background', 'background-color', 'background-image', 'border',
-  'border-radius', 'bottom', 'box-shadow', 'box-sizing', 'color', 'cursor',
-  'display', 'flex', 'flex-direction', 'flex-wrap', 'font-family', 'font-size',
-  'font-weight', 'gap', 'grid-template-columns', 'height', 'justify-content',
-  'left', 'letter-spacing', 'line-height', 'margin', 'max-width', 'min-height',
-  'object-fit', 'opacity', 'overflow', 'padding', 'position', 'right',
-  'text-align', 'text-decoration', 'top', 'transform', 'transition',
-  'white-space', 'width', 'word-break', 'z-index',
+  // レイアウト
+  'display', 'position', 'top', 'right', 'bottom', 'left', 'inset', 'z-index',
+  'float', 'clear', 'visibility', 'overflow', 'overflow-x', 'overflow-y',
+  'box-sizing', 'aspect-ratio',
+  // サイズ
+  'width', 'min-width', 'max-width', 'height', 'min-height', 'max-height',
+  // 余白
+  'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+  'margin-inline', 'margin-block',
+  'padding', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+  'padding-inline', 'padding-block',
+  // Flex / Grid
+  'flex', 'flex-direction', 'flex-wrap', 'flex-grow', 'flex-shrink', 'flex-basis',
+  'align-items', 'align-self', 'align-content', 'justify-content', 'justify-items',
+  'justify-self', 'order', 'gap', 'row-gap', 'column-gap',
+  'grid-template-columns', 'grid-template-rows', 'grid-column', 'grid-row', 'grid-area',
+  // 文字
+  'color', 'font-family', 'font-size', 'font-weight', 'font-style',
+  'line-height', 'letter-spacing', 'text-align', 'text-decoration', 'text-transform',
+  'text-overflow', 'text-shadow', 'white-space', 'word-break', 'overflow-wrap',
+  'vertical-align', 'list-style', 'writing-mode',
+  // 背景・枠
+  'background', 'background-color', 'background-image', 'background-size',
+  'background-position', 'background-repeat',
+  'border', 'border-top', 'border-right', 'border-bottom', 'border-left',
+  'border-color', 'border-width', 'border-style', 'border-radius',
+  'box-shadow', 'outline', 'outline-offset', 'opacity',
+  // 見た目・動き
+  'transform', 'transform-origin', 'transition', 'animation', 'filter',
+  'backdrop-filter', 'mix-blend-mode', 'object-fit', 'object-position',
+  // 操作
+  'cursor', 'pointer-events', 'user-select', 'touch-action', 'resize', 'content',
 ];
+
+/**
+ * プロパティごとの値の候補。
+ * `display: ` まで書いたところで値を出すために使う。
+ * 全プロパティ分は現実的でないので、選択肢が決まっていてよく使うものだけ。
+ */
+export const CSS_VALUES: Record<string, string[]> = {
+  display: ['flex', 'grid', 'block', 'inline-block', 'inline-flex', 'inline', 'none', 'contents'],
+  position: ['relative', 'absolute', 'fixed', 'sticky', 'static'],
+  'flex-direction': ['row', 'column', 'row-reverse', 'column-reverse'],
+  'flex-wrap': ['wrap', 'nowrap', 'wrap-reverse'],
+  'align-items': ['center', 'flex-start', 'flex-end', 'stretch', 'baseline'],
+  'align-self': ['center', 'flex-start', 'flex-end', 'stretch', 'auto'],
+  'align-content': ['center', 'flex-start', 'flex-end', 'space-between', 'stretch'],
+  'justify-content': ['center', 'flex-start', 'flex-end', 'space-between', 'space-around', 'space-evenly'],
+  'text-align': ['left', 'center', 'right', 'justify'],
+  'text-decoration': ['none', 'underline', 'line-through'],
+  'text-transform': ['none', 'uppercase', 'lowercase', 'capitalize'],
+  'text-overflow': ['ellipsis', 'clip'],
+  'font-weight': ['400', '500', '600', '700', '900', 'bold', 'normal'],
+  'font-style': ['normal', 'italic'],
+  'white-space': ['nowrap', 'normal', 'pre-wrap', 'pre-line'],
+  'word-break': ['break-all', 'break-word', 'normal', 'keep-all'],
+  'overflow-wrap': ['break-word', 'anywhere', 'normal'],
+  overflow: ['hidden', 'auto', 'scroll', 'visible'],
+  'overflow-x': ['hidden', 'auto', 'scroll', 'visible'],
+  'overflow-y': ['hidden', 'auto', 'scroll', 'visible'],
+  visibility: ['visible', 'hidden'],
+  'box-sizing': ['border-box', 'content-box'],
+  'object-fit': ['cover', 'contain', 'fill', 'none', 'scale-down'],
+  cursor: ['pointer', 'default', 'not-allowed', 'text', 'grab', 'wait'],
+  'pointer-events': ['none', 'auto'],
+  'user-select': ['none', 'auto', 'text'],
+  resize: ['none', 'vertical', 'horizontal', 'both'],
+  'border-style': ['solid', 'dashed', 'dotted', 'none'],
+  'background-size': ['cover', 'contain', 'auto'],
+  'background-repeat': ['no-repeat', 'repeat', 'repeat-x', 'repeat-y'],
+  'background-position': ['center', 'top', 'bottom', 'left', 'right'],
+  'vertical-align': ['middle', 'top', 'bottom', 'baseline'],
+  'list-style': ['none', 'disc', 'decimal'],
+  float: ['left', 'right', 'none'],
+  clear: ['both', 'left', 'right', 'none'],
+  'mix-blend-mode': ['multiply', 'screen', 'overlay', 'normal'],
+  'touch-action': ['manipulation', 'none', 'auto'],
+};
 
 const CSS_SNIPPETS: Suggestion[] = [
   {
@@ -219,6 +288,49 @@ export function suggestionsFor(lang: CodeLang): Suggestion[] {
   if (lang === 'css') return cssList;
   if (lang === 'js') return jsList;
   return htmlList;
+}
+
+/**
+ * CSSの「値を書く位置」にいるか。`:` のうしろ、`;` の手前。
+ *
+ * ★cssValueContext が null でも、値の位置なら語の候補に落とさないこと。
+ *   `margin: 0 au` のような複数値の途中で語の候補を出すと、
+ *   関係のない `{{cta_url}}` などが並んでしまう。
+ */
+export function inCssValuePosition(lineBeforeCaret: string): boolean {
+  return /(?:^|[;{])\s*[a-zA-Z-]+\s*:\s*[^;{}]*$/.test(lineBeforeCaret);
+}
+
+/**
+ * CSSで「プロパティ: 値」を書いている途中かを判定する。
+ *
+ * 値を書いている位置でプロパティ名の候補を出すと必ず誤爆するので、
+ * ここで切り分けて値だけを出す。
+ *
+ * @param lineBeforeCaret カーソルがある行の、カーソルより前の部分
+ * @returns [プロパティ名, 入力中の値]。値の位置でなければ null
+ */
+export function cssValueContext(lineBeforeCaret: string): [string, string] | null {
+  const m = /(?:^|[;{])\s*([a-zA-Z-]+)\s*:\s*([^;{}]*)$/.exec(lineBeforeCaret);
+  if (!m) return null;
+  const partial = m[2];
+  // 複数値（margin: 0 auto）や関数（rgba(…）の途中は対象外。誤った置換を避ける
+  if (/[\s(),]/.test(partial)) return null;
+  return [m[1].toLowerCase(), partial];
+}
+
+/**
+ * プロパティに対する値の候補。
+ * 値はまだ1文字も書いていないこともあるので、空でも全件返す。
+ */
+export function valueSuggestionsFor(prop: string, partial: string, limit = 12): Suggestion[] {
+  const vals = CSS_VALUES[prop];
+  if (!vals) return [];
+  const q = partial.toLowerCase();
+  return vals
+    .filter((v) => !q || v.toLowerCase().startsWith(q))
+    .slice(0, limit)
+    .map((v): Suggestion => ({ label: v, kind: 'value', detail: prop }));
 }
 
 /**

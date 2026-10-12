@@ -4,6 +4,9 @@ import {
   suggestionsFor,
   tokenBeforeCaret,
   filterSuggestions,
+  cssValueContext,
+  inCssValuePosition,
+  valueSuggestionsFor,
   type CodeLang,
   type Suggestion,
 } from './codeSuggestions';
@@ -45,7 +48,8 @@ const KIND_STYLE: Record<Suggestion['kind'], { label: string; color: string }> =
   attr: { label: '属性', color: '#a6e3a1' },
   tag: { label: 'タグ', color: '#f9e2af' },
   prop: { label: 'CSS', color: '#f5c2e7' },
-  value: { label: '状態', color: '#94e2d5' },
+  value: { label: '値', color: '#94e2d5' },
+  state: { label: '状態', color: '#b4befe' },
   snippet: { label: '定型', color: '#fab387' },
   fn: { label: 'JS', color: '#cba6f7' },
 };
@@ -97,15 +101,35 @@ export function CodeEditor({ value, onChange, minHeight = 220, placeholder, lang
     dismissedAt.current = null;
 
     const before = value.slice(0, caret);
-    const tk = tokenBeforeCaret(before);
-    // 1文字だと候補が多すぎて邪魔になる。ただし {{ と - を含む語は即出す
-    const worthIt = tk.length >= 2 || tk.endsWith('{{');
-    if (!worthIt) return close();
 
-    const found = filterSuggestions(all, tk);
-    if (!found.length) return close();
-    // 書き終わった語に対して同じ候補だけを出しても選ぶものが無い
-    if (found.length === 1 && found[0].label.toLowerCase() === tk.toLowerCase()) return close();
+    let tk: string;
+    let found: Suggestion[];
+
+    // ★CSSで「プロパティ: 値」の値側にいるときは、値だけを出す。
+    //   ここでプロパティ名の候補を出すと必ず誤爆する（display: dis… など）。
+    const lineBefore = before.slice(before.lastIndexOf('\n') + 1);
+    if (language === 'css' && inCssValuePosition(lineBefore)) {
+      const vctx = cssValueContext(lineBefore);
+      // 複数値や関数の途中。語の候補に落とすと的外れなものが並ぶので黙る
+      if (!vctx) return close();
+      const [prop, partial] = vctx;
+      const vals = valueSuggestionsFor(prop, partial);
+      // 値の候補を持たないプロパティなら、ここでは何も出さない
+      if (!vals.length) return close();
+      if (vals.length === 1 && vals[0].label.toLowerCase() === partial.toLowerCase()) return close();
+      tk = partial;
+      found = vals;
+    } else {
+      tk = tokenBeforeCaret(before);
+      // 1文字だと候補が多すぎて邪魔になる。ただし {{ と - を含む語は即出す
+      const worthIt = tk.length >= 2 || tk.endsWith('{{');
+      if (!worthIt) return close();
+
+      found = filterSuggestions(all, tk);
+      if (!found.length) return close();
+      // 書き終わった語に対して同じ候補だけを出しても選ぶものが無い
+      if (found.length === 1 && found[0].label.toLowerCase() === tk.toLowerCase()) return close();
+    }
 
     // 等幅前提でカーソルの行・桁から表示位置を出す。
     // ★画面座標(position: fixed)で出すこと。
