@@ -1005,9 +1005,9 @@ export default function TemplatesPage() {
                       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
                         {/* 左: エディタ */}
                         <div style={{ flex: 1, minWidth: 0, overflow: "auto", padding: 16, borderRight: "1px solid rgba(15,23,42,.1)" }}>
-                          {codeTab === "html" && <CodeEditor value={html} onChange={setHtml} minHeight={600} placeholder="<!-- HTMLをここに書いてください -->" />}
-                          {codeTab === "css"  && <CodeEditor value={css}  onChange={setCss}  minHeight={600} placeholder="/* CSSをここに書いてください */" />}
-                          {codeTab === "js"   && <CodeEditor value={js}   onChange={setJs}   minHeight={600} placeholder="// JavaScriptをここに書いてください" />}
+                          {codeTab === "html" && <CodeEditor value={html} onChange={setHtml} minHeight={600} placeholder="<!-- HTMLをここに書いてください -->" language="html" />}
+                          {codeTab === "css"  && <CodeEditor value={css}  onChange={setCss}  minHeight={600} placeholder="/* CSSをここに書いてください */" language="css" />}
+                          {codeTab === "js"   && <CodeEditor value={js}   onChange={setJs}   minHeight={600} placeholder="// JavaScriptをここに書いてください" language="js" />}
                         </div>
                         {/* 右: プレビュー（編集に追従。既存の previewSrcDoc をそのまま利用） */}
                         <div style={{ width: "44%", minWidth: 0, display: "flex", flexDirection: "column", background: "linear-gradient(180deg,#ffffff,#f8fbff)" }}>
@@ -1030,7 +1030,7 @@ export default function TemplatesPage() {
                 <div style={{ paddingTop: 10 }}>
                   {codeTab === "html" && (
                     <>
-                      <CodeEditor value={html} onChange={setHtml} minHeight={400} placeholder="<!-- HTMLをここに書いてください -->" />
+                      <CodeEditor value={html} onChange={setHtml} minHeight={400} placeholder="<!-- HTMLをここに書いてください -->" language="html" />
                       <details style={{ marginTop: 6 }}>
                         <summary className="small" style={{ cursor: "pointer", color: "#2563eb", userSelect: "none" }}>📌 差し込みタグ一覧を見る</summary>
                         <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "10px 14px", marginTop: 6, fontSize: 12, lineHeight: 1.8 }}>
@@ -1046,14 +1046,14 @@ export default function TemplatesPage() {
                     </>
                   )}
                   {codeTab === "css" && (
-                    <CodeEditor value={css} onChange={setCss} minHeight={400} placeholder="/* CSSをここに書いてください */" />
+                    <CodeEditor value={css} onChange={setCss} minHeight={400} placeholder="/* CSSをここに書いてください */" language="css" />
                   )}
                   {codeTab === "js" && (
                     <>
                       <div className="small" style={{ opacity: 0.68, marginBottom: 6 }}>
                         テンプレートが表示された直後に実行されます。ページのDOMを読み書きしたり、カウントダウンなどの動的処理が書けます。
                       </div>
-                      <CodeEditor value={js} onChange={setJs} minHeight={400} placeholder="// JavaScriptをここに書いてください&#10;// テンプレート表示直後に実行されます" />
+                      <CodeEditor value={js} onChange={setJs} minHeight={400} placeholder="// JavaScriptをここに書いてください&#10;// テンプレート表示直後に実行されます" language="js" />
                       <details style={{ marginTop: 6 }}>
                         <summary className="small" style={{ cursor: "pointer", color: "#2563eb", userSelect: "none" }}>📌 使い方のヒント</summary>
                         <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "10px 14px", marginTop: 6, fontSize: 12, lineHeight: 1.9 }}>
