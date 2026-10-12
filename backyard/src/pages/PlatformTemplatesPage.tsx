@@ -1,5 +1,8 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { opsPost } from "../firebase";
+// 管理画面と同じエディタを使う（入力候補の定義を二重管理しないため）。
+// 参照先は admin 配下。react が二重に入らないよう vite.config.ts で dedupe している。
+import { CodeEditor } from '../../../admin/src/components/CodeEditor';
 
 type TemplateType = "modal" | "banner" | "toast" | "launcher" | "push";
 
@@ -307,15 +310,15 @@ export default function PlatformTemplatesPage() {
 
               <div style={s.editorBox}>
                 <div style={s.editorLabel}>HTML</div>
-                <textarea style={s.textarea} value={draft.html} onChange={(e) => setDraft({ ...draft, html: e.target.value })} spellCheck={false} />
+                <CodeEditor language="html" value={draft.html} onChange={(v) => setDraft({ ...draft, html: v })} minHeight={190} />
               </div>
               <div style={s.editorBox}>
                 <div style={s.editorLabel}>CSS</div>
-                <textarea style={s.textarea} value={draft.css} onChange={(e) => setDraft({ ...draft, css: e.target.value })} spellCheck={false} />
+                <CodeEditor language="css" value={draft.css} onChange={(v) => setDraft({ ...draft, css: v })} minHeight={190} />
               </div>
               <div style={s.editorBox}>
                 <div style={s.editorLabel}>JS（任意・表示直後に実行）</div>
-                <textarea style={{ ...s.textarea, minHeight: 110 }} value={draft.js || ""} onChange={(e) => setDraft({ ...draft, js: e.target.value })} spellCheck={false} />
+                <CodeEditor language="js" value={draft.js || ""} onChange={(v) => setDraft({ ...draft, js: v })} minHeight={110} />
               </div>
 
               {!!draft.fields?.length && (

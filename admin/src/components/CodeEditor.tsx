@@ -1,4 +1,5 @@
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import {
   suggestionsFor,
   tokenBeforeCaret,
@@ -106,18 +107,28 @@ export function CodeEditor({ value, onChange, minHeight = 220, placeholder, lang
     // 書き終わった語に対して同じ候補だけを出しても選ぶものが無い
     if (found.length === 1 && found[0].label.toLowerCase() === tk.toLowerCase()) return close();
 
-    // 等幅前提でカーソルの行・桁から表示位置を出す
+    // 等幅前提でカーソルの行・桁から表示位置を出す。
+    // ★画面座標(position: fixed)で出すこと。
+    //   エディタの親に overflow:auto があると、absolute では候補が切り取られる
+    //   （テンプレート編集はモーダル内のスクロール領域に置かれている）。
     const lines = before.split('\n');
     const line = lines.length - 1;
     const col = lines[lines.length - 1].length;
-    const left = gutterW + PAD_X + col * charWidth() - ta.scrollLeft;
-    const top = PAD_Y + (line + 1) * LINE_HEIGHT - ta.scrollTop + 4;
+    const rect = ta.getBoundingClientRect();
+    const caretX = rect.left + PAD_X + col * charWidth() - ta.scrollLeft;
+    const caretY = rect.top + PAD_Y + (line + 1) * LINE_HEIGHT - ta.scrollTop;
 
-    const boxW = boxRef.current?.clientWidth ?? 600;
+    const W = 300;
+    const H = 268;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    // 下に入らなければカーソルの上に出す
+    const below = caretY + 6;
+    const flip = below + H > vh && caretY - LINE_HEIGHT - H > 0;
+
     setPos({
-      // はみ出すときは右端に寄せる
-      left: Math.max(4, Math.min(left, boxW - 300)),
-      top,
+      left: Math.max(8, Math.min(caretX, vw - W - 8)),
+      top: flip ? caretY - LINE_HEIGHT - H - 2 : below,
     });
     setToken(tk);
     setItems(found);
@@ -187,6 +198,18 @@ export function CodeEditor({ value, onChange, minHeight = 220, placeholder, lang
     }
     if (items.length) close();
   };
+
+  // 画面座標で置いているので、外側がスクロール・リサイズしたらずれる。閉じる
+  useEffect(() => {
+    if (!items.length) return;
+    const onMove = () => close();
+    window.addEventListener('scroll', onMove, true);
+    window.addEventListener('resize', onMove);
+    return () => {
+      window.removeEventListener('scroll', onMove, true);
+      window.removeEventListener('resize', onMove);
+    };
+  }, [items.length, close]);
 
   // 値が変わったら、予約されたカーソル位置を適用してから候補を出し直す
   useEffect(() => {
@@ -273,16 +296,18 @@ export function CodeEditor({ value, onChange, minHeight = 220, placeholder, lang
         />
       </div>
 
-      {/* 入力候補 */}
-      {items.length > 0 && (
+      {/* 入力候補。
+          ★親に overflow:auto があると absolute では切り取られるため、
+            body 直下に出して position:fixed で置く。 */}
+      {items.length > 0 && createPortal(
         <div
           role="listbox"
           aria-label="入力候補"
           style={{
-            position: 'absolute',
+            position: 'fixed',
             left: pos.left,
             top: pos.top,
-            zIndex: 40,
+            zIndex: 4000,
             minWidth: 260,
             maxWidth: 420,
             maxHeight: 268,
@@ -371,7 +396,8 @@ export function CodeEditor({ value, onChange, minHeight = 220, placeholder, lang
           >
             ↑↓ 選択 / Enter・Tab 確定 / Esc 閉じる
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
