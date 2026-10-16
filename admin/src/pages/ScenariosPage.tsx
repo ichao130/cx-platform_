@@ -2341,6 +2341,14 @@ export default function ScenariosPage() {
 
                 <div style={{ height: 14 }} />
                 <div className="h2">A/Bテスト設定</div>
+                <div className="small" style={{ opacity: 0.72, marginBottom: 8, lineHeight: 1.75 }}>
+                  有効にすると、当たったパターンのアクションが配信されます。
+                  <b>パターンにアクションを入れなかった場合だけ</b>、「① 基本」の
+                  <b>アクション設定（通常配信）</b>が使われます。
+                  <br />
+                  A を空にして B にだけ新しいアクションを入れると「現行 vs 新案」になります。
+                  <span style={{ opacity: 0.85 }}>（通常配信の設定は消さないでください。A/Bを無効化したときの戻り先になります）</span>
+                </div>
                 <div className="row" style={{ alignItems: "center", gap: 10 }}>
                   <label className="badge" style={{ cursor: "pointer" }}>
                     <input type="checkbox" checked={expEnabled} onChange={(e) => setExpEnabled(e.target.checked)} />
@@ -2360,7 +2368,13 @@ export default function ScenariosPage() {
                 {expEnabled ? (
                   <>
                     <div style={{ height: 10 }} />
-                    <div className="small">配分合計：<b>{weightsSum}</b>（目安100）</div>
+                    <div className="small">
+                      配分合計：<b>{weightsSum}</b>（目安100）
+                      <span style={{ opacity: 0.7, marginLeft: 8 }}>
+                        配分は比率です。2:1 でも 20:10 でも同じ割合になります。
+                        0 にしたパターンは配信されません。
+                      </span>
+                    </div>
                     <div style={{ height: 10 }} />
                     <div className="liquid-scroll-x">
                       <table className="table">
@@ -2407,6 +2421,9 @@ export default function ScenariosPage() {
                     </div>
                     <div style={{ height: 12 }} />
                     <div className="h2">パターン別アクション：<code>{variantIdToEdit}</code></div>
+                    <div className="small" style={{ opacity: 0.7, marginBottom: 6 }}>
+                      上の表の <b>variant</b> 列のボタン（A / B …）を押すと、編集するパターンを切り替えられます。
+                    </div>
                     <div className="row">
                       <select className="input" style={{ flex: 1, maxWidth: 400 }} value={actionIdToAdd} onChange={(e) => setActionIdToAdd(e.target.value)}>
                         {actionsForWorkspace.map((a) => (
@@ -2542,6 +2559,11 @@ export default function ScenariosPage() {
                   <div style={{ flex: 1 }}>
                     <div className="h2">優先度</div>
                     <input className="input" type="number" value={priority} onChange={(e) => setPriority(Number(e.target.value))} />
+                    <div className="small" style={{ opacity: 0.7, marginTop: 4, lineHeight: 1.7 }}>
+                      <b>数字が大きいほうが優先</b>されます（10 と 1 なら 10 が勝ちます）。
+                      効くのは<b>同じ表示場所を使うシナリオが重なったとき</b>だけで、
+                      表示場所が違えば複数のシナリオが同時に出ます。
+                    </div>
                   </div>
                   <div style={{ flex: 2 }}>
                     <div className="h2">メモ（施策メモ）</div>
