@@ -144,6 +144,7 @@ export default function DashboardPage() {
   const [sites, setSites] = useState<Array<{ id: string; data: any }>>([]);
   const [visibleWorkspaces, setVisibleWorkspaces] = useState<Array<{ id: string; data: any }>>([]);
   const [scenarios, setScenarios] = useState<Array<{ id: string; data: any }>>([]);
+  const [actions, setActions] = useState<Array<{ id: string; data: any }>>([]);
   const [siteId, setSiteId] = useState<string>("");
   const [currentUid, setCurrentUid] = useState<string>("");
   const [workspaceId, setWorkspaceId] = useState<string>("");
@@ -250,12 +251,28 @@ export default function DashboardPage() {
   // Scenarios
   useEffect(() => {
     if (!siteId) { setScenarios([]); setAbScenarioId(""); return; }
-    const q = query(collection(db, "scenarios"), where("siteId", "==", siteId), where("status", "==", "active"), orderBy("__name__"));
+    // ★status で絞らないこと。
+    //   以前は active だけを読んでいたため、終了したA/Bテストがセレクタに出ず、
+    //   結果を見返せなかった（A/Bは終わってから振り返るもの）。
+    //   停止中は選択肢に「（停止中）」と付けて区別する。
+    const q = query(collection(db, "scenarios"), where("siteId", "==", siteId), orderBy("__name__"));
     return onSnapshot(q, (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, data: d.data() }));
       setScenarios(list);
-      if (!abScenarioId || !list.some((s) => s.id === abScenarioId)) setAbScenarioId(list[0]?.id || "");
+      // A/Bテストのシナリオを優先して初期選択する（この画面の主役がバリアント比較のため）
+      if (!abScenarioId || !list.some((s) => s.id === abScenarioId)) {
+        const ab = list.find((s) => (s.data as any)?.experiment?.enabled);
+        setAbScenarioId((ab || list[0])?.id || "");
+      }
     });
+  }, [siteId]);
+
+  // アクション（クリエイティブ）
+  // バリアント別集計で「どのクリエイティブか」を出すために必要。
+  useEffect(() => {
+    if (!siteId) { setActions([]); return; }
+    const q = query(collection(db, "actions"), where("siteId", "==", siteId));
+    return onSnapshot(q, (snap) => setActions(snap.docs.map((d) => ({ id: d.id, data: d.data() }))), () => setActions([]));
   }, [siteId]);
 
   // stats_daily
@@ -426,6 +443,47 @@ export default function DashboardPage() {
     return Array.from(map.values()).sort((a, b) => b.imp - a.imp);
   }, [filteredRows, abScenarioId, scenarios]);
 
+  // バリアントID → そこに割り当てられたクリエイティブ
+  // シナリオ設定を開かないとA/Bがどの出し分けなのか分からなかったため、表に出す。
+  // experiment.variants[].actionRefs が空のバリアントは、シナリオ直下の
+  // actionRefs（通常配信）がそのまま配信される（サーバーのフォールバック仕様）。
+  const variantCreatives = useMemo(() => {
+    const byId = new Map(actions.map((a) => [a.id, a]));
+    const describe = (refs: any[]) =>
+      (refs || [])
+        .filter((r) => r?.enabled !== false)
+        .map((r) => {
+          const a = byId.get(r.actionId);
+          const c = (a?.data as any)?.creative || {};
+          return {
+            actionId: r.actionId,
+            name: (a?.data as any)?.name || c.title || r.actionId,
+            type: (a?.data as any)?.type || "",
+            imageUrl: c.image_url || c.imageUrl || "",
+            missing: !a,
+          };
+        });
+
+    const sc = scenarios.find((x) => x.id === abScenarioId);
+    const base = describe(((sc?.data as any)?.actionRefs) || []);
+    const map = new Map<string, { items: ReturnType<typeof describe>; fallback: boolean; label: string; weight?: number }>();
+    map.set("na", { items: base, fallback: false, label: "通常配信" });
+
+    const exp = (sc?.data as any)?.experiment;
+    if (exp?.enabled) {
+      for (const v of exp.variants || []) {
+        const own = describe(v.actionRefs || []);
+        map.set(String(v.id), {
+          items: own.length ? own : base,
+          fallback: own.length === 0,   // 空なら通常配信が使われる
+          label: v.name || String(v.id),
+          weight: typeof v.weight === "number" ? v.weight : undefined,
+        });
+      }
+    }
+    return map;
+  }, [actions, scenarios, abScenarioId]);
+
   const selectedSite = useMemo(() => sites.find((s) => s.id === siteId), [sites, siteId]);
   const selectedSiteName = useMemo(() => siteLabel(selectedSite), [selectedSite]);
   const selectedWorkspaceName = useMemo(() => workspaceNameFromRows(visibleWorkspaces, workspaceId), [visibleWorkspaces, workspaceId]);
@@ -535,7 +593,11 @@ export default function DashboardPage() {
             <select className="input" value={abScenarioId} onChange={(e) => setAbScenarioId(e.target.value)}>
               {scenarios.length === 0 && <option value="">（シナリオなし）</option>}
               {scenarios.map((s) => (
-                <option key={s.id} value={s.id}>{scenarioLabel(s)}</option>
+                <option key={s.id} value={s.id}>
+                  {scenarioLabel(s)}
+                  {(s.data as any)?.experiment?.enabled ? " ⚖️ A/B" : ""}
+                  {(s.data as any)?.status === "paused" ? "（停止中）" : ""}
+                </option>
               ))}
             </select>
           </div>
@@ -786,18 +848,30 @@ export default function DashboardPage() {
         </div>
 
         {summaryTable.length === 0 ? (
-          <div className="small" style={{ opacity: 0.55 }}>データがありません</div>
+          // ★「空」で終わらせないこと。
+          //   停止中のA/Bテストは過去の期間にしかデータが無く、既定の集計期間（30日）では
+          //   1行も出ない。理由が出ないため「集計されていない」ように見えていた。
+          <div className="small" style={{ opacity: 0.7, lineHeight: 1.8 }}>
+            この期間に配信データがありません。
+            {(() => {
+              const sc = scenarios.find((x) => x.id === abScenarioId);
+              const paused = (sc?.data as any)?.status === "paused";
+              return paused
+                ? <>このシナリオは<b>停止中</b>です。過去に配信していた期間を見るには、上の<b>集計期間</b>を広げてください。</>
+                : <>上の<b>集計期間</b>を広げるか、別のシナリオを選んでください。</>;
+            })()}
+          </div>
         ) : (
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid rgba(15,23,42,.08)", background: "rgba(15,23,42,.02)" }}>
-                  <th style={{ padding: "8px 12px", textAlign: "left", fontWeight: 700, opacity: 0.7 }}>バリアント</th>
+                  <th style={{ padding: "8px 12px", textAlign: "left", fontWeight: 700, opacity: 0.7 }}>バリアント / クリエイティブ</th>
                   <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>表示</th>
                   <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>クリック</th>
                   <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CV</th>
-                  <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CVR</th>
-                  <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CTR</th>
+                  <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CVR<span style={{ fontWeight: 400, opacity: 0.6 }}>（CV率）</span></th>
+                  <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, opacity: 0.7 }}>CTR<span style={{ fontWeight: 400, opacity: 0.6 }}>（クリック率）</span></th>
                 </tr>
               </thead>
               <tbody>
@@ -806,15 +880,47 @@ export default function DashboardPage() {
                   const ctr = r.imp > 0 ? Math.round((r.clk / r.imp) * 10000) / 100 : 0;
                   const key = `${latestDay}__${r.v ?? "na"}`;
                   const ai = aiMap[key];
+                  const vc = variantCreatives.get(String(r.v ?? "na"));
                   return (
                     <React.Fragment key={r.v}>
                       <tr style={{ borderBottom: "1px solid rgba(15,23,42,.05)" }}>
-                        <td style={{ padding: "10px 12px", fontWeight: 700 }}>
-                          {r.v === "na" ? "（通常配信）" : `Variant ${r.v}`}
-                          {ai?.rule?.grade && (
-                            <span style={{ marginLeft: 8, background: badgeColor(ai.rule.grade), color: "#fff", padding: "1px 7px", borderRadius: 5, fontSize: 11 }}>
-                              {String(ai.rule.grade).toUpperCase()}
-                            </span>
+                        <td style={{ padding: "10px 12px" }}>
+                          <div style={{ fontWeight: 700, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                            <span>{r.v === "na" ? "（通常配信）" : `Variant ${r.v}`}</span>
+                            {vc?.weight != null && r.v !== "na" && (
+                              <span className="small" style={{ fontWeight: 600, opacity: 0.6 }}>配分 {vc.weight}</span>
+                            )}
+                            {ai?.rule?.grade && (
+                              <span style={{ background: badgeColor(ai.rule.grade), color: "#fff", padding: "1px 7px", borderRadius: 5, fontSize: 11 }}>
+                                {String(ai.rule.grade).toUpperCase()}
+                              </span>
+                            )}
+                          </div>
+                          {/* どのクリエイティブが出ているか。設定画面を開かなくても分かるように */}
+                          {vc && vc.items.length > 0 ? (
+                            <div style={{ display: "grid", gap: 4, marginTop: 5 }}>
+                              {vc.items.map((it) => (
+                                <div key={it.actionId} style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                                  {it.imageUrl ? (
+                                    <img src={it.imageUrl} alt="" style={{ width: 30, height: 22, objectFit: "cover", borderRadius: 3, flexShrink: 0, border: "1px solid rgba(15,23,42,.1)" }} />
+                                  ) : (
+                                    <span style={{ width: 30, height: 22, borderRadius: 3, flexShrink: 0, background: "rgba(15,23,42,.05)" }} />
+                                  )}
+                                  <span className="small" style={{ opacity: it.missing ? 0.45 : 0.78, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {it.name}
+                                    {it.type ? <span style={{ opacity: 0.55 }}> / {it.type}</span> : null}
+                                    {it.missing ? <span style={{ opacity: 0.7 }}>（削除済み）</span> : null}
+                                  </span>
+                                </div>
+                              ))}
+                              {vc.fallback && (
+                                <div className="small" style={{ opacity: 0.6 }}>
+                                  ※ このパターンはアクション未設定のため、通常配信の内容が出ています
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="small" style={{ opacity: 0.45, marginTop: 4 }}>クリエイティブ未設定</div>
                           )}
                         </td>
                         <td style={{ padding: "10px 12px", textAlign: "right" }}>{fmtInt(r.imp)}</td>
