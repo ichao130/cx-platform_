@@ -157,11 +157,29 @@ function reorder(refs: ActionRef[]): ActionRef[] {
   return (refs || []).map((r, i) => ({ ...r, order: i }));
 }
 
-function newVariant(): ExperimentVariant {
-  const id = genId("var");
+/**
+ * 次に使うバリアントIDを決める（A → B → C …）。
+ *
+ * ★バリアントIDは stats_daily の variantId としてそのまま記録され、
+ *   ダッシュボードの「バリアント別集計」にも出る。
+ *   ランダムIDだと画面に var_w25wua4j のような文字列が出てしまい、
+ *   どのパターンか読めなくなる。
+ *   既存IDは変えないこと（変えると過去の計測データと紐づかなくなる）。
+ */
+function nextVariantId(existing: ExperimentVariant[]): string {
+  const used = new Set((existing || []).map((v) => String(v.id || "").toUpperCase()));
+  for (let i = 0; i < 26; i++) {
+    const c = String.fromCharCode(65 + i); // A..Z
+    if (!used.has(c)) return c;
+  }
+  return genId("var"); // 26個を超えた場合のみ従来どおり（現実には起きない）
+}
+
+function newVariant(existing: ExperimentVariant[]): ExperimentVariant {
+  const id = nextVariantId(existing);
   return {
     id,
-    name: `Variant ${id}`,
+    name: id,
     weight: 50,
     actionRefs: [],
   };
@@ -871,7 +889,7 @@ export default function ScenariosPage() {
 
   function addVariant() {
     setVariants((cur) => {
-      const next = [...cur, newVariant()];
+      const next = [...cur, newVariant(cur)];
       return next;
     });
   }
