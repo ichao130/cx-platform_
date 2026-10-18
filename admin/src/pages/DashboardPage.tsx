@@ -428,10 +428,14 @@ export default function DashboardPage() {
   const summaryTable = useMemo(() => {
     const isPurchaseGoal = !!abScenarioId &&
       (scenarios.find((s) => s.id === abScenarioId)?.data as any)?.goal?.type === "purchase";
-    const map = new Map<string, { v: string; imp: number; clk: number; cv: number }>();
+    // ★行ごとに「データがある期間」も持つこと。
+    //   A/Bを途中で始めると、開始前の実績は na（通常配信）に、開始後は A/B に入る。
+    //   期間が違う行を同じ表に並べると「naが一番多い＝naが勝っている」と誤読される。
+    type Row = { v: string; imp: number; clk: number; cv: number; firstDay: string; lastDay: string };
+    const map = new Map<string, Row>();
     for (const r of filteredRows) {
       const v = String(r.variantId ?? "na");
-      if (!map.has(v)) map.set(v, { v, imp: 0, clk: 0, cv: 0 });
+      if (!map.has(v)) map.set(v, { v, imp: 0, clk: 0, cv: 0, firstDay: "", lastDay: "" });
       const obj = map.get(v)!;
       const c = safeNum(r.count);
       if (r.event === "impression") obj.imp += c;
@@ -439,6 +443,14 @@ export default function DashboardPage() {
       if (r.event === "click_link" || r.event === "click") obj.clk += c;
       if (r.event === "conversion" && !isPurchaseGoal) obj.cv += c;
       if (r.event === "purchase" && isPurchaseGoal) obj.cv += c;
+      // ★期間は「表示されていた日」で見ること。
+      //   購入やCVは配信が終わったあとの日にも na に付くため、
+      //   全イベントで期間を取ると na の終了日が実態より後ろにずれ、
+      //   A/Bを途中で開始したことを検出できなくなる。
+      if (c > 0 && r.day && r.event === "impression") {
+        if (!obj.firstDay || r.day < obj.firstDay) obj.firstDay = r.day;
+        if (!obj.lastDay || r.day > obj.lastDay) obj.lastDay = r.day;
+      }
     }
     return Array.from(map.values()).sort((a, b) => b.imp - a.imp);
   }, [filteredRows, abScenarioId, scenarios]);
@@ -483,6 +495,13 @@ export default function DashboardPage() {
     }
     return map;
   }, [actions, scenarios, abScenarioId]);
+
+  // A/Bテストが始まった日（バリアント行のうち最も早い実績日）。
+  // 通常配信(na)の実績がそれより前で終わっていれば「開始前の配信」と分かる。
+  const abStartDay = useMemo(() => {
+    const days = summaryTable.filter((r) => r.v !== "na" && r.firstDay).map((r) => r.firstDay);
+    return days.length ? days.sort()[0] : "";
+  }, [summaryTable]);
 
   const selectedSite = useMemo(() => sites.find((s) => s.id === siteId), [sites, siteId]);
   const selectedSiteName = useMemo(() => siteLabel(selectedSite), [selectedSite]);
@@ -847,6 +866,16 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        {/* A/Bを途中で始めた場合、通常配信(na)は「開始前の実績」なので期間が違う。
+            並べて比べられる形になっているため、先に断っておく。 */}
+        {abStartDay && summaryTable.some((r) => r.v === "na" && r.imp > 0 && r.firstDay && r.firstDay < abStartDay) && (
+          <div className="small" style={{ marginBottom: 12, padding: "9px 13px", borderRadius: 9, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", lineHeight: 1.75 }}>
+            このシナリオは <b>{abStartDay}</b> にA/Bテストを開始しています。
+            <b>（通常配信）</b>の行はそれ以前の実績なので、<b>A・Bとは集計期間が違います</b>。
+            A と B の比較だけを見てください。
+          </div>
+        )}
+
         {summaryTable.length === 0 ? (
           // ★「空」で終わらせないこと。
           //   停止中のA/Bテストは過去の期間にしかデータが無く、既定の集計期間（30日）では
@@ -887,6 +916,16 @@ export default function DashboardPage() {
                         <td style={{ padding: "10px 12px" }}>
                           <div style={{ fontWeight: 700, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                             <span>{r.v === "na" ? "（通常配信）" : `Variant ${r.v}`}</span>
+                            {r.firstDay && (
+                              <span className="small" style={{ fontWeight: 500, opacity: 0.55 }}>
+                                {r.firstDay === r.lastDay ? r.firstDay : `${r.firstDay} 〜 ${r.lastDay}`}
+                              </span>
+                            )}
+                            {r.v === "na" && abStartDay && r.imp > 0 && r.firstDay && r.firstDay < abStartDay && (
+                              <span style={{ fontSize: 11, fontWeight: 700, background: "rgba(224,150,34,.16)", color: "#92400e", padding: "1px 7px", borderRadius: 5 }}>
+                                A/B開始前
+                              </span>
+                            )}
                             {vc?.weight != null && r.v !== "na" && (
                               <span className="small" style={{ fontWeight: 600, opacity: 0.6 }}>配分 {vc.weight}</span>
                             )}
