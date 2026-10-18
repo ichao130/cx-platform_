@@ -472,6 +472,15 @@ const PUSH_OPTIN_CONFIRM: PlatformTemplatePreset = {
   var DENY_TEXT  = "{{denied_text}}"  || "ブラウザの設定で通知がブロックされています。設定から許可してください。";
   var SKIP_KEY   = "cx_push_asked";
 
+  // ★対応していない環境では「聞かない」こと。
+  //   iOSはホーム画面に追加したPWAでしかWeb Pushを受けられず、
+  //   Safariのタブでは PushManager が存在しない（必ず unsupported になる）。
+  //   先に確認ダイアログを出すと、iPhoneユーザーは
+  //     「叶わない質問にOKを押す → 何も起きない → 下の抑止フラグで二度と聞かれない」
+  //   となり、あとからPWA化しても購読できなくなる。
+  var supported = ("serviceWorker" in navigator) && ("PushManager" in window) && ("Notification" in window);
+  if (!supported) return;
+
   // 一度断った人に毎回聞かない（同じブラウザでは再表示しない）
   try { if (localStorage.getItem(SKIP_KEY)) return; } catch (e) {}
 
@@ -489,8 +498,9 @@ const PUSH_OPTIN_CONFIRM: PlatformTemplatePreset = {
       var s = r && r.status;
       if (s === "subscribed" || s === "already") { try { window.alert(DONE_TEXT); } catch (e) {} }
       else if (s === "denied") { try { window.alert(DENY_TEXT); } catch (e) {} }
-      else if (s === "popup_blocked") {
-        // ブラウザにブロックされた場合は再挑戦できるよう、抑止フラグを戻す
+      else if (s === "popup_blocked" || s === "unsupported") {
+        // 購読できなかった場合は再挑戦できるよう、抑止フラグを戻す
+        // （unsupported は上で弾いているが、環境が変わった場合の保険）
         try { localStorage.removeItem(SKIP_KEY); } catch (e) {}
       }
     });
