@@ -175,6 +175,35 @@ function nextVariantId(existing: ExperimentVariant[]): string {
   return genId("var"); // 26個を超えた場合のみ従来どおり（現実には起きない）
 }
 
+/**
+ * 旧実装で作られたランダムID（var_xxxxxxxx）を A / B / C… に振り直す。
+ *
+ * 画面にも集計にもIDがそのまま出るため、読み込んだ時点で直す。
+ * すでに1文字のIDは触らない（過去の計測データと紐づいているため）。
+ */
+function normalizeVariantIds(vs: ExperimentVariant[]): ExperimentVariant[] {
+  const used = new Set(
+    vs.map((v) => String(v.id || "").toUpperCase()).filter((id) => /^[A-Z]$/.test(id))
+  );
+  const nextFree = () => {
+    for (let i = 0; i < 26; i++) {
+      const c = String.fromCharCode(65 + i);
+      if (!used.has(c)) { used.add(c); return c; }
+    }
+    return "";
+  };
+  return vs.map((v) => {
+    const id = String(v.id || "").trim();
+    if (/^[A-Z]$/.test(id.toUpperCase())) return { ...v, id: id.toUpperCase() };
+    const fresh = nextFree();
+    if (!fresh) return v; // 英字を使い切った場合はそのまま
+    // 名前が旧既定（"Variant var_xxx" や ID そのまま）なら新しい文字に合わせる
+    const oldName = String(v.name || "");
+    const wasDefault = !oldName || oldName === id || oldName === `Variant ${id}`;
+    return { ...v, id: fresh, name: wasDefault ? fresh : oldName };
+  });
+}
+
 function newVariant(existing: ExperimentVariant[]): ExperimentVariant {
   const id = nextVariantId(existing);
   return {
@@ -1258,12 +1287,15 @@ export default function ScenariosPage() {
         actionRefs: reorder(normalizeActionRefs(v.actionRefs)),
       })).filter((v: any) => !!v.id);
 
-      setVariants(vs.length ? vs : [
+      // 旧実装のランダムIDは読み込み時に A / B / C… へ直す
+      const normalized = normalizeVariantIds(vs);
+
+      setVariants(normalized.length ? normalized : [
         { id: "A", name: "A", weight: 50, actionRefs: [] },
         { id: "B", name: "B", weight: 50, actionRefs: [] },
       ]);
 
-      setVariantIdToEdit(vs[0]?.id || "A");
+      setVariantIdToEdit(normalized[0]?.id || "A");
     } else {
       setExpEnabled(false);
       setExpSticky("vid");
