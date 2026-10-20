@@ -706,6 +706,15 @@ export function registerShopifyRoutes(app: Express) {
       const sid = attr("_cx_sid") || null;
       const scenarioId = attr("_cx_scenario_id") || null;
 
+      // A/Bのバリアント。配信時にSDKがカート属性へ書いた値をそのまま使う。
+      //
+      // ★pickVariant で後から計算し直してはいけない。
+      //   割り当ては vid の安定ハッシュだが、剰余の分母が配分(weight)の合計なので、
+      //   配分を途中で変えると過去の割り当てを再現できない。
+      //   実データで照合したところ 2,143人中 317人（約15%）がずれた。
+      //   値が無い購入（SDK更新前のカート）は na のままにする。推測しないこと。
+      const variantId = attr("_cx_variant_id") || null;
+
       const revenue = Number(order.total_price || 0) || 0;
       const currency = String(order.currency || "JPY");
       const items = Array.isArray(order.line_items)
@@ -722,7 +731,7 @@ export function registerShopifyRoutes(app: Express) {
       const logPayload: Record<string, any> = {
         site_id: siteId,
         scenario_id: scenarioId,
-        action_id: null, template_id: null, variant_id: null,
+        action_id: null, template_id: null, variant_id: variantId,
         event: "purchase",
         url: null, path: null, ref: null,
         vid, sid,
@@ -733,17 +742,19 @@ export function registerShopifyRoutes(app: Express) {
       };
 
       const scId = String(scenarioId ?? "all");
-      const statsDocId = `${siteId}__${day}__${scId}__all__na__purchase`;
+      const vId = String(variantId ?? "na") || "na";
+      // docId に variantId を含めること。含めないとA/B間で同じドキュメントを奪い合う
+      const statsDocId = `${siteId}__${day}__${scId}__all__${vId}__purchase`;
       const batch = db.batch();
       batch.set(db.collection("logs").doc(), logPayload);
       batch.set(db.collection("stats_daily").doc(statsDocId), {
-        siteId, day, scenarioId: scenarioId ?? null, actionId: null, templateId: null, variantId: "na",
+        siteId, day, scenarioId: scenarioId ?? null, actionId: null, templateId: null, variantId: vId,
         event: "purchase", count: FieldValue.increment(1), revenue_total: FieldValue.increment(revenue),
         updatedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
       await batch.commit();
 
-      console.log(`[shopify/orders_paid] recorded order=${order.id} site=${siteId} ¥${revenue} vid=${vid ? "y" : "n"} scenario=${scenarioId || "-"}`);
+      console.log(`[shopify/orders_paid] recorded order=${order.id} site=${siteId} ¥${revenue} vid=${vid ? "y" : "n"} scenario=${scenarioId || "-"} variant=${variantId || "-"}`);
       res.status(200).send("ok");
     } catch (e) {
       console.error("[shopify/orders_paid] error:", e);

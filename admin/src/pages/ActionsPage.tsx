@@ -352,6 +352,15 @@ function buildActionPayload(form: {
 /* =========================
  * Page
  * ========================= */
+/** 表示タイプの日本語名。選択肢が無いときの案内文で使う */
+const TYPE_LABELS: Record<string, string> = {
+  modal: "モーダル",
+  banner: "バナー",
+  toast: "トースト",
+  launcher: "ランチャー",
+  push: "プッシュ通知の登録",
+};
+
 export default function ActionsPage() {
   const deleteMediaFn = useMemo(() => httpsCallable(getFunctions(), "deleteMedia"), []);
 
@@ -1376,14 +1385,51 @@ export default function ActionsPage() {
                     <div style={{ height: 10 }} />
                     {/* 非ランチャー: テンプレート選択 */}
                     <div className="h2">テンプレート（任意）</div>
-                    <select className="input" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
-                      <option value="">（標準 / built-in）</option>
-                      {templates
-                        .filter((t) => t.data?.workspaceId === workspaceId && t.data?.type === type && (!t.data?.siteId || t.data?.siteId === siteId) && (!(t.data as any)?.archived || t.id === templateId))
-                        .map((t) => (
-                          <option key={t.id} value={t.id}>{t.id} — {t.data?.name || ""}</option>
-                        ))}
-                    </select>
+                    {(() => {
+                      // ★選択肢が空のとき理由を出すこと。
+                      //   テンプレートは「表示タイプが同じ」「アーカイブされていない」ものだけが出る。
+                      //   どちらも画面に書いていなかったため、テンプレートがあるのに選べず
+                      //   原因が分からない、という詰まり方をしていた。
+                      const mine = templates.filter((t) => t.data?.workspaceId === workspaceId && (!t.data?.siteId || t.data?.siteId === siteId));
+                      const selectable = mine.filter((t) => t.data?.type === type && (!(t.data as any)?.archived || t.id === templateId));
+                      const sameTypeArchived = mine.filter((t) => t.data?.type === type && (t.data as any)?.archived && t.id !== templateId);
+                      const otherTypes = [...new Set(mine.filter((t) => t.data?.type !== type && !(t.data as any)?.archived).map((t) => String(t.data?.type || "")))];
+                      const typeLabel = TYPE_LABELS[type] || type;
+                      return (
+                        <>
+                          <select className="input" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
+                            <option value="">（標準 / built-in）</option>
+                            {selectable.map((t) => (
+                              <option key={t.id} value={t.id}>{t.data?.name || t.id}{(t.data as any)?.archived ? "（アーカイブ済み）" : ""}</option>
+                            ))}
+                          </select>
+                          {type === "push" && !templateId && (
+                            <div className="small" style={{ marginTop: 6, padding: "9px 12px", borderRadius: 8, background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", lineHeight: 1.75 }}>
+                              <b>⚠️ プッシュ通知はテンプレートが必須です。</b>
+                              <br />
+                              購読を求める処理はテンプレートのJSに入っています。未設定のまま配信すると、
+                              購読ダイアログが出ないどころか<b>ただのモーダルとして表示されます</b>。
+                              「プッシュ通知の登録（確認ダイアログ）」を選んでください。
+                            </div>
+                          )}
+                          {selectable.length === 0 && (
+                            <div className="small" style={{ marginTop: 6, padding: "8px 11px", borderRadius: 8, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", lineHeight: 1.75 }}>
+                              <b>「{typeLabel}」で選べるテンプレートがありません。</b>
+                              <br />
+                              テンプレートは<b>表示タイプが同じものだけ</b>が出ます。
+                              {sameTypeArchived.length > 0 && (
+                                <> 同じタイプのものが <b>{sameTypeArchived.length}件アーカイブ</b>されています（テンプレート画面で解除すると選べます）。</>
+                              )}
+                              {sameTypeArchived.length === 0 && otherTypes.length > 0 && (
+                                <> いま登録があるのは {otherTypes.map((t) => TYPE_LABELS[t] || t).join("・")} です。</>
+                              )}
+                              <br />
+                              テンプレート画面の「📚 標準テンプレートから作成」からも追加できます。
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
 
                     {/* テンプレ独自フィールド（KARTE風）: 選択テンプレの {{key}} を差し込む入力欄 */}
                     {selectedTemplateFields.length > 0 && (

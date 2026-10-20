@@ -580,12 +580,49 @@
             }
             // クリックベース: click_link 時にカート属性を保存
             if (ctx.pending_click_cart_sync) {
-              cxWriteScenarioCart(ctx.pending_click_cart_sync);
+              cxWriteScenarioCart(ctx.pending_click_cart_sync.scenarioId, ctx.pending_click_cart_sync.variantId);
               ctx.pending_click_cart_sync = null;
             }
           });
         }
       }
+
+      // CTAが <button> の場合のクリック計測
+      // ★上の処理は a[href="<cta_url>"] だけを拾うため、ボタンで作られたCTAは
+      //   クリックが1件も記録されず、ダッシュボードのCTRが常に「—」になっていた。
+      //   閉じる・コピー・質問接客の選択肢/送信は別イベントなので除く。
+      try {
+        var cxBtns = root.querySelectorAll(
+          "button:not([data-cx-close]):not([data-cx-copy]):not([data-cx-choice]):not([data-cx-submit]):not([data-cx-launcher-open])"
+        );
+        for (var bi = 0; bi < cxBtns.length; bi++) {
+          (function (btn) {
+            btn.addEventListener("click", function () {
+              postLog(apiBase, {
+                site_id: ctx.site_id,
+                scenario_id: ctx.scenario_id,
+                action_id: action.action_id || action.id,
+                template_id: templateId || null,
+                variant_id: ctx.variant_id || null,
+                event: "click",
+                url: ctx.url, path: ctx.path, ref: ctx.ref, vid: ctx.vid, sid: ctx.sid
+              }, ctx.site_id, ctx.site_key);
+              // クリックCVモード: クリック自体をCV計上
+              handleClickCtaCv(ctx, apiBase);
+              // クリックベース帰属: ゴール登録とカート属性の保存
+              if (ctx.pending_click_goal) {
+                var g = ctx.pending_click_goal;
+                registerGoal(ctx.site_id, g.scenarioId, g.actionId, g.variantId, g.goal);
+                ctx.pending_click_goal = null;
+              }
+              if (ctx.pending_click_cart_sync) {
+                cxWriteScenarioCart(ctx.pending_click_cart_sync.scenarioId, ctx.pending_click_cart_sync.variantId);
+                ctx.pending_click_cart_sync = null;
+              }
+            });
+          })(cxBtns[bi]);
+        }
+      } catch (e) {}
 
       // data-cx-copy ボタン（クーポンコードなど）
       wireCopyButtons(root);
@@ -680,7 +717,7 @@
           ctx.pending_click_goal = null;
         }
         if (ctx.pending_click_cart_sync) {
-          cxWriteScenarioCart(ctx.pending_click_cart_sync);
+          cxWriteScenarioCart(ctx.pending_click_cart_sync.scenarioId, ctx.pending_click_cart_sync.variantId);
           ctx.pending_click_cart_sync = null;
         }
       });
@@ -788,7 +825,7 @@
             ctx.pending_click_goal = null;
           }
           if (ctx.pending_click_cart_sync) {
-            cxWriteScenarioCart(ctx.pending_click_cart_sync);
+            cxWriteScenarioCart(ctx.pending_click_cart_sync.scenarioId, ctx.pending_click_cart_sync.variantId);
             ctx.pending_click_cart_sync = null;
           }
         });
@@ -906,7 +943,7 @@
             ctx.pending_click_goal = null;
           }
           if (ctx.pending_click_cart_sync) {
-            cxWriteScenarioCart(ctx.pending_click_cart_sync);
+            cxWriteScenarioCart(ctx.pending_click_cart_sync.scenarioId, ctx.pending_click_cart_sync.variantId);
             ctx.pending_click_cart_sync = null;
           }
         });
@@ -1929,9 +1966,9 @@
     // Shopify カート属性にシナリオIDを保存 → Web Pixel の checkout_completed で確定帰属
     // 表示ベース: 即時保存 / クリックベース: click_link 時に保存
     if (s.goal && s.goal.attribution === "click") {
-      ctx.pending_click_cart_sync = ctx.scenario_id;
+      ctx.pending_click_cart_sync = { scenarioId: ctx.scenario_id, variantId: ctx.variant_id || null };
     } else {
-      cxWriteScenarioCart(ctx.scenario_id);
+      cxWriteScenarioCart(ctx.scenario_id, ctx.variant_id || null);
     }
 
     function fire() {
@@ -1991,13 +2028,23 @@
   // 終了済み施策のIDが放棄カートに残り、後日の購入が誤帰属する問題への対策。
   var CX_SCENARIO_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 帰属の有効期間: 7日
 
-  function cxWriteScenarioCart(scenarioId) {
+  // ★variantId も一緒に保存すること。
+  //   以前はシナリオIDだけだったため、購入は常に variantId="na" で記録され、
+  //   A/Bテスト中のシナリオは A/B のCVが必ず0・CVRが0%のままだった。
+  //   「割り当ては vid のハッシュなので後から再計算すればよい」は成り立たない。
+  //   配分(weight)を途中で変えると剰余の分母が変わり、過去の割り当てを再現できない
+  //   （実データで15%ずれることを確認済み）。配信時の結果をそのまま持ち回ること。
+  function cxWriteScenarioCart(scenarioId, variantId) {
     if (!scenarioId) return;
     try {
       fetch("/cart/update.js", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ attributes: { _cx_scenario_id: scenarioId, _cx_scenario_ts: String(Date.now()) } }),
+        body: JSON.stringify({ attributes: {
+          _cx_scenario_id: scenarioId,
+          _cx_variant_id: variantId ? String(variantId) : "",
+          _cx_scenario_ts: String(Date.now())
+        } }),
         credentials: "same-origin",
         keepalive: true // CTAクリックで外部遷移してもリクエストを完了させる（クリックベース帰属の取りこぼし防止）
       }).catch(function () {});
@@ -2018,7 +2065,7 @@
           fetch("/cart/update.js", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ attributes: { _cx_scenario_id: "", _cx_scenario_ts: "" } }),
+            body: JSON.stringify({ attributes: { _cx_scenario_id: "", _cx_variant_id: "", _cx_scenario_ts: "" } }),
             credentials: "same-origin"
           }).catch(function () {});
         })
