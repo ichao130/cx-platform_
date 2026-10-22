@@ -219,9 +219,31 @@ firebase deploy
 - `SitesPage` → owner/adminなら `workspaceId`、それ以外は `memberUids` で切り替え
 
 ### Firestoreセキュリティルール
-- `sites` / `scenarios` / `logs` / `stats_daily` は「認証済みなら読み取り可」になっている
-- フロント側クエリで絞ることを前提とした設計（ルール側では細かく制御していない）
-- 将来的にルール側でも制御を強化する場合は、`get()` のコストに注意
+**この記述は 2026-10-22 に実態へ合わせて更新した。以前は「認証済みなら読み取り可」と
+書いてあったが、現在はルール側でテナント分離を実装済み。**
+
+- 既定は**全拒否**（末尾の `match /{document=**}` で read/write とも false）
+- 業務データは所属で絞る
+  - `sites` / `scenarios` / `logs` / `stats_daily` / `visitor_tags` / `visitor_attributes`
+    → `isSiteMember(siteId)`（`sites.memberUids` に自分のUIDが入っているか）
+  - `actions` / `templates` / `media` → `isMember(workspaceId)`
+  - `workspace_billing` / `workspace_limit_overrides` → `isOwnerOrAdmin(workspaceId)`
+- 運営用は `ops_admins` の存在チェック（書き込みはスーパー管理者のみなので根拠として信頼できる）
+- `workspace_invites` / `workspace_misoca_tokens` / `shopify_stores` はクライアントから一切読めない
+  （サーバー経由のみ）
+- `isSiteMember` は list クエリでもクエリ制約に対し1回だけ評価される＝`get()` 1回で済む
+
+**変更したら必ず `rules-test/` で回帰テストを流すこと。**
+
+```bash
+cd rules-test && npm test
+```
+
+#### 既知の弱点（2026-10-22 のセキュリティ点検で確認）
+- 権限判定が**メールアドレスの文字列一致**で、`email_verified` を見ていない
+  （`isSuperAdmin()` / サーバーの `requireSuperAdmin`）。
+  メール/パスワード認証を無効化したため現在は悪用経路が無いが、
+  他のプロバイダを有効化するときは先に `email_verified` のチェックを入れること。
 
 ---
 
