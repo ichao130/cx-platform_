@@ -7,6 +7,7 @@ import { getAuth } from "firebase-admin/auth";
 import { getStorage } from "firebase-admin/storage";
 import {
   pickSiteById,
+  checkSiteKey,
   pickWorkspaceById,
   assertAllowedOrigin,
   requireWorkspaceIdFromSite,
@@ -4030,6 +4031,11 @@ export function registerV1Routes(app: Express) {
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Vary", "Origin");
 
+      // サイトキー検証。既定は記録のみで、SITE_KEY_ENFORCE=true のとき遮断する。
+      // 検証が無いと第三者が任意のサイトへ偽の購入（売上付き）を投入できる。
+      const keyCheck = await checkSiteKey(req, body.site_id);
+      if (!keyCheck.ok) return res.status(403).json({ error: "invalid_site_key", reason: keyCheck.reason });
+
       const db = adminDb();
       const nowIso = new Date().toISOString();
       const day = yyyyMmDdJST(new Date());
@@ -4420,6 +4426,9 @@ export function registerV1Routes(app: Express) {
       });
 
       // site existence check (optional but nice)
+      const qaKey = await checkSiteKey(req, body.site_id);
+      if (!qaKey.ok) return res.status(403).json({ error: "invalid_site_key", reason: qaKey.reason });
+
       const site = await pickSiteById(body.site_id);
       if (!site) return res.status(404).json({ error: "site not found" });
 
@@ -4931,6 +4940,10 @@ export function registerV1Routes(app: Express) {
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Vary", "Origin");
       const body = VisitorAttributesGetReqSchema.parse(req.body);
+
+      // 訪問者の属性（ゼロパーティデータ）を返すため、キー検証を入れる
+      const attrKey = await checkSiteKey(req, body.site_id);
+      if (!attrKey.ok) return res.status(403).json({ error: "invalid_site_key", reason: attrKey.reason });
 
       const db = adminDb();
       const snap = await db.collection("visitor_attributes").doc(`${body.site_id}__${body.vid}`).get();
@@ -8230,8 +8243,13 @@ export function registerV1Routes(app: Express) {
       const siteDoc = await db.collection("sites").doc(site_id).get();
       if (!siteDoc.exists) return res.status(404).json({ ok: false, error: "site_not_found" });
       const siteData = siteDoc.data() || {};
-      if (siteData.siteKey && siteData.siteKey !== site_key) {
-        return res.status(403).json({ ok: false, error: "invalid_site_key" });
+      // ★以前は siteData.siteKey を見ていたが、実データのフィールドは publicKey。
+      //   siteKey を持つサイトは1件も無く、条件の前半が常に false になって
+      //   検証ごと素通りしていた。共通関数に寄せる。
+      void siteData; void site_key;
+      const pushKey = await checkSiteKey(req, site_id);
+      if (!pushKey.ok) {
+        return res.status(403).json({ ok: false, error: "invalid_site_key", reason: pushKey.reason });
       }
 
       // endpoint をトークンIDに使う（重複登録防止）

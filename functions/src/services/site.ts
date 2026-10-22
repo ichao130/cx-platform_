@@ -649,3 +649,65 @@ export async function listInvitesByWorkspace(workspaceId: string): Promise<Array
   });
   return items;
 }
+/* ============================================================
+   公開エンドポイントのサイトキー検証
+   ------------------------------------------------------------
+   /v1/log などはSDKから直接叩かれるため認証が無い。
+   site_id はSDKタグに書いてあり誰でも読めるので、キー検証が無いと
+   第三者が任意のサイトへ偽のログ（売上付きの購入を含む）を投入できる。
+
+   ★既存の検証コードは `siteData.siteKey` を見ていたが、実データのフィールド名は
+     `publicKey` で、siteKey を持つサイトは1件も無かった。
+     そのため `if (siteData.siteKey && ...)` の前半が常に false になり、
+     検証ごと素通りしていた。フィールド名を間違えると「動いているつもりで
+     何も検証しない」状態になるので、ここで一本化する。
+
+   いきなり遮断すると、タグに data-site-key を付けずに設置されたサイトの計測が
+   止まる。既定は「記録のみ」にして、ログで実害が無いことを確認してから
+   SITE_KEY_ENFORCE=true で遮断に切り替える。
+   ============================================================ */
+
+export type SiteKeyCheck = {
+  ok: boolean;              // 遮断してよいか（enforce時のみ false があり得る）
+  matched: boolean;         // キーが一致したか
+  reason: "match" | "missing_key" | "mismatch" | "no_site" | "site_has_no_key";
+};
+
+/** 遮断するかどうか。既定は記録のみ（false） */
+export function siteKeyEnforced(): boolean {
+  return String(process.env.SITE_KEY_ENFORCE || "").toLowerCase() === "true";
+}
+
+/** リクエストからサイトキーを取り出す（ヘッダ優先、body/queryも許容） */
+export function extractSiteKey(req: any): string {
+  return String(
+    req?.headers?.["x-site-key"] ??
+    req?.body?.site_key ??
+    req?.query?.site_key ??
+    ""
+  ).trim();
+}
+
+/**
+ * サイトキーを検証する。
+ * 呼び出し側は ok が false のときだけ 403 を返す（監視モードでは常に true）。
+ */
+export async function checkSiteKey(req: any, siteId: string): Promise<SiteKeyCheck> {
+  const enforce = siteKeyEnforced();
+  const provided = extractSiteKey(req);
+  const site = await pickSiteById(String(siteId || ""));
+
+  const fail = (reason: SiteKeyCheck["reason"]): SiteKeyCheck => {
+    // 監視モードでは落とさず記録だけ残す。遮断に切り替える前の判断材料にする
+    console.warn(`[site_key] ${enforce ? "拒否" : "監視"} site_id=${siteId} reason=${reason} provided=${provided ? "あり" : "なし"}`);
+    return { ok: !enforce, matched: false, reason };
+  };
+
+  if (!site) return fail("no_site");
+  const expected = String((site as any).publicKey || "").trim();
+  if (!expected) return fail("site_has_no_key");   // 鍵未発行のサイトは遮断しない運用判断が要る
+  if (!provided) return fail("missing_key");
+  if (provided !== expected) return fail("mismatch");
+
+  return { ok: true, matched: true, reason: "match" };
+}
